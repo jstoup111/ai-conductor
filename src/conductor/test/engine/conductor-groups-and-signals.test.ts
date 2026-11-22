@@ -1,13 +1,11 @@
 // Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21, task:rem-as-built-rem-vg-ab1, task:rem-prd-audit-rem-vg-design-halt-join, task:rem-as-built-rem-vg-design-halt-serial, task:rem-as-built-rem-vg-resolve-on-gate-pass, task:rem-as-built-rem-vg-drain-before-projection, task:rem-as-built-rem-vg-mixed-append-halt, task:rem-prd-audit-rem-vg-reconciliation-invalid-exhaustion-test, task:rem-prd-audit-rem-vg-unapplied-plan-no-case-test
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm,} from 'fs/promises';
+import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 vi.mock('execa', () => ({
-  execa: vi.fn(() =>
-    Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })
-  ),
+  execa: vi.fn(() => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })),
 }));
 vi.mock('../../src/engine/pr-labels.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/pr-labels.js')>();
@@ -58,10 +56,7 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption, RecoveryContext } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { applyStateChanges, readState, writeState } from '../../src/engine/state.js';
-import {
-  ALL_STEPS,
-  VALIDATION_GROUP,
-} from '../../src/engine/steps.js';
+import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import {
   getNavigableSteps,
   navigateBack,
@@ -77,14 +72,10 @@ import type { GroupBranchLifecycleObserver, GroupMember } from '../../src/engine
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
-import {
-  type RemediationGap,
-} from '../../src/engine/artifacts.js';
+import { type RemediationGap } from '../../src/engine/artifacts.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import * as artifactModule from '../../src/engine/artifacts.js';
-import {
-  creditKickbackGateLaps,
-  } from '../../src/engine/kickback-ledger.js';
+import { creditKickbackGateLaps } from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { appendTimingSection, renderShippedRecord } from '../../src/engine/shipped-record.js';
@@ -103,7 +94,10 @@ import type { EscalateBuildFailureOpts } from '../../src/engine/build-failure-es
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
-import { validateRemediationPlan, REMEDIATION_PLAN_CONTRACT_VERSION } from '../../src/engine/remediation-plan-contract.js';
+import {
+  validateRemediationPlan,
+  REMEDIATION_PLAN_CONTRACT_VERSION,
+} from '../../src/engine/remediation-plan-contract.js';
 import { appendRemediationTasks } from '../../src/engine/remediation-append.js';
 import { recordAsBuiltReconciliation } from '../../src/engine/as-built-case-reconciliation.js';
 import type { RemediationProjection } from '../../src/engine/remediation-projection.js';
@@ -111,11 +105,7 @@ import * as parkMarker from '../../src/engine/park-marker.js';
 import * as remediationTaskAppend from '../../src/engine/remediation-task-append.js';
 import * as repairRestage from '../../src/engine/repair-restage.js';
 
-import type {
-  InvokeOptions,
-  InvokeResult,
-  LLMProvider,
-} from '../../src/execution/llm-provider.js';
+import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 
 const NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
   onAdmitted: () => undefined,
@@ -131,8 +121,13 @@ function passingBuildReviewAggregate() {
     snapshotDigest: 'sha256:fixture',
     results: {
       testQuality: {
-        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:fixture',
-        contractVersion: 'v3', findings: [], verdict: 'PASS',
+        kind: 'judged',
+        rubric: 'testQuality',
+        lapId,
+        snapshotDigest: 'sha256:fixture',
+        contractVersion: 'v3',
+        findings: [],
+        verdict: 'PASS',
       },
     },
   });
@@ -172,21 +167,30 @@ async function writePrdAuditFixture(
   runId: string | undefined,
   grade: 'PASS' | 'PLAN_GAP' = 'PASS',
 ): Promise<void> {
-  await persistPrdAuditVerdict(projectRoot, {
-    complete: true,
-    judgment: {
-      version: 'v1',
-      criterionJudgments: [{
-        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade,
-        evidence: 'The fixture supplies a complete typed audit judgment.',
-        rationale: 'The orchestration fixture requires a clean current verdict.',
-        requirementAssociations: [], evidenceTaskIds: [],
-      }],
-      noOwnerObservations: [],
+  await persistPrdAuditVerdict(
+    projectRoot,
+    {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [
+          {
+            criterion: { storyId: '1', ordinal: 1 },
+            criterionId: 'S1.1',
+            grade,
+            evidence: 'The fixture supplies a complete typed audit judgment.',
+            rationale: 'The orchestration fixture requires a clean current verdict.',
+            requirementAssociations: [],
+            evidenceTaskIds: [],
+          },
+        ],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
     },
-    diagnostics: [],
-    recordedDispositions: [],
-  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' });
+    { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' },
+  );
 }
 
 /**
@@ -198,29 +202,33 @@ async function writePrdAuditFixableFixture(
   runId: string | undefined,
   findings: readonly { criterionId: string; ownerTaskId: string }[] = [{ criterionId: 'S1.1', ownerTaskId: '1' }],
 ): Promise<void> {
-  await persistPrdAuditVerdict(projectRoot, {
-    complete: true,
-    judgment: {
-      version: 'v1',
-      criterionJudgments: findings.map(({ criterionId, ownerTaskId }) => {
-        const match = /^S(.+)\.(\d+)$/.exec(criterionId);
-        if (!match) throw new Error(`Invalid fixture criterion: ${criterionId}`);
-        return {
-          criterion: { storyId: match[1], ordinal: Number(match[2]) },
-          criterionId,
-          grade: 'FIXABLE' as const,
-          evidence: `Fixture reports ${criterionId} as repairable.`,
-          rationale: 'Fixture remediation requires the active owning task.',
-          requirementAssociations: [],
-          evidenceTaskIds: [ownerTaskId],
-          ownerTaskId,
-        };
-      }),
-      noOwnerObservations: [],
+  await persistPrdAuditVerdict(
+    projectRoot,
+    {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: findings.map(({ criterionId, ownerTaskId }) => {
+          const match = /^S(.+)\.(\d+)$/.exec(criterionId);
+          if (!match) throw new Error(`Invalid fixture criterion: ${criterionId}`);
+          return {
+            criterion: { storyId: match[1], ordinal: Number(match[2]) },
+            criterionId,
+            grade: 'FIXABLE' as const,
+            evidence: `Fixture reports ${criterionId} as repairable.`,
+            rationale: 'Fixture remediation requires the active owning task.',
+            requirementAssociations: [],
+            evidenceTaskIds: [ownerTaskId],
+            ownerTaskId,
+          };
+        }),
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
     },
-    diagnostics: [],
-    recordedDispositions: [],
-  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' });
+    { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' },
+  );
 }
 
 function asBuiltApprovedFixture() {
@@ -250,11 +258,13 @@ function asBuiltBlockedRemediableFixture(summary = 'ADR-1 needs a guard.') {
     verdict: 'BLOCKED' as const,
     reachability: [],
     driftNotes: [],
-    findings: [{
-      class: 'REMEDIABLE' as const,
-      reference: { kind: 'plan-task' as const, taskId: '1' },
-      summary,
-    }],
+    findings: [
+      {
+        class: 'REMEDIABLE' as const,
+        reference: { kind: 'plan-task' as const, taskId: '1' },
+        summary,
+      },
+    ],
     violations: summary,
     resolution: 'Implement the missing guard.',
   };
@@ -325,13 +335,14 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
-       test_suite: 'done',
+      test_suite: 'done',
     } as ConductState;
 
     it('mode=auto reaching the validation group entry point takes the group path', async () => {
@@ -375,8 +386,15 @@ describe('engine/conductor', () => {
       const providerAvailability = { suppress: vi.fn(), isAvailable: () => true };
       const onProviderSuppressed = vi.fn();
       const runner: StepRunner = {
-        run: vi.fn()
-          .mockResolvedValueOnce({ success: false, rateLimited: true, usageExhausted: true, actualProvider: 'codex', deadline })
+        run: vi
+          .fn()
+          .mockResolvedValueOnce({
+            success: false,
+            rateLimited: true,
+            usageExhausted: true,
+            actualProvider: 'codex',
+            deadline,
+          })
           .mockResolvedValue({ success: true }),
       };
       const conductor = new Conductor({
@@ -403,7 +421,10 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect({ suppress: providerAvailability.suppress.mock.calls, persisted: onProviderSuppressed.mock.calls }).toEqual({
+      expect({
+        suppress: providerAvailability.suppress.mock.calls,
+        persisted: onProviderSuppressed.mock.calls,
+      }).toEqual({
         suppress: [['codex', deadline]],
         persisted: [['codex', deadline]],
       });
@@ -457,7 +478,9 @@ describe('engine/conductor', () => {
       const heartbeats: StepName[] = [];
       const admitted = new Set<StepName>();
       let admitBoth!: () => void;
-      const bothAdmitted = new Promise<void>((resolve) => { admitBoth = resolve; });
+      const bothAdmitted = new Promise<void>((resolve) => {
+        admitBoth = resolve;
+      });
       events.on('step_in_flight', (event) => {
         if (event.type === 'step_in_flight') heartbeats.push(event.step);
       });
@@ -475,8 +498,13 @@ describe('engine/conductor', () => {
         }),
       };
       const run = new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
-        fromStep: 'manual_test', mode: 'auto', verifyArtifacts: false,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        verifyArtifacts: false,
         config: {
           build_progress: { enabled: true, heartbeat_minutes: 5 },
           steps: { architecture_review_as_built: { disable: true } },
@@ -509,7 +537,9 @@ describe('engine/conductor', () => {
       let prdAuditRejected = false;
       const admitted = new Set<StepName>();
       let admitBoth!: () => void;
-      const bothAdmitted = new Promise<void>((resolve) => { admitBoth = resolve; });
+      const bothAdmitted = new Promise<void>((resolve) => {
+        admitBoth = resolve;
+      });
       events.on('step_in_flight', (event) => {
         if (event.type === 'step_in_flight') heartbeats.push(event.step);
       });
@@ -524,17 +554,25 @@ describe('engine/conductor', () => {
             await new Promise<void>((resolve) => setTimeout(resolve, 6 * 60_000));
           }
           if (step === 'prd_audit') {
-            await new Promise<void>((_, reject) => setTimeout(() => {
-              prdAuditRejected = true;
-              reject(new Error('fixture prd failure'));
-            }, 60_000));
+            await new Promise<void>((_, reject) =>
+              setTimeout(() => {
+                prdAuditRejected = true;
+                reject(new Error('fixture prd failure'));
+              }, 60_000),
+            );
           }
           return { success: true };
         }),
       };
       const run = new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
-        fromStep: 'manual_test', mode: 'auto', maxRetries: 1, verifyArtifacts: false,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        maxRetries: 1,
+        verifyArtifacts: false,
         config: {
           build_progress: { enabled: true, heartbeat_minutes: 5 },
           steps: { architecture_review_as_built: { disable: true } },
@@ -597,11 +635,7 @@ describe('engine/conductor', () => {
 
       // The three group members still dispatch one at a time, in order —
       // the pre-existing serial walk, untouched.
-      expect(stepsRun.slice(0, 3)).toEqual([
-        'manual_test',
-        'prd_audit',
-        'architecture_review_as_built',
-      ]);
+      expect(stepsRun.slice(0, 3)).toEqual(['manual_test', 'prd_audit', 'architecture_review_as_built']);
 
       // checkpoint_reached still fires after manual_test, with no
       // group-related events interleaved before it.
@@ -615,9 +649,7 @@ describe('engine/conductor', () => {
       expect(manualTestStartIndex).toBeGreaterThanOrEqual(0);
       expect(checkpointIndex).toBeGreaterThan(manualTestStartIndex);
       expect(
-        observedEvents
-          .slice(manualTestStartIndex, checkpointIndex + 1)
-          .some((e) => e.type === 'parallel_started'),
+        observedEvents.slice(manualTestStartIndex, checkpointIndex + 1).some((e) => e.type === 'parallel_started'),
       ).toBe(false);
       expect(onCheckpoint).toHaveBeenCalledWith('manual_test');
     });
@@ -631,13 +663,14 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
-       test_suite: 'done',
+      test_suite: 'done',
     } as ConductState;
 
     it('width 1: a single dispatchable member degrades to serial semantics — no parallel_started emitted', async () => {
@@ -719,7 +752,9 @@ describe('engine/conductor', () => {
         parallelStarted: observedEvents.some((e) => e.type === 'parallel_started'),
         manualTestStarted: observedEvents.some((e) => e.type === 'step_started' && e.step === 'manual_test'),
         manualTestDispatched: calledSteps.includes('manual_test'),
-        siblingsDispatched: calledSteps.filter((step) => step === 'prd_audit' || step === 'architecture_review_as_built'),
+        siblingsDispatched: calledSteps.filter(
+          (step) => step === 'prd_audit' || step === 'architecture_review_as_built',
+        ),
       }).toEqual({
         parallelStarted: false,
         manualTestStarted: true,
@@ -738,7 +773,8 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -754,10 +790,7 @@ describe('engine/conductor', () => {
     beforeEach(async () => {
       await mkdir(join(dir, '.docs/specs'), { recursive: true });
       await mkdir(join(dir, '.docs/stories'), { recursive: true });
-      await writeFile(
-        join(dir, '.docs/specs/prd-audit-join.md'),
-        '## Functional Requirements\n\nFR-1\n',
-      );
+      await writeFile(join(dir, '.docs/specs/prd-audit-join.md'), '## Functional Requirements\n\nFR-1\n');
       await writeFile(
         join(dir, '.docs/stories/prd-audit-join.md'),
         '## Story 1: join\n\n**Requirements:** FR-1\n\n### Happy Path\n- Given a green gate, when joined, then it completes.\n',
@@ -853,27 +886,45 @@ describe('engine/conductor', () => {
       expect(readiness).toHaveBeenCalledTimes(2);
       expect(calls.filter((call) => call.step === 'manual_test')).toHaveLength(1);
       expect(calls.filter((call) => call.step === 'prd_audit').map((call) => call.attempt)).toEqual([1, 1]);
-      expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([1, 1]);
+      expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([
+        1, 1,
+      ]);
     });
 
     it('adopts journaled-restack re-pends before the validation-group join writes them', async () => {
       const initial = {
         ...VALIDATION_GROUP_PREREQS,
-        manual_test: 'stale', prd_audit: 'stale', architecture_review_as_built: 'stale',
-        rebase: 'pending', finish: 'pending',
+        manual_test: 'stale',
+        prd_audit: 'stale',
+        architecture_review_as_built: 'stale',
+        rebase: 'pending',
+        finish: 'pending',
       } as ConductState;
       await writeState(statePath, initial);
       const completed: string[] = [];
-      events.on('parallel_completed', (event) => { if (event.type === 'parallel_completed') completed.push(event.type); });
+      events.on('parallel_completed', (event) => {
+        if (event.type === 'parallel_completed') completed.push(event.type);
+      });
       let repended = false;
       const conductor = new Conductor({
-        projectRoot: dir, stateFilePath: statePath, events, resume: true, mode: 'auto', verifyArtifacts: false,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        events,
+        resume: true,
+        mode: 'auto',
+        verifyArtifacts: false,
         stackPreflight: async () => {
           if (!repended) {
             repended = true;
-            await applyStateChanges(statePath, initial, {
-              prd_audit: 'pending', architecture_review_as_built: 'pending',
-            }, 'journaled restack re-pends');
+            await applyStateChanges(
+              statePath,
+              initial,
+              {
+                prd_audit: 'pending',
+                architecture_review_as_built: 'pending',
+              },
+              'journaled restack re-pends',
+            );
           }
           return { kind: 'clear' };
         },
@@ -892,14 +943,21 @@ describe('engine/conductor', () => {
     it('preserves a peer prd_audit write after preflight adoption as a real join conflict', async () => {
       const initial = {
         ...VALIDATION_GROUP_PREREQS,
-        manual_test: 'stale', prd_audit: 'stale', architecture_review_as_built: 'stale',
-        rebase: 'pending', finish: 'pending',
+        manual_test: 'stale',
+        prd_audit: 'stale',
+        architecture_review_as_built: 'stale',
+        rebase: 'pending',
+        finish: 'pending',
       } as ConductState;
       await writeState(statePath, initial);
       const loopHalts: string[] = [];
       const completed: string[] = [];
-      events.on('loop_halt', (event) => { if (event.type === 'loop_halt') loopHalts.push(event.reason); });
-      events.on('parallel_completed', (event) => { if (event.type === 'parallel_completed') completed.push(event.type); });
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') loopHalts.push(event.reason);
+      });
+      events.on('parallel_completed', (event) => {
+        if (event.type === 'parallel_completed') completed.push(event.type);
+      });
       let repended = false;
       const runner = joinRunner({});
       runner.run = vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
@@ -909,17 +967,29 @@ describe('engine/conductor', () => {
         }
         await mkdir(join(dir, '.pipeline'), { recursive: true });
         if (step === 'prd_audit') await writePrdAuditFixture(dir, options?.runId);
-        if (step === 'architecture_review_as_built') await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
+        if (step === 'architecture_review_as_built')
+          await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
         return { success: true };
       });
       await new Conductor({
-        projectRoot: dir, stateFilePath: statePath, events, resume: true, mode: 'auto', verifyArtifacts: false,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        events,
+        resume: true,
+        mode: 'auto',
+        verifyArtifacts: false,
         stackPreflight: async () => {
           if (!repended) {
             repended = true;
-            await applyStateChanges(statePath, initial, {
-              prd_audit: 'pending', architecture_review_as_built: 'pending',
-            }, 'journaled restack re-pends');
+            await applyStateChanges(
+              statePath,
+              initial,
+              {
+                prd_audit: 'pending',
+                architecture_review_as_built: 'pending',
+              },
+              'journaled restack re-pends',
+            );
           }
           return { kind: 'clear' };
         },
@@ -969,9 +1039,7 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       expect({
-        prdAuditAttempts: calls
-          .filter((call) => call.step === 'prd_audit')
-          .map((call) => call.attempt),
+        prdAuditAttempts: calls.filter((call) => call.step === 'prd_audit').map((call) => call.attempt),
         prdAuditVerdict: await readFile(join(dir, '.pipeline/gates/prd_audit.json'), 'utf-8'),
         haltExists: await haltMarkerExists(dir),
       }).toEqual({
@@ -1004,9 +1072,7 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       expect({
-        prdAuditAttempts: calls
-          .filter((call) => call.step === 'prd_audit')
-          .map((call) => call.attempt),
+        prdAuditAttempts: calls.filter((call) => call.step === 'prd_audit').map((call) => call.attempt),
         haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
         haltReason: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
       }).toEqual({
@@ -1223,9 +1289,7 @@ describe('engine/conductor', () => {
 
       // After the full run, the join has since written it.
       const finalState = await readState(statePath);
-      expect(finalState.ok && (finalState.value as Record<string, unknown>)['validation__prd_audit']).toBe(
-        'done',
-      );
+      expect(finalState.ok && (finalState.value as Record<string, unknown>)['validation__prd_audit']).toBe('done');
     });
   });
 
@@ -1237,7 +1301,8 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -1247,7 +1312,6 @@ describe('engine/conductor', () => {
       rebase: 'done',
       finish: 'done',
     } as ConductState;
-
 
     it('abort mid-group with one member done persists that member as done; a resumed run re-dispatches only the unfinished members', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
@@ -1373,7 +1437,8 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -1392,11 +1457,17 @@ describe('engine/conductor', () => {
         nativeSchemaCapability: { nativeOutputSchema: true },
         invoke: vi.fn(),
       };
-      const runtimes = new ProviderRuntimeSet([{
-        key: 'claude', provider: fakeProvider, lifecycleCapability: { synchronousSpawnPermit: true },
-        nativeSchemaCapability: { nativeOutputSchema: true }, policy: CLAUDE_MODEL_POLICY, builtIn: true,
-        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
-      }]);
+      const runtimes = new ProviderRuntimeSet([
+        {
+          key: 'claude',
+          provider: fakeProvider,
+          lifecycleCapability: { synchronousSpawnPermit: true },
+          nativeSchemaCapability: { nativeOutputSchema: true },
+          policy: CLAUDE_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+        },
+      ]);
       const asBuiltRunner = new DefaultStepRunner({ invoke: vi.fn() }, 'as-built-fault-test', dir, {
         mode: 'auto',
         config: { llm_provider: 'claude', steps: { architecture_review_as_built: { llm_provider: 'claude' } } },
@@ -1405,17 +1476,19 @@ describe('engine/conductor', () => {
         sessionStore: new ProviderSessionStore(),
       });
       const faultReason = 'as-built input projection fault: plan: expected one plan artifact; found 0';
-      const run = vi.fn(async (step: StepName, state: ConductState, options?: StepRunOptions): Promise<StepRunResult> =>
-        step === 'architecture_review_as_built'
-          ? asBuiltRunner.run(step, state, options)
-          : { success: true },
+      const run = vi.fn(
+        async (step: StepName, state: ConductState, options?: StepRunOptions): Promise<StepRunResult> =>
+          step === 'architecture_review_as_built' ? asBuiltRunner.run(step, state, options) : { success: true },
       );
       const serialHalts: string[] = [];
       events.on('loop_halt', (event) => {
         if (event.type === 'loop_halt') serialHalts.push(event.reason);
       });
       const serialState = Object.fromEntries(
-        ALL_STEPS.slice(0, ALL_STEPS.findIndex((step) => step.name === 'finish')).map((step) => [step.name, 'done']),
+        ALL_STEPS.slice(
+          0,
+          ALL_STEPS.findIndex((step) => step.name === 'finish'),
+        ).map((step) => [step.name, 'done']),
       ) as ConductState;
       await writeState(statePath, {
         ...serialState,
@@ -1427,8 +1500,13 @@ describe('engine/conductor', () => {
         rebase: 'skipped',
       });
       await new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: { run }, events,
-        fromStep: 'architecture_review_as_built', mode: 'interactive', maxRetries: 3,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: { run },
+        events,
+        fromStep: 'architecture_review_as_built',
+        mode: 'interactive',
+        maxRetries: 3,
         onCheckpoint: async () => 'continue',
       }).run();
       expect(run.mock.calls.map(([step]) => step)).toContain('architecture_review_as_built');
@@ -1438,7 +1516,10 @@ describe('engine/conductor', () => {
         haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf8'),
         halts: serialHalts,
       }).toEqual({
-        calls: 1, providerCalls: 0, haltClass: 'mechanical', halts: [faultReason],
+        calls: 1,
+        providerCalls: 0,
+        haltClass: 'mechanical',
+        halts: [faultReason],
       });
 
       await rm(join(dir, '.pipeline'), { recursive: true, force: true });
@@ -1454,8 +1535,13 @@ describe('engine/conductor', () => {
       run.mockClear();
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       await new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: { run }, events,
-        fromStep: 'manual_test', mode: 'auto', maxRetries: 3,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: { run },
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        maxRetries: 3,
         providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['claude'] },
       }).run();
       expect({
@@ -1465,7 +1551,11 @@ describe('engine/conductor', () => {
         retries,
         halts: groupHalts,
       }).toEqual({
-        calls: 1, providerCalls: 0, haltClass: 'mechanical', retries: [], halts: [faultReason],
+        calls: 1,
+        providerCalls: 0,
+        haltClass: 'mechanical',
+        retries: [],
+        halts: [faultReason],
       });
     });
 
@@ -1515,9 +1605,7 @@ describe('engine/conductor', () => {
       expect(haltCount).toBeGreaterThan(0);
       expect(kickbacks.length).toBe(0);
 
-      await expect(
-        readFile(join(dir, '.pipeline/remediation.json'), 'utf-8'),
-      ).rejects.toThrow();
+      await expect(readFile(join(dir, '.pipeline/remediation.json'), 'utf-8')).rejects.toThrow();
 
       const result = await readState(statePath);
       expect(result.ok).toBe(true);
@@ -1595,7 +1683,8 @@ describe('engine/conductor', () => {
       prd: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       coverage_binding: 'done',
@@ -1690,9 +1779,7 @@ describe('engine/conductor', () => {
       }
 
       // Zero remediate dispatches for this failure shape.
-      await expect(
-        readFile(join(dir, '.pipeline/remediation.json'), 'utf-8'),
-      ).rejects.toThrow();
+      await expect(readFile(join(dir, '.pipeline/remediation.json'), 'utf-8')).rejects.toThrow();
     });
 
     it('exhausted manualTestSelfHeals halts with the serial baseline reason wording, no partial join', async () => {
@@ -1747,7 +1834,8 @@ describe('engine/conductor', () => {
       prd: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -1761,7 +1849,10 @@ describe('engine/conductor', () => {
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
     beforeEach(async () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await writeFile(join(dir, '.docs', 'plans', 'validation-remediation.md'), '### Task 1: Fixture task\n\nDone when: the fixture is complete.\n');
+      await writeFile(
+        join(dir, '.docs', 'plans', 'validation-remediation.md'),
+        '### Task 1: Fixture task\n\nDone when: the fixture is complete.\n',
+      );
     });
     function mixedFailingRunner(): {
       runner: StepRunner;
@@ -1790,16 +1881,26 @@ describe('engine/conductor', () => {
             remediateCalls.push({ retryReason: opts?.retryReason });
             await persistFixtureProjectedRemediationPlan(dir, opts, [
               {
-                id: 'S1.1', disposition: 'build', category: null,
-                rationale: 'Implement FR-1', tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+                id: 'S1.1',
+                disposition: 'build',
+                category: null,
+                rationale: 'Implement FR-1',
+                tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
               },
               {
-                id: 'S1.2', disposition: 'build', category: null,
-                rationale: 'Implement FR-2', tasks: [{ id: 'rem-fr-2', title: 'Implement FR-2' }],
+                id: 'S1.2',
+                disposition: 'build',
+                category: null,
+                rationale: 'Implement FR-2',
+                tasks: [{ id: 'rem-fr-2', title: 'Implement FR-2' }],
               },
               {
-                id: 'as-built', referenceKind: 'as-built-finding', disposition: 'build', category: null,
-                rationale: 'Implement the missing guard', tasks: [{ id: 'rem-adr-1', title: 'Implement guard' }],
+                id: 'as-built',
+                referenceKind: 'as-built-finding',
+                disposition: 'build',
+                category: null,
+                rationale: 'Implement the missing guard',
+                tasks: [{ id: 'rem-adr-1', title: 'Implement guard' }],
               },
             ]);
           }
@@ -1826,8 +1927,17 @@ describe('engine/conductor', () => {
       // kicked-back round closed before the kickback rather than being
       // reported `step_interrupted` at run end.
       const lifecycle: Array<{ type: string; step?: string }> = [];
-      for (const type of ['step_started', 'step_completed', 'step_failed', 'step_refused', 'step_interrupted', 'kickback'] as const) {
-        events.on(type, (e) => { lifecycle.push({ type: e.type, step: 'step' in e ? String(e.step) : undefined }); });
+      for (const type of [
+        'step_started',
+        'step_completed',
+        'step_failed',
+        'step_refused',
+        'step_interrupted',
+        'kickback',
+      ] as const) {
+        events.on(type, (e) => {
+          lifecycle.push({ type: e.type, step: 'step' in e ? String(e.step) : undefined });
+        });
       }
 
       const conductor = new Conductor({
@@ -1869,58 +1979,152 @@ describe('engine/conductor', () => {
 
     // Covers: task:rem-as-built-rem-vg-ab1
     it('records each appended as-built repair on only its own reconciliation case', async () => {
-      const appended = appendRemediationTasks('# Plan\n', [
-        { id: 'S1.1', disposition: 'build', category: null, rationale: 'Repair criterion.', tasks: [{ id: 'prd-fix', title: 'Repair criterion' }], gateSource: 'prd-audit' },
-        { id: 'as-built:first', disposition: 'build', category: null, rationale: 'Repair first guard.', tasks: [{ id: 'ab-one', title: 'Repair first guard' }], gateSource: 'as-built' },
-        { id: 'as-built:second', disposition: 'build', category: null, rationale: 'Repair second guard.', tasks: [{ id: 'ab-two', title: 'Repair second guard' }], gateSource: 'as-built' },
-      ], 'as-built');
+      const appended = appendRemediationTasks(
+        '# Plan\n',
+        [
+          {
+            id: 'S1.1',
+            disposition: 'build',
+            category: null,
+            rationale: 'Repair criterion.',
+            tasks: [{ id: 'prd-fix', title: 'Repair criterion' }],
+            gateSource: 'prd-audit',
+          },
+          {
+            id: 'as-built:first',
+            disposition: 'build',
+            category: null,
+            rationale: 'Repair first guard.',
+            tasks: [{ id: 'ab-one', title: 'Repair first guard' }],
+            gateSource: 'as-built',
+          },
+          {
+            id: 'as-built:second',
+            disposition: 'build',
+            category: null,
+            rationale: 'Repair second guard.',
+            tasks: [{ id: 'ab-two', title: 'Repair second guard' }],
+            gateSource: 'as-built',
+          },
+        ],
+        'as-built',
+      );
       expect(appended.idsByGapId.get('as-built:first')).toEqual(['rem-as-built-ab-one']);
       expect(appended.idsByGapId.get('as-built:second')).toEqual(['rem-as-built-ab-two']);
 
-      const recorded = recordAsBuiltReconciliation({ version: 'v4', feature: { version: 'v1', repository: 'fixture', feature: 'validation-remediation' }, cases: [], prdWideningCases: [], asBuiltCases: [], suppressions: [], outbox: [] }, {
-        results: [
-          { source: { findingId: 'as-built:first', attemptId: 'attempt', class: 'REMEDIABLE', summary: 'First missing guard.' }, relation: 'new', reason: 'New finding.', repairTaskIds: appended.idsByGapId.get('as-built:first') },
-          { source: { findingId: 'as-built:second', attemptId: 'attempt', class: 'REMEDIABLE', summary: 'Second missing guard.' }, relation: 'new', reason: 'New finding.', repairTaskIds: appended.idsByGapId.get('as-built:second') },
-        ], newCaseId: (() => { let n = 0; return () => `case-${++n}`; })(), newEventId: (() => { let n = 0; return () => `event-${++n}`; })(),
-      });
+      const recorded = recordAsBuiltReconciliation(
+        {
+          version: 'v4',
+          feature: { version: 'v1', repository: 'fixture', feature: 'validation-remediation' },
+          cases: [],
+          prdWideningCases: [],
+          asBuiltCases: [],
+          suppressions: [],
+          outbox: [],
+        },
+        {
+          results: [
+            {
+              source: {
+                findingId: 'as-built:first',
+                attemptId: 'attempt',
+                class: 'REMEDIABLE',
+                summary: 'First missing guard.',
+              },
+              relation: 'new',
+              reason: 'New finding.',
+              repairTaskIds: appended.idsByGapId.get('as-built:first'),
+            },
+            {
+              source: {
+                findingId: 'as-built:second',
+                attemptId: 'attempt',
+                class: 'REMEDIABLE',
+                summary: 'Second missing guard.',
+              },
+              relation: 'new',
+              reason: 'New finding.',
+              repairTaskIds: appended.idsByGapId.get('as-built:second'),
+            },
+          ],
+          newCaseId: (() => {
+            let n = 0;
+            return () => `case-${++n}`;
+          })(),
+          newEventId: (() => {
+            let n = 0;
+            return () => `event-${++n}`;
+          })(),
+        },
+      );
       expect(recorded.state.asBuiltCases.map((record) => record.repairTaskIds)).toEqual([
-        ['rem-as-built-ab-one'], ['rem-as-built-ab-two'],
+        ['rem-as-built-ab-one'],
+        ['rem-as-built-ab-two'],
       ]);
 
-      const rejected = validateRemediationPlan({ version: REMEDIATION_PLAN_CONTRACT_VERSION, dispositions: [
+      const rejected = validateRemediationPlan(
         {
-          reference: { kind: 'as-built-finding', id: 'first' }, disposition: 'existing-task', category: null,
-          rationale: 'Bind sibling.', tasks: [], boundTaskIds: ['2'],
-          reconciliation: { relation: 'new', reason: 'This is a newly observed finding.' },
-        },
-        {
-          reference: { kind: 'as-built-finding', id: 'second' }, disposition: 'existing-task', category: null,
-          rationale: 'Repair second.', tasks: [], boundTaskIds: ['2'],
-          reconciliation: { relation: 'new', reason: 'This is a newly observed finding.' },
-        },
-      ] }, {
-        version: 2,
-        source: 'as-built',
-        requiredReferences: [
-          { kind: 'as-built-finding', id: 'first', sourceGate: 'architecture_review_as_built', reference: { kind: 'plan-task', taskId: '1' }, summary: 'First missing guard.' },
-          { kind: 'as-built-finding', id: 'second', sourceGate: 'architecture_review_as_built', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Second missing guard.' },
-        ],
-        evidence: { excerpts: [], omittedFiles: [] },
-        tasks: [{ id: '1', title: 'First owner', doneWhen: [] }, { id: '2', title: 'Second owner', doneWhen: [] }],
-        pendingAsBuiltFindings: [],
-        priorAsBuiltCases: [],
-        priorLaps: [],
-        refusals: [],
-        vocabulary: {
+          version: REMEDIATION_PLAN_CONTRACT_VERSION,
           dispositions: [
-            ...artifactModule.REMEDIATION_TARGET_STEPS,
-            artifactModule.REMEDIATION_PUBLICATION_DISPOSITION,
-            artifactModule.REMEDIATION_EXISTING_TASK_DISPOSITION,
-            'halt',
+            {
+              reference: { kind: 'as-built-finding', id: 'first' },
+              disposition: 'existing-task',
+              category: null,
+              rationale: 'Bind sibling.',
+              tasks: [],
+              boundTaskIds: ['2'],
+              reconciliation: { relation: 'new', reason: 'This is a newly observed finding.' },
+            },
+            {
+              reference: { kind: 'as-built-finding', id: 'second' },
+              disposition: 'existing-task',
+              category: null,
+              rationale: 'Repair second.',
+              tasks: [],
+              boundTaskIds: ['2'],
+              reconciliation: { relation: 'new', reason: 'This is a newly observed finding.' },
+            },
           ],
-          haltCategories: artifactModule.REMEDIATION_HALT_CATEGORIES,
         },
-      } satisfies RemediationProjection);
+        {
+          version: 3,
+          source: 'as-built',
+          requiredReferences: [
+            {
+              kind: 'as-built-finding',
+              id: 'first',
+              sourceGate: 'architecture_review_as_built',
+              reference: { kind: 'plan-task', taskId: '1' },
+              summary: 'First missing guard.',
+            },
+            {
+              kind: 'as-built-finding',
+              id: 'second',
+              sourceGate: 'architecture_review_as_built',
+              reference: { kind: 'plan-task', taskId: '2' },
+              summary: 'Second missing guard.',
+            },
+          ],
+          evidence: { excerpts: [], omittedFiles: [] },
+          tasks: [
+            { id: '1', title: 'First owner', doneWhen: [] },
+            { id: '2', title: 'Second owner', doneWhen: [] },
+          ],
+          pendingAsBuiltFindings: [],
+          priorAsBuiltCases: [],
+          priorLaps: [],
+          refusals: [],
+          vocabulary: {
+            dispositions: [
+              ...artifactModule.REMEDIATION_TARGET_STEPS,
+              artifactModule.REMEDIATION_PUBLICATION_DISPOSITION,
+              artifactModule.REMEDIATION_EXISTING_TASK_DISPOSITION,
+              'halt',
+            ],
+            haltCategories: artifactModule.REMEDIATION_HALT_CATEGORIES,
+          },
+        } satisfies RemediationProjection,
+      );
       expect(rejected).toMatchObject({
         kind: 'rejected',
         diagnostics: [
@@ -1956,15 +2160,20 @@ describe('engine/conductor', () => {
           } else if (step === 'architecture_review_as_built') {
             asBuiltCalls++;
             await writeAsBuiltFixture(dir, opts?.runId, {
-              version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+              version: 'v2',
+              verdict: 'BLOCKED',
+              reachability: [],
+              driftNotes: [],
               findings: [
                 {
                   class: 'REMEDIABLE',
-                  reference: { kind: 'plan-task', taskId: '1' }, summary: 'Add the missing guard',
+                  reference: { kind: 'plan-task', taskId: '1' },
+                  summary: 'Add the missing guard',
                 },
                 { class: 'DESIGN', summary: 'Choose the incompatible boundary' },
               ],
-              violations: 'The boundary is incompatible.', resolution: 'Choose the boundary.',
+              violations: 'The boundary is incompatible.',
+              resolution: 'Choose the boundary.',
             });
           } else if (step === 'remediate') {
             remediateCalls++;
@@ -1998,9 +2207,7 @@ describe('engine/conductor', () => {
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
       const firstHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
       expect(firstHalt).toMatch(/as-built:[^:]+:1 \(REMEDIABLE; plan task 1\): Add the missing guard/);
-      expect(firstHalt).toContain(
-        'DESIGN; none): Choose the incompatible boundary',
-      );
+      expect(firstHalt).toContain('DESIGN; none): Choose the incompatible boundary');
       expect(remediateCalls).toBe(0);
       await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
       const refused = await readState(statePath);
@@ -2008,10 +2215,12 @@ describe('engine/conductor', () => {
       const cases = JSON.parse(await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')) as {
         asBuiltCases: Array<{ status: string; sources: Array<{ class: string; summary: string }> }>;
       };
-      expect(cases.asBuiltCases.map((record) => ({
-        status: record.status,
-        source: record.sources[0] && { class: record.sources[0].class, summary: record.sources[0].summary },
-      }))).toEqual([
+      expect(
+        cases.asBuiltCases.map((record) => ({
+          status: record.status,
+          source: record.sources[0] && { class: record.sources[0].class, summary: record.sources[0].summary },
+        })),
+      ).toEqual([
         { status: 'needs-human', source: { class: 'REMEDIABLE', summary: 'Add the missing guard' } },
         { status: 'needs-human', source: { class: 'DESIGN', summary: 'Choose the incompatible boundary' } },
       ]);
@@ -2040,10 +2249,19 @@ describe('engine/conductor', () => {
 
     async function seedSerialAsBuiltState(): Promise<void> {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await writeFile(join(dir, '.docs', 'plans', `${FEATURE}.md`), [
-        '### Task 1: Existing task', '', 'Done when: it is complete.', '',
-        '### Task 2: Existing sibling', '', 'Done when: it is complete.', '',
-      ].join('\n'));
+      await writeFile(
+        join(dir, '.docs', 'plans', `${FEATURE}.md`),
+        [
+          '### Task 1: Existing task',
+          '',
+          'Done when: it is complete.',
+          '',
+          '### Task 2: Existing sibling',
+          '',
+          'Done when: it is complete.',
+          '',
+        ].join('\n'),
+      );
       await writeState(statePath, {
         ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
         feature_desc: FEATURE,
@@ -2054,24 +2272,34 @@ describe('engine/conductor', () => {
 
     async function serialRun(runner: StepRunner): Promise<void> {
       await new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
-        fromStep: 'architecture_review_as_built', mode: 'auto', daemon: true,
-        verifyArtifacts: true, maxRetries: 1,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'architecture_review_as_built',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
       }).run();
     }
 
-    async function readAsBuiltCases(): Promise<Array<{
-      status: string;
-      repairTaskIds: string[];
-      sources: Array<{ findingId: string; class: string; summary: string }>;
-    }>> {
-      return (JSON.parse(await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')) as {
-        asBuiltCases: Array<{
-          status: string;
-          repairTaskIds: string[];
-          sources: Array<{ findingId: string; class: string; summary: string }>;
-        }>;
-      }).asBuiltCases;
+    async function readAsBuiltCases(): Promise<
+      Array<{
+        status: string;
+        repairTaskIds: string[];
+        sources: Array<{ findingId: string; class: string; summary: string }>;
+      }>
+    > {
+      return (
+        JSON.parse(await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')) as {
+          asBuiltCases: Array<{
+            status: string;
+            repairTaskIds: string[];
+            sources: Array<{ findingId: string; class: string; summary: string }>;
+          }>;
+        }
+      ).asBuiltCases;
     }
 
     it('records every serial terminal finding and emits its reconciliation before the needs-human HALT', async () => {
@@ -2081,24 +2309,38 @@ describe('engine/conductor', () => {
         if (event.type !== 'as_built_finding_reconciled') return;
         reconciled.push({ findingId: event.findingId, haltAlreadyExists: await haltMarkerExists(dir) });
       });
-      await serialRun({ run: vi.fn(async (step, _state, options) => {
-        if (step === 'architecture_review_as_built') {
-          await writeAsBuiltFixture(dir, options?.runId, {
-            version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-            findings: [
-              { class: 'DESIGN', summary: 'Choose the boundary.' },
-              { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Add the guard.' },
-            ],
-            violations: 'The design cannot proceed.', resolution: 'Choose a boundary.',
-          });
-        }
-        return { success: true };
-      }) });
+      await serialRun({
+        run: vi.fn(async (step, _state, options) => {
+          if (step === 'architecture_review_as_built') {
+            await writeAsBuiltFixture(dir, options?.runId, {
+              version: 'v2',
+              verdict: 'BLOCKED',
+              reachability: [],
+              driftNotes: [],
+              findings: [
+                { class: 'DESIGN', summary: 'Choose the boundary.' },
+                { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Add the guard.' },
+              ],
+              violations: 'The design cannot proceed.',
+              resolution: 'Choose a boundary.',
+            });
+          }
+          return { success: true };
+        }),
+      });
 
-      expect(await readAsBuiltCases()).toEqual(expect.arrayContaining([
-        expect.objectContaining({ status: 'needs-human', sources: [expect.objectContaining({ class: 'DESIGN', summary: 'Choose the boundary.' })] }),
-        expect.objectContaining({ status: 'needs-human', sources: [expect.objectContaining({ class: 'REMEDIABLE', summary: 'Add the guard.' })] }),
-      ]));
+      expect(await readAsBuiltCases()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            status: 'needs-human',
+            sources: [expect.objectContaining({ class: 'DESIGN', summary: 'Choose the boundary.' })],
+          }),
+          expect.objectContaining({
+            status: 'needs-human',
+            sources: [expect.objectContaining({ class: 'REMEDIABLE', summary: 'Add the guard.' })],
+          }),
+        ]),
+      );
       expect(reconciled).toEqual([
         { findingId: expect.stringMatching(/:1$/), haltAlreadyExists: false },
         { findingId: expect.stringMatching(/:2$/), haltAlreadyExists: false },
@@ -2113,17 +2355,21 @@ describe('engine/conductor', () => {
         if (event.type === 'as_built_finding_reconciled') reconciled.push(event);
       });
 
-      await serialRun({ run: vi.fn(async (step, _state, options) => {
-        if (step === 'architecture_review_as_built') {
-          await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture());
-        }
-        // Every remediate attempt deliberately leaves no typed plan. The
-        // terminal HALT must not turn an unadmitted repair into case history.
-        return { success: true };
-      }) });
+      await serialRun({
+        run: vi.fn(async (step, _state, options) => {
+          if (step === 'architecture_review_as_built') {
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture());
+          }
+          // Every remediate attempt deliberately leaves no typed plan. The
+          // terminal HALT must not turn an unadmitted repair into case history.
+          return { success: true };
+        }),
+      });
 
       await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('remediation did not route');
-      await expect(readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
       expect(reconciled).toEqual([]);
     });
 
@@ -2138,60 +2384,120 @@ describe('engine/conductor', () => {
       let remediateCalls = 0;
 
       try {
-        await serialRun({ run: vi.fn(async (step, _state, options) => {
-          if (step === 'architecture_review_as_built') {
-            await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture());
-          } else if (step === 'remediate') {
-            remediateCalls += 1;
-            return { success: false, output: 'structured-result-rejected: reconciliation field must name a prior case' };
-          }
-          return { success: true };
-        }) });
+        await serialRun({
+          run: vi.fn(async (step, _state, options) => {
+            if (step === 'architecture_review_as_built') {
+              await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture());
+            } else if (step === 'remediate') {
+              remediateCalls += 1;
+              return {
+                success: false,
+                output: 'structured-result-rejected: reconciliation field must name a prior case',
+              };
+            }
+            return { success: true };
+          }),
+        });
       } finally {
         persister.stop();
       }
 
       expect(remediateCalls).toBe(1);
       await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('reconciliation field');
-      await expect(readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(readFile(join(dir, '.docs', 'plans', `${FEATURE}.md`), 'utf8')).resolves.not.toContain('rem-as-built-');
+      await expect(readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(readFile(join(dir, '.docs', 'plans', `${FEATURE}.md`), 'utf8')).resolves.not.toContain(
+        'rem-as-built-',
+      );
       expect(reconciled).toEqual([]);
       const ledger = await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf8').catch(() => '');
       expect(ledger).not.toContain('as_built_finding_reconciled');
     });
 
     it.each([
-      ['a rejected plan', async (_options: StepRunOptions | undefined) =>
-        ({ success: false, output: 'structured-result-rejected: reconciliation field must name a prior case' })],
+      [
+        'a rejected plan',
+        async (_options: StepRunOptions | undefined) => ({
+          success: false,
+          output: 'structured-result-rejected: reconciliation field must name a prior case',
+        }),
+      ],
       ['a missing plan', async (_options: StepRunOptions | undefined) => ({ success: true })],
-      ['a failed append', async (options: StepRunOptions | undefined) => {
-        vi.mocked(remediationTaskAppend.appendConductorRemediationTasks)
-          .mockResolvedValueOnce({ success: false, error: 'fixture append failure' });
-        await persistFixtureProjectedRemediationPlan(dir, options, [
-          { id: '1', disposition: 'build', category: null, rationale: 'Append the guard.', tasks: [{ id: 'guard', title: 'Append the guard' }] },
-        ]);
-        return { success: true };
-      }],
-      ['a failed existing-task admission', async (options: StepRunOptions | undefined) => {
-        vi.mocked(repairRestage.admitAndRestageRepair)
-          .mockResolvedValueOnce({ kind: 'failed', detail: 'fixture restage failure' });
-        await persistFixtureProjectedRemediationPlan(dir, options, [
-          { id: '1', disposition: 'existing-task', category: null, rationale: 'Reuse task one.', tasks: [], boundTaskIds: ['1'], reconciliation: { relation: 'same', priorCaseId: 'seeded-unapplied-case', reason: 'Same finding.' } },
-        ]);
-        return { success: true };
-      }],
+      [
+        'a failed append',
+        async (options: StepRunOptions | undefined) => {
+          vi.mocked(remediationTaskAppend.appendConductorRemediationTasks).mockResolvedValueOnce({
+            success: false,
+            error: 'fixture append failure',
+          });
+          await persistFixtureProjectedRemediationPlan(dir, options, [
+            {
+              id: '1',
+              disposition: 'build',
+              category: null,
+              rationale: 'Append the guard.',
+              tasks: [{ id: 'guard', title: 'Append the guard' }],
+            },
+          ]);
+          return { success: true };
+        },
+      ],
+      [
+        'a failed existing-task admission',
+        async (options: StepRunOptions | undefined) => {
+          vi.mocked(repairRestage.admitAndRestageRepair).mockResolvedValueOnce({
+            kind: 'failed',
+            detail: 'fixture restage failure',
+          });
+          await persistFixtureProjectedRemediationPlan(dir, options, [
+            {
+              id: '1',
+              disposition: 'existing-task',
+              category: null,
+              rationale: 'Reuse task one.',
+              tasks: [],
+              boundTaskIds: ['1'],
+              reconciliation: { relation: 'same', priorCaseId: 'seeded-unapplied-case', reason: 'Same finding.' },
+            },
+          ]);
+          return { success: true };
+        },
+      ],
     ])('does not record a case or event for %s', async (_name, remediate) => {
       await seedSerialAsBuiltState();
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       const seededCase = {
-        id: 'seeded-unapplied-case', domain: 'as_built',
-        sources: [{ findingId: 'prior-unapplied', attemptId: 'prior', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Prior finding.', relation: 'new', reason: 'Previously admitted.' }],
-        status: 'open', repairTaskIds: ['1'], recurrenceCount: 2,
+        id: 'seeded-unapplied-case',
+        domain: 'as_built',
+        sources: [
+          {
+            findingId: 'prior-unapplied',
+            attemptId: 'prior',
+            class: 'REMEDIABLE',
+            reference: { kind: 'plan-task', taskId: '1' },
+            summary: 'Prior finding.',
+            relation: 'new',
+            reason: 'Previously admitted.',
+          },
+        ],
+        status: 'open',
+        repairTaskIds: ['1'],
+        recurrenceCount: 2,
       };
-      await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify({
-        version: 'v4', feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
-        cases: [], prdWideningCases: [], suppressions: [], outbox: [], asBuiltCases: [seededCase],
-      }), 'utf8');
+      await writeFile(
+        join(dir, '.pipeline', 'remediation-cases.json'),
+        JSON.stringify({
+          version: 'v4',
+          feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
+          cases: [],
+          prdWideningCases: [],
+          suppressions: [],
+          outbox: [],
+          asBuiltCases: [seededCase],
+        }),
+        'utf8',
+      );
       const before = await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8');
       const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
       persister.start();
@@ -2201,14 +2507,16 @@ describe('engine/conductor', () => {
       });
 
       try {
-        await serialRun({ run: vi.fn(async (step, _state, options) => {
-          if (step === 'architecture_review_as_built') {
-            await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture('Reuse task one.'));
-          } else if (step === 'remediate') {
-            return remediate(options);
-          }
-          return { success: true };
-        }) });
+        await serialRun({
+          run: vi.fn(async (step, _state, options) => {
+            if (step === 'architecture_review_as_built') {
+              await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture('Reuse task one.'));
+            } else if (step === 'remediate') {
+              return remediate(options);
+            }
+            return { success: true };
+          }),
+        });
       } finally {
         persister.stop();
       }
@@ -2221,94 +2529,194 @@ describe('engine/conductor', () => {
     });
 
     it.each([
-      ['APPROVED WITH DRIFT NOTES', { verdict: 'APPROVED WITH DRIFT NOTES' as const, driftNotes: [{ note: 'Documented harmless drift.' }] }],
+      [
+        'APPROVED WITH DRIFT NOTES',
+        { verdict: 'APPROVED WITH DRIFT NOTES' as const, driftNotes: [{ note: 'Documented harmless drift.' }] },
+      ],
       ['APPROVED with no pending findings', { verdict: 'APPROVED' as const, driftNotes: [] }],
     ])('resolves open as-built cases on a %s gate pass even with no pending findings', async (_name, passing) => {
       await seedSerialAsBuiltState();
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify({
-        version: 'v4', feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
-        cases: [], prdWideningCases: [], suppressions: [], outbox: [],
-        asBuiltCases: [{
-          id: 'open-as-built-case', domain: 'as_built', status: 'open', repairTaskIds: ['rem-as-built-1'], recurrenceCount: 1,
-          sources: [{ findingId: 'prior-finding', attemptId: 'prior', class: 'REMEDIABLE', summary: 'Prior finding.', relation: 'new', reason: 'Prior result.' }],
-        }],
-      }), 'utf8');
-      await serialRun({ run: vi.fn(async (step, _state, options) => {
-        if (step === 'architecture_review_as_built') {
-          await writeAsBuiltFixture(dir, options?.runId, {
-            version: 'v2', reachability: [], ...passing,
-          });
-        }
-        return { success: true };
-      }) });
+      await writeFile(
+        join(dir, '.pipeline', 'remediation-cases.json'),
+        JSON.stringify({
+          version: 'v4',
+          feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
+          cases: [],
+          prdWideningCases: [],
+          suppressions: [],
+          outbox: [],
+          asBuiltCases: [
+            {
+              id: 'open-as-built-case',
+              domain: 'as_built',
+              status: 'open',
+              repairTaskIds: ['rem-as-built-1'],
+              recurrenceCount: 1,
+              sources: [
+                {
+                  findingId: 'prior-finding',
+                  attemptId: 'prior',
+                  class: 'REMEDIABLE',
+                  summary: 'Prior finding.',
+                  relation: 'new',
+                  reason: 'Prior result.',
+                },
+              ],
+            },
+          ],
+        }),
+        'utf8',
+      );
+      await serialRun({
+        run: vi.fn(async (step, _state, options) => {
+          if (step === 'architecture_review_as_built') {
+            await writeAsBuiltFixture(dir, options?.runId, {
+              version: 'v2',
+              reachability: [],
+              ...passing,
+            });
+          }
+          return { success: true };
+        }),
+      });
 
-      expect((await readAsBuiltCases()).find((record) => record.sources[0]?.findingId === 'prior-finding'))
-        .toMatchObject({ status: 'resolved' });
+      expect(
+        (await readAsBuiltCases()).find((record) => record.sources[0]?.findingId === 'prior-finding'),
+      ).toMatchObject({ status: 'resolved' });
     });
 
     it('delivers a crash-left reconciliation event once with its original eventId before building the as-built projection', async () => {
       await seedSerialAsBuiltState();
-      const seeded = recordAsBuiltReconciliation({
-        version: 'v4', feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
-        cases: [], prdWideningCases: [], asBuiltCases: [], suppressions: [], outbox: [],
-      }, {
-        results: [{ source: { findingId: 'crash-left', attemptId: 'prior', class: 'REMEDIABLE', summary: 'Crash-left finding.' }, relation: 'new', reason: 'Prior repair.' }],
-        newEventId: () => 'crash-left-event-id',
-      });
+      const seeded = recordAsBuiltReconciliation(
+        {
+          version: 'v4',
+          feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
+          cases: [],
+          prdWideningCases: [],
+          asBuiltCases: [],
+          suppressions: [],
+          outbox: [],
+        },
+        {
+          results: [
+            {
+              source: {
+                findingId: 'crash-left',
+                attemptId: 'prior',
+                class: 'REMEDIABLE',
+                summary: 'Crash-left finding.',
+              },
+              relation: 'new',
+              reason: 'Prior repair.',
+            },
+          ],
+          newEventId: () => 'crash-left-event-id',
+        },
+      );
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify(seeded.state), 'utf8');
       const order: string[] = [];
       events.on('as_built_finding_reconciled', (event) => {
         if (event.type === 'as_built_finding_reconciled') order.push(`event:${event.eventId}`);
       });
-      await serialRun({ run: vi.fn(async (step, _state, options) => {
-        if (step === 'architecture_review_as_built') {
-          await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture());
-        } else if (step === 'remediate') {
-          order.push('remediate');
-          await persistFixtureProjectedRemediationPlan(dir, options, [{
-            id: '1', referenceKind: 'as-built-finding', disposition: 'halt', category: 'decision',
-            rationale: 'A decision is required.', tasks: [],
-          }]);
-        }
-        return { success: true };
-      }) });
+      await serialRun({
+        run: vi.fn(async (step, _state, options) => {
+          if (step === 'architecture_review_as_built') {
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture());
+          } else if (step === 'remediate') {
+            order.push('remediate');
+            await persistFixtureProjectedRemediationPlan(dir, options, [
+              {
+                id: '1',
+                referenceKind: 'as-built-finding',
+                disposition: 'halt',
+                category: 'decision',
+                rationale: 'A decision is required.',
+                tasks: [],
+              },
+            ]);
+          }
+          return { success: true };
+        }),
+      });
 
       expect(order).toEqual(['event:crash-left-event-id', 'remediate']);
-      expect((JSON.parse(await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')) as { outbox: unknown[] }).outbox)
-        .toHaveLength(0);
+      expect(
+        (JSON.parse(await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')) as { outbox: unknown[] })
+          .outbox,
+      ).toHaveLength(0);
     });
 
     it('persists appended and halt findings together when a mixed as-built plan stops for a human decision', async () => {
       await seedSerialAsBuiltState();
       const eventsSeen: Array<{ findingId: string; outcome: string }> = [];
       events.on('as_built_finding_reconciled', (event) => {
-        if (event.type === 'as_built_finding_reconciled') eventsSeen.push({ findingId: event.findingId, outcome: event.outcome });
+        if (event.type === 'as_built_finding_reconciled')
+          eventsSeen.push({ findingId: event.findingId, outcome: event.outcome });
       });
-      await serialRun({ run: vi.fn(async (step, _state, options) => {
-        if (step === 'architecture_review_as_built') {
-          await writeAsBuiltFixture(dir, options?.runId, {
-            version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-            findings: [
-              { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Append this repair.' },
-              { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Choose this design.' },
-            ],
-            violations: 'Both findings block the review.', resolution: 'Repair and decide.',
-          });
-        } else if (step === 'remediate') {
-          await persistFixtureProjectedRemediationPlan(dir, options, [
-            { id: '1', disposition: 'build', category: null, rationale: 'Append repair.', tasks: [{ id: 'append-repair', title: 'Append repair' }] },
-            { id: '2', disposition: 'halt', category: 'architectural-clarity', rationale: 'Decision required.', tasks: [] },
-          ]);
-        }
-        return { success: true };
-      }) });
+      await serialRun({
+        run: vi.fn(async (step, _state, options) => {
+          if (step === 'architecture_review_as_built') {
+            await writeAsBuiltFixture(dir, options?.runId, {
+              version: 'v2',
+              verdict: 'BLOCKED',
+              reachability: [],
+              driftNotes: [],
+              findings: [
+                { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Append this repair.' },
+                { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Choose this design.' },
+              ],
+              violations: 'Both findings block the review.',
+              resolution: 'Repair and decide.',
+            });
+          } else if (step === 'remediate') {
+            await persistFixtureProjectedRemediationPlan(dir, options, [
+              {
+                id: '1',
+                disposition: 'build',
+                category: null,
+                rationale: 'Append repair.',
+                tasks: [{ id: 'append-repair', title: 'Append repair' }],
+              },
+              {
+                id: '2',
+                disposition: 'halt',
+                category: 'architectural-clarity',
+                rationale: 'Decision required.',
+                tasks: [],
+              },
+            ]);
+          }
+          return { success: true };
+        }),
+      });
 
-      expect(await readAsBuiltCases()).toEqual(expect.arrayContaining([
-        expect.objectContaining({ status: 'open', repairTaskIds: ['rem-as-built-append-repair'], sources: [expect.objectContaining({ findingId: expect.stringMatching(/:1$/), class: 'REMEDIABLE', summary: 'Append this repair.' })] }),
-        expect.objectContaining({ status: 'needs-human', sources: [expect.objectContaining({ findingId: expect.stringMatching(/:2$/), class: 'REMEDIABLE', summary: 'Choose this design.' })] }),
-      ]));
+      expect(await readAsBuiltCases()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            status: 'open',
+            repairTaskIds: ['rem-as-built-append-repair'],
+            sources: [
+              expect.objectContaining({
+                findingId: expect.stringMatching(/:1$/),
+                class: 'REMEDIABLE',
+                summary: 'Append this repair.',
+              }),
+            ],
+          }),
+          expect.objectContaining({
+            status: 'needs-human',
+            sources: [
+              expect.objectContaining({
+                findingId: expect.stringMatching(/:2$/),
+                class: 'REMEDIABLE',
+                summary: 'Choose this design.',
+              }),
+            ],
+          }),
+        ]),
+      );
       expect(eventsSeen).toEqual([
         { findingId: expect.stringMatching(/:1$/), outcome: 'new' },
         { findingId: expect.stringMatching(/:2$/), outcome: 'needs-human' },
@@ -2321,50 +2729,91 @@ describe('engine/conductor', () => {
       const seededBoundCase = {
         // Keep the store's canonical key order so byte equality proves this
         // particular record was not reopened or given a new source.
-        id: 'seeded-bound-case', domain: 'as_built',
-        sources: [{
-          findingId: 'prior-bound-finding', attemptId: 'prior', class: 'REMEDIABLE',
-          reference: { kind: 'plan-task', taskId: '1' }, summary: 'Reuse task one.',
-          relation: 'new', reason: 'Previously admitted.',
-        }], status: 'open', repairTaskIds: ['1'], recurrenceCount: 3,
+        id: 'seeded-bound-case',
+        domain: 'as_built',
+        sources: [
+          {
+            findingId: 'prior-bound-finding',
+            attemptId: 'prior',
+            class: 'REMEDIABLE',
+            reference: { kind: 'plan-task', taskId: '1' },
+            summary: 'Reuse task one.',
+            relation: 'new',
+            reason: 'Previously admitted.',
+          },
+        ],
+        status: 'open',
+        repairTaskIds: ['1'],
+        recurrenceCount: 3,
       };
-      await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify({
-        version: 'v4', feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
-        cases: [], prdWideningCases: [], suppressions: [], outbox: [], asBuiltCases: [seededBoundCase],
-      }), 'utf8');
+      await writeFile(
+        join(dir, '.pipeline', 'remediation-cases.json'),
+        JSON.stringify({
+          version: 'v4',
+          feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
+          cases: [],
+          prdWideningCases: [],
+          suppressions: [],
+          outbox: [],
+          asBuiltCases: [seededBoundCase],
+        }),
+        'utf8',
+      );
       const seededSerialization = JSON.stringify(seededBoundCase);
       const eventsSeen: string[] = [];
       events.on('as_built_finding_reconciled', (event) => {
         if (event.type === 'as_built_finding_reconciled') eventsSeen.push(event.findingId);
       });
-      await serialRun({ run: vi.fn(async (step, _state, options) => {
-        if (step === 'architecture_review_as_built') {
-          await writeAsBuiltFixture(dir, options?.runId, {
-            version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-            findings: [
-              { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Reuse task one.' },
-              { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Needs a decision.' },
-            ],
-            violations: 'Mixed remediation disposition.', resolution: 'Decide the second finding.',
-          });
-        } else if (step === 'remediate') {
-          await persistFixtureProjectedRemediationPlan(dir, options, [
-            {
-              id: '1', disposition: 'existing-task', category: null, rationale: 'Task one owns it.', tasks: [], boundTaskIds: ['1'],
-              reconciliation: { relation: 'same', priorCaseId: 'seeded-bound-case', reason: 'Same prior finding.' },
-            },
-            { id: '2', disposition: 'halt', category: 'architectural-clarity', rationale: 'Decision required.', tasks: [] },
-          ]);
-        }
-        return { success: true };
-      }) });
+      await serialRun({
+        run: vi.fn(async (step, _state, options) => {
+          if (step === 'architecture_review_as_built') {
+            await writeAsBuiltFixture(dir, options?.runId, {
+              version: 'v2',
+              verdict: 'BLOCKED',
+              reachability: [],
+              driftNotes: [],
+              findings: [
+                { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Reuse task one.' },
+                { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Needs a decision.' },
+              ],
+              violations: 'Mixed remediation disposition.',
+              resolution: 'Decide the second finding.',
+            });
+          } else if (step === 'remediate') {
+            await persistFixtureProjectedRemediationPlan(dir, options, [
+              {
+                id: '1',
+                disposition: 'existing-task',
+                category: null,
+                rationale: 'Task one owns it.',
+                tasks: [],
+                boundTaskIds: ['1'],
+                reconciliation: { relation: 'same', priorCaseId: 'seeded-bound-case', reason: 'Same prior finding.' },
+              },
+              {
+                id: '2',
+                disposition: 'halt',
+                category: 'architectural-clarity',
+                rationale: 'Decision required.',
+                tasks: [],
+              },
+            ]);
+          }
+          return { success: true };
+        }),
+      });
 
       const cases = await readAsBuiltCases();
       expect(cases).toHaveLength(2);
       expect(JSON.stringify(cases.find((record) => record.repairTaskIds[0] === '1'))).toBe(seededSerialization);
-      expect(cases).toEqual(expect.arrayContaining([
-        expect.objectContaining({ status: 'needs-human', sources: [expect.objectContaining({ summary: 'Needs a decision.' })] }),
-      ]));
+      expect(cases).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            status: 'needs-human',
+            sources: [expect.objectContaining({ summary: 'Needs a decision.' })],
+          }),
+        ]),
+      );
       expect(eventsSeen).toEqual([expect.stringMatching(/:2$/)]);
     });
   });
@@ -2378,7 +2827,8 @@ describe('engine/conductor', () => {
       prd: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -2468,13 +2918,14 @@ describe('engine/conductor', () => {
       // routed dispositions and navigates back to whichever is earliest in
       // step order; `acceptance_specs` precedes `build`, so it wins and the
       // later `build` target is subsumed by the forward walk.
-      const gap = (id: string, disposition: string): RemediationGap => ({
-        id,
-        disposition,
-        category: null,
-        rationale: `remediate ${id}`,
-        tasks: [{ id: `rem-${id}`, title: `remediate ${id}` }],
-      } as unknown as RemediationGap);
+      const gap = (id: string, disposition: string): RemediationGap =>
+        ({
+          id,
+          disposition,
+          category: null,
+          rationale: `remediate ${id}`,
+          tasks: [{ id: `rem-${id}`, title: `remediate ${id}` }],
+        }) as unknown as RemediationGap;
 
       expect(earliestRemediationTarget([gap('mt', 'build'), gap('ADR-1', 'acceptance_specs')], ALL_STEPS)).toEqual({
         target: 'acceptance_specs',
@@ -2499,7 +2950,8 @@ describe('engine/conductor', () => {
       prd: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -2513,7 +2965,10 @@ describe('engine/conductor', () => {
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
     beforeEach(async () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await writeFile(join(dir, '.docs', 'plans', 'validation-remediation.md'), '### Task 1: Fixture task\n\nDone when: the fixture is complete.\n');
+      await writeFile(
+        join(dir, '.docs', 'plans', 'validation-remediation.md'),
+        '### Task 1: Fixture task\n\nDone when: the fixture is complete.\n',
+      );
     });
     it('a halt disposition halts the group even when other gaps in the SAME plan are routable fixes', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
@@ -2541,13 +2996,23 @@ describe('engine/conductor', () => {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedRemediableFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
-            await persistFixtureProjectedRemediationPlan(dir, opts, [{
-              id: 'S1.1', disposition: 'build', category: null,
-              rationale: 'Implement FR-1', tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
-            }, {
-              id: 'as-built', referenceKind: 'as-built-finding', disposition: 'halt', category: 'architectural-clarity',
-              rationale: 'The missing guard requires an architectural decision', tasks: [],
-            }]);
+            await persistFixtureProjectedRemediationPlan(dir, opts, [
+              {
+                id: 'S1.1',
+                disposition: 'build',
+                category: null,
+                rationale: 'Implement FR-1',
+                tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+              },
+              {
+                id: 'as-built',
+                referenceKind: 'as-built-finding',
+                disposition: 'halt',
+                category: 'architectural-clarity',
+                rationale: 'The missing guard requires an architectural decision',
+                tasks: [],
+              },
+            ]);
           }
           return { success: true };
         }),
@@ -2580,7 +3045,9 @@ describe('engine/conductor', () => {
       expect(kickbacks).toHaveLength(0);
       expect(haltEvents).toHaveLength(1);
       expect(haltEvents[0]?.reason).toContain('needs human DECIDE');
-      expect(haltEvents[0]?.reason).toContain('(architectural-clarity: The missing guard requires an architectural decision)');
+      expect(haltEvents[0]?.reason).toContain(
+        '(architectural-clarity: The missing guard requires an architectural decision)',
+      );
     });
 
     it('a plan covering only a subset of the failing gaps never green-lights the unaddressed gap on the next tail pass', async () => {
@@ -2617,10 +3084,15 @@ describe('engine/conductor', () => {
             // Subset plan: only ever addresses prd_audit's FR-1 — the
             // architecture_review_as_built finding is never named by any
             // disposition, in any round.
-            await persistFixtureProjectedRemediationPlan(dir, opts, [{
-              id: 'S1.1', disposition: 'build', category: null,
-              rationale: 'Implement FR-1', tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
-            }]);
+            await persistFixtureProjectedRemediationPlan(dir, opts, [
+              {
+                id: 'S1.1',
+                disposition: 'build',
+                category: null,
+                rationale: 'Implement FR-1',
+                tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+              },
+            ]);
           }
           return { success: true };
         }),
@@ -2677,7 +3149,8 @@ describe('engine/conductor', () => {
       prd: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -2691,7 +3164,10 @@ describe('engine/conductor', () => {
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
     beforeEach(async () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await writeFile(join(dir, '.docs', 'plans', 'validation-remediation.md'), '### Task 1: Fixture task\n\nDone when: the fixture is complete.\n');
+      await writeFile(
+        join(dir, '.docs', 'plans', 'validation-remediation.md'),
+        '### Task 1: Fixture task\n\nDone when: the fixture is complete.\n',
+      );
     });
     it('an unusable typed remediation result still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
@@ -2841,7 +3317,8 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -2903,25 +3380,14 @@ describe('engine/conductor', () => {
       // writes would not have happened yet.
       const prdAuditMarker = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
       expect(prdAuditMarker).toMatch(/Status: complete[\s\S]*S1\.1: PASS/);
-      const asBuiltMarker = await readFile(
-        join(dir, '.pipeline/architecture-review-as-built.md'),
-        'utf-8',
-      );
+      const asBuiltMarker = await readFile(join(dir, '.pipeline/architecture-review-as-built.md'), 'utf-8');
       expect(asBuiltMarker).toContain('Verdict: APPROVED');
 
       // All three members were in fact dispatched — none were skipped or
       // starved by the fast failure.
-      expect(runner.run).toHaveBeenCalledWith(
-        'manual_test',
-        expect.anything(),
-        expect.anything(),
-      );
+      expect(runner.run).toHaveBeenCalledWith('manual_test', expect.anything(), expect.anything());
       expect(runner.run).toHaveBeenCalledWith('prd_audit', expect.anything(), expect.anything());
-      expect(runner.run).toHaveBeenCalledWith(
-        'architecture_review_as_built',
-        expect.anything(),
-        expect.anything(),
-      );
+      expect(runner.run).toHaveBeenCalledWith('architecture_review_as_built', expect.anything(), expect.anything());
     });
   });
 
@@ -2981,12 +3447,7 @@ describe('engine/conductor', () => {
 
     it('width 3: no skip conditions active — all three members are dispatchable', () => {
       const state = { complexity_tier: 'L' } as ConductState;
-      const result = resolveGroupMembership(
-        VALIDATION_GROUP,
-        state,
-        'product',
-        CLAUDE_MODEL_POLICY,
-      );
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'product', CLAUDE_MODEL_POLICY);
 
       expect(result.allSkipped).toBe(false);
       expect(result.dispatchable.map((m) => m.name)).toEqual([
@@ -2999,12 +3460,7 @@ describe('engine/conductor', () => {
 
     it('technical track still dispatches the always-run prd_audit', () => {
       const state = { complexity_tier: 'L' } as ConductState;
-      const result = resolveGroupMembership(
-        VALIDATION_GROUP,
-        state,
-        'technical',
-        CLAUDE_MODEL_POLICY,
-      );
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical', CLAUDE_MODEL_POLICY);
 
       expect(result.allSkipped).toBe(false);
       expect(result.dispatchable.map((m) => m.name)).toEqual([
@@ -3018,18 +3474,10 @@ describe('engine/conductor', () => {
 
     it('S tier + technical track retains the always-run prd_audit', () => {
       const state = { complexity_tier: 'S' } as ConductState;
-      const result = resolveGroupMembership(
-        VALIDATION_GROUP,
-        state,
-        'technical',
-        CLAUDE_MODEL_POLICY,
-      );
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical', CLAUDE_MODEL_POLICY);
 
       expect(result.allSkipped).toBe(false);
-      expect(result.dispatchable.map((m) => m.name)).toEqual([
-        'prd_audit',
-        'architecture_review_as_built',
-      ]);
+      expect(result.dispatchable.map((m) => m.name)).toEqual(['prd_audit', 'architecture_review_as_built']);
 
       const manualTest = result.members.find((m) => m.name === 'manual_test')!;
       const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
@@ -3044,12 +3492,7 @@ describe('engine/conductor', () => {
         complexity_tier: 'M',
         architecture_review: 'skipped',
       } as unknown as ConductState;
-      const result = resolveGroupMembership(
-        VALIDATION_GROUP,
-        state,
-        'technical',
-        CLAUDE_MODEL_POLICY,
-      );
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical', CLAUDE_MODEL_POLICY);
 
       const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
       expect(asBuilt.outcome).toEqual({ kind: 'no-verdict', reason: 'not-run' });
@@ -3065,22 +3508,16 @@ describe('engine/conductor', () => {
       const config = { steps: { manual_test: { disable: true } } } as unknown as Parameters<
         typeof resolveGroupMembership
       >[4];
-      const result = resolveGroupMembership(
-        VALIDATION_GROUP,
-        state,
-        'technical',
-        CLAUDE_MODEL_POLICY,
-        config,
-      );
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical', CLAUDE_MODEL_POLICY, config);
 
       expect(result.allSkipped).toBe(false);
-      expect(result.dispatchable.map((m) => m.name)).toEqual([
-        'prd_audit',
-        'architecture_review_as_built',
-      ]);
+      expect(result.dispatchable.map((m) => m.name)).toEqual(['prd_audit', 'architecture_review_as_built']);
       expect(result.members).toHaveLength(3);
       expect(result.members.find((m) => m.name === 'manual_test')?.outcome).toEqual({ kind: 'skipped' });
-      expect(result.members.find((m) => m.name === 'prd_audit')?.outcome).toEqual({ kind: 'no-verdict', reason: 'not-run' });
+      expect(result.members.find((m) => m.name === 'prd_audit')?.outcome).toEqual({
+        kind: 'no-verdict',
+        reason: 'not-run',
+      });
     });
 
     it('Task 6: re-verification preserves tier, track, upstream, and configuration exclusions', () => {
@@ -3089,12 +3526,7 @@ describe('engine/conductor', () => {
       // never convert an excluded member into a BUILD round branch.
       const exclusionGroup: StepGroup = {
         name: 'reverification-exclusion-fixture',
-        members: [
-          'acceptance_specs',
-          'prd_audit',
-          'architecture_review_as_built',
-          'manual_test',
-        ],
+        members: ['acceptance_specs', 'prd_audit', 'architecture_review_as_built', 'manual_test'],
       };
       const state = {
         complexity_tier: 'S',
@@ -3104,20 +3536,10 @@ describe('engine/conductor', () => {
         steps: { manual_test: { disable: true } },
       } as HarnessConfig;
 
-      const result = resolveGroupMembership(
-        exclusionGroup,
-        state,
-        'technical',
-        CLAUDE_MODEL_POLICY,
-        config,
-        true,
-      );
+      const result = resolveGroupMembership(exclusionGroup, state, 'technical', CLAUDE_MODEL_POLICY, config, true);
 
       expect(result.allSkipped).toBe(false);
-      expect(result.dispatchable.map((member) => member.name)).toEqual([
-        'prd_audit',
-        'architecture_review_as_built',
-      ]);
+      expect(result.dispatchable.map((member) => member.name)).toEqual(['prd_audit', 'architecture_review_as_built']);
       expect(result.members.map((member) => [member.name, member.outcome])).toEqual([
         ['acceptance_specs', { kind: 'skipped' }],
         ['prd_audit', { kind: 'no-verdict', reason: 'not-run' }],
@@ -3128,12 +3550,7 @@ describe('engine/conductor', () => {
 
     it('the always-run prd_audit remains a dispatchable no-verdict member', () => {
       const state = { complexity_tier: 'L' } as ConductState;
-      const result = resolveGroupMembership(
-        VALIDATION_GROUP,
-        state,
-        'technical',
-        CLAUDE_MODEL_POLICY,
-      );
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical', CLAUDE_MODEL_POLICY);
 
       const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
       expect(prdAudit.outcome).toEqual({ kind: 'no-verdict', reason: 'not-run' });
@@ -3145,18 +3562,10 @@ describe('engine/conductor', () => {
         complexity_tier: 'L',
         prd_audit: 'done',
       } as unknown as ConductState;
-      const result = resolveGroupMembership(
-        VALIDATION_GROUP,
-        state,
-        'product',
-        CLAUDE_MODEL_POLICY,
-      );
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'product', CLAUDE_MODEL_POLICY);
 
       expect(result.allSkipped).toBe(false);
-      expect(result.dispatchable.map((m) => m.name)).toEqual([
-        'manual_test',
-        'architecture_review_as_built',
-      ]);
+      expect(result.dispatchable.map((m) => m.name)).toEqual(['manual_test', 'architecture_review_as_built']);
       const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
       expect(prdAudit.outcome).toEqual({ kind: 'verdict', verdict: 'pass' });
     });
@@ -3165,7 +3574,11 @@ describe('engine/conductor', () => {
       const { buildParallelStartedEvent } = await import('../../src/engine/group-core.js');
       const members: GroupMember[] = [
         { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'verdict', verdict: 'pass' } },
-        { name: 'architecture_review_as_built', skill: 'architecture_review_as_built', outcome: { kind: 'verdict', verdict: 'pass' } },
+        {
+          name: 'architecture_review_as_built',
+          skill: 'architecture_review_as_built',
+          outcome: { kind: 'verdict', verdict: 'pass' },
+        },
         { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
       ];
       const event = buildParallelStartedEvent('manual_test', members);
@@ -3203,9 +3616,7 @@ describe('engine/conductor', () => {
     });
 
     it('Task 25: skipped members never appear in either event stream (parallel_started or parallel_failure)', async () => {
-      const { buildParallelStartedEvent, buildParallelFailureEvents } = await import(
-        '../../src/engine/group-core.js'
-      );
+      const { buildParallelStartedEvent, buildParallelFailureEvents } = await import('../../src/engine/group-core.js');
       const members: GroupMember[] = [
         { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'skipped' } },
         { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
@@ -3255,7 +3666,8 @@ describe('engine/conductor', () => {
         track: 'technical',
         stories: 'done',
         conflict_check: 'done',
-        plan: 'done', coherence_check: 'done',
+        plan: 'done',
+        coherence_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
         coverage_binding: 'done',
@@ -3295,7 +3707,8 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -3334,7 +3747,8 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -3387,9 +3801,7 @@ describe('engine/conductor', () => {
 
     // The SIGINT handler calls process.exit(130); stub it so the real exit
     // doesn't surface as an unhandled rejection that fails the vitest run.
-    const exitSpy = vi
-      .spyOn(process, 'exit')
-      .mockImplementation((() => undefined) as never);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
 
     // Create a runner that blocks on the 3rd step so we can trigger SIGINT
     let stepCount = 0;
@@ -3483,11 +3895,13 @@ describe('engine/conductor', () => {
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line));
-      expect(records).toContainEqual(expect.objectContaining({
-        type: 'step_interrupted',
-        step: 'prd',
-        activeInterval: { startedAtMs: 1_000, durationMs: 25 },
-      }));
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          type: 'step_interrupted',
+          step: 'prd',
+          activeInterval: { startedAtMs: 1_000, durationMs: 25 },
+        }),
+      );
       releaseRun!();
       await run;
     } finally {
@@ -3607,8 +4021,7 @@ describe('engine/conductor', () => {
         providerActiveMs: 50,
         noProviderActiveMs: 90,
       },
-      timeBlock:
-        '## Time\nstate: measured\nactive_ms: 140\nprovider_active_ms: 50\nno_provider_active_ms: 90\n',
+      timeBlock: '## Time\nstate: measured\nactive_ms: 140\nprovider_active_ms: 50\nno_provider_active_ms: 90\n',
     });
   });
 
@@ -3661,9 +4074,7 @@ describe('engine/conductor', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       const prdTerminals = records.filter(
-        (record) =>
-          record.step === 'prd' &&
-          (record.type === 'step_completed' || record.type === 'step_failed'),
+        (record) => record.step === 'prd' && (record.type === 'step_completed' || record.type === 'step_failed'),
       );
       expect(prdTerminals).toEqual([expect.objectContaining({ type: 'step_completed' })]);
     } finally {
@@ -3742,7 +4153,6 @@ describe('engine/conductor', () => {
       exitSpy.mockRestore();
     }
   });
-
 
   it('emits no terminal when the interrupt arrives before any execution started', async () => {
     let sigintHandler: (() => Promise<void>) | undefined;
@@ -3834,9 +4244,7 @@ describe('engine/conductor', () => {
 
     // The SIGTERM handler calls process.exit(1); stub it so the real exit
     // doesn't surface as an unhandled rejection that fails the vitest run.
-    const exitSpy = vi
-      .spyOn(process, 'exit')
-      .mockImplementation((() => undefined) as never);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
 
     // Create a runner that blocks on the 3rd step so we can trigger SIGTERM
     let stepCount = 0;
@@ -3887,9 +4295,7 @@ describe('engine/conductor', () => {
       return process;
     }) as typeof process.on);
 
-    const exitSpy = vi
-      .spyOn(process, 'exit')
-      .mockImplementation((() => undefined) as never);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
 
     // Create a runner that triggers SIGTERM on 2nd step
     let stepCount = 0;
@@ -3932,9 +4338,7 @@ describe('engine/conductor', () => {
 
     // The SIGHUP handler calls process.exit(129); stub it so the real exit
     // doesn't surface as an unhandled rejection that fails the vitest run.
-    const exitSpy = vi
-      .spyOn(process, 'exit')
-      .mockImplementation((() => undefined) as never);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
 
     // Create a runner that triggers SIGHUP on the 3rd step
     let stepCount = 0;
@@ -3989,18 +4393,16 @@ describe('engine/conductor', () => {
     const allCalls = processOffSpy.mock.calls;
     const lastThreeCalls = allCalls.slice(-3);
 
-    expect(lastThreeCalls.some(call => call[0] === 'SIGINT')).toBe(true);
-    expect(lastThreeCalls.some(call => call[0] === 'SIGTERM')).toBe(true);
-    expect(lastThreeCalls.some(call => call[0] === 'SIGHUP')).toBe(true);
+    expect(lastThreeCalls.some((call) => call[0] === 'SIGINT')).toBe(true);
+    expect(lastThreeCalls.some((call) => call[0] === 'SIGTERM')).toBe(true);
+    expect(lastThreeCalls.some((call) => call[0] === 'SIGHUP')).toBe(true);
 
     processOnSpy.mockRestore();
     processOffSpy.mockRestore();
   });
 
   it('no SIGTERM listener leak after sequential conductor runs', async () => {
-    const exitSpy = vi
-      .spyOn(process, 'exit')
-      .mockImplementation((() => undefined) as never);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
 
     // Track listener count
     const initialCount = process.listenerCount('SIGTERM');
@@ -4078,7 +4480,8 @@ describe('engine/conductor', () => {
         complexity: 'done',
         stories: 'done',
         conflict_check: 'skipped',
-        plan: 'done', coherence_check: 'done',
+        plan: 'done',
+        coherence_check: 'done',
       };
 
       const result = navigateBack(state, 'explore');
@@ -4111,10 +4514,11 @@ describe('engine/conductor', () => {
         explore: 'done',
         complexity: 'done',
         stories: 'done',
-        plan: 'done', coherence_check: 'done',
+        plan: 'done',
+        coherence_check: 'done',
         build: 'done',
         build_review: 'done',
-         test_suite: 'done',
+        test_suite: 'done',
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',
@@ -4162,7 +4566,8 @@ describe('engine/conductor', () => {
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
-        plan: 'done', coherence_check: 'done',
+        plan: 'done',
+        coherence_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
         coverage_binding: 'done',
@@ -4266,7 +4671,8 @@ describe('engine/conductor', () => {
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
-        plan: 'done', coherence_check: 'done',
+        plan: 'done',
+        coherence_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
         acceptance_specs: 'done',
@@ -4323,7 +4729,6 @@ describe('engine/conductor', () => {
         expect(result.value['stories']).toBe('done');
       }
     });
-
   });
 
   describe('feature completion', () => {
@@ -4333,7 +4738,8 @@ describe('engine/conductor', () => {
 
       const completeEvents: Array<{ type: string; prUrl?: string }> = [];
       events.on('feature_complete', (e) => {
-        if (e.type === 'feature_complete') completeEvents.push({ type: e.type, prUrl: (e as { type: string; prUrl?: string }).prUrl });
+        if (e.type === 'feature_complete')
+          completeEvents.push({ type: e.type, prUrl: (e as { type: string; prUrl?: string }).prUrl });
       });
 
       await conductor.run();
@@ -4364,17 +4770,24 @@ describe('engine/conductor', () => {
 
       const completeEvents: Array<{ prUrl?: string }> = [];
       events.on('feature_complete', (e) => {
-        if (e.type === 'feature_complete') completeEvents.push({ prUrl: (e as { type: string; prUrl?: string }).prUrl });
+        if (e.type === 'feature_complete')
+          completeEvents.push({ prUrl: (e as { type: string; prUrl?: string }).prUrl });
       });
 
       await conductor.run();
 
-      expect(stateStore.applyBatch).toHaveBeenCalledWith(expect.objectContaining({
-        name: 'adopt finish pull request URL',
-        mutations: [expect.objectContaining({
-          field: 'pr_url', expected: undefined, next: 'https://github.com/org/repo/pull/42',
-        })],
-      }));
+      expect(stateStore.applyBatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'adopt finish pull request URL',
+          mutations: [
+            expect.objectContaining({
+              field: 'pr_url',
+              expected: undefined,
+              next: 'https://github.com/org/repo/pull/42',
+            }),
+          ],
+        }),
+      );
       // feature_complete event should include the prUrl
       expect(completeEvents[0].prUrl).toBe('https://github.com/org/repo/pull/42');
     });
@@ -4390,13 +4803,15 @@ describe('engine/conductor', () => {
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
-        plan: 'done', coherence_check: 'done', plan_review: 'done',
+        plan: 'done',
+        coherence_check: 'done',
+        plan_review: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
         acceptance_specs: 'done',
         build: 'done',
         build_review: 'done',
-         test_suite: 'done',
+        test_suite: 'done',
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',
@@ -5001,9 +5416,7 @@ describe('engine/conductor', () => {
       await writeArtifact('.pipeline/review-required-conflict_check', '1');
 
       const state = Object.fromEntries(
-        ALL_STEPS
-          .filter(({ name }) => name !== 'conflict_check')
-          .map(({ name }) => [name, 'done']),
+        ALL_STEPS.filter(({ name }) => name !== 'conflict_check').map(({ name }) => [name, 'done']),
       ) as ConductState;
       state.feature_desc = featureB;
       state.track = 'technical';
@@ -5221,8 +5634,12 @@ describe('engine/conductor', () => {
 
   it('threads the held run identity and candidate index into Codex and Claude self-host provisioning', async () => {
     await mkdir(join(dir, 'skills'), { recursive: true });
-    const providerHomeModule = await vi.importActual<typeof import('../../src/engine/self-host/provider-home.js')>('../../src/engine/self-host/provider-home.js');
-    const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>('../../src/engine/self-host/sandbox-build-env.js');
+    const providerHomeModule = await vi.importActual<typeof import('../../src/engine/self-host/provider-home.js')>(
+      '../../src/engine/self-host/provider-home.js',
+    );
+    const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>(
+      '../../src/engine/self-host/sandbox-build-env.js',
+    );
     const provisionProviderHome = vi.fn(providerHomeModule.provisionProviderHome);
     const provisionSandbox = vi.fn(sandboxModule.provisionSandboxBuildEnv);
     const leases: unknown[] = [];
@@ -5243,8 +5660,20 @@ describe('engine/conductor', () => {
       invoke: vi.fn().mockResolvedValue({ success: true, exitCode: 0 }),
     };
     const runtimes = new ProviderRuntimeSet([
-      { key: 'codex', provider: codex, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability([]) },
-      { key: 'claude', provider: claude, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability([]) },
+      {
+        key: 'codex',
+        provider: codex,
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+      {
+        key: 'claude',
+        provider: claude,
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
     ]);
     const providerExecution = {
       configuredProviders: ['codex', 'claude'],
@@ -5272,9 +5701,14 @@ describe('engine/conductor', () => {
         );
         for (const [attempt, invocation] of [codexInvocation, claudeInvocation].entries()) {
           const provider = attempt === 0 ? 'codex' : 'claude';
-          leases.push(JSON.parse(await readFile(join(
-            dir, '.daemon', 'scratch', 'held-conductor-run', `${attempt}-${provider}`, 'owner.json',
-          ), 'utf8')));
+          leases.push(
+            JSON.parse(
+              await readFile(
+                join(dir, '.daemon', 'scratch', 'held-conductor-run', `${attempt}-${provider}`, 'owner.json'),
+                'utf8',
+              ),
+            ),
+          );
           await invocation?.teardown?.();
         }
         return {
@@ -5313,9 +5747,11 @@ describe('engine/conductor', () => {
       } as any,
     });
 
-    await (conductor as unknown as {
-      runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
-    }).runSelfBuildDispatch('build', {} as ConductState);
+    await (
+      conductor as unknown as {
+        runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
+      }
+    ).runSelfBuildDispatch('build', {} as ConductState);
 
     expect({
       codex: provisionProviderHome.mock.calls[0]?.[0],
@@ -5328,7 +5764,8 @@ describe('engine/conductor', () => {
         featureSlug: 'self-host-identity',
         captureIdentity: expect.objectContaining({
           owner: { kind: 'registered-step', step: 'build' },
-          runId: 'held-conductor-run', attempt: 0,
+          runId: 'held-conductor-run',
+          attempt: 0,
         }),
       }),
       claude: expect.objectContaining({
@@ -5338,20 +5775,40 @@ describe('engine/conductor', () => {
         featureSlug: 'self-host-identity',
         captureIdentity: expect.objectContaining({
           owner: { kind: 'registered-step', step: 'build' },
-          runId: 'held-conductor-run', attempt: 1,
+          runId: 'held-conductor-run',
+          attempt: 1,
         }),
       }),
     });
     for (const [attempt, lease] of leases.entries()) {
-      expect(Object.keys(lease as object).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt', 'step']);
-      expect(lease).toMatchObject({ repository: dir, featureSlug: 'self-host-identity', runId: 'held-conductor-run', attempt, ownerPid: process.pid });
-      expect(new Date((lease as { startedAt: string }).startedAt).toISOString()).toBe((lease as { startedAt: string }).startedAt);
+      expect(Object.keys(lease as object).sort()).toEqual([
+        'attempt',
+        'featureSlug',
+        'ownerPid',
+        'provider',
+        'repository',
+        'runId',
+        'startedAt',
+        'step',
+      ]);
+      expect(lease).toMatchObject({
+        repository: dir,
+        featureSlug: 'self-host-identity',
+        runId: 'held-conductor-run',
+        attempt,
+        ownerPid: process.pid,
+      });
+      expect(new Date((lease as { startedAt: string }).startedAt).toISOString()).toBe(
+        (lease as { startedAt: string }).startedAt,
+      );
     }
   });
 
   it('captures same-session legacy Claude dispatches in distinct attempt directories', async () => {
     await mkdir(join(dir, 'skills'), { recursive: true });
-    const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>('../../src/engine/self-host/sandbox-build-env.js');
+    const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>(
+      '../../src/engine/self-host/sandbox-build-env.js',
+    );
     const captures: string[] = [];
     events.on('provider_transcripts_captured', (event) => {
       if (event.type === 'provider_transcripts_captured') captures.push(event.path);
@@ -5389,20 +5846,25 @@ describe('engine/conductor', () => {
       } as any,
     });
 
-    await (conductor as unknown as {
-      runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
-    }).runSelfBuildDispatch('build', {} as ConductState);
-    await (conductor as unknown as {
-      runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
-    }).runSelfBuildDispatch('build', {} as ConductState);
+    await (
+      conductor as unknown as {
+        runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
+      }
+    ).runSelfBuildDispatch('build', {} as ConductState);
+    await (
+      conductor as unknown as {
+        runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
+      }
+    ).runSelfBuildDispatch('build', {} as ConductState);
 
     expect(captures).toEqual([
       join('.pipeline', 'transcripts', 'build', 'legacy-held-run-a1-claude'),
       join('.pipeline', 'transcripts', 'build', 'legacy-held-run-a2-claude'),
     ]);
     for (const capture of captures) {
-      await expect(readFile(join(dir, capture, 'projects', 'legacy-project', 'session.jsonl'), 'utf8'))
-        .resolves.toContain('legacy dispatch');
+      await expect(
+        readFile(join(dir, capture, 'projects', 'legacy-project', 'session.jsonl'), 'utf8'),
+      ).resolves.toContain('legacy dispatch');
     }
   });
 
@@ -5541,17 +6003,12 @@ describe('engine/conductor', () => {
       warn: (_message: string, transition: Extract<ConductorEvent, { type: 'provider_fallback' | 'session_policy' }>) =>
         events.emit(transition),
     };
-    const runner = new DefaultStepRunner(
-      runtimes.get('codex').provider,
-      'legacy-session',
-      dir,
-      {
-        config: providerExecution.config,
-        modelPolicy: CODEX_MODEL_POLICY,
-        mode: 'auto',
-        providerExecution,
-      },
-    );
+    const runner = new DefaultStepRunner(runtimes.get('codex').provider, 'legacy-session', dir, {
+      config: providerExecution.config,
+      modelPolicy: CODEX_MODEL_POLICY,
+      mode: 'auto',
+      providerExecution,
+    });
     const observed: ConductorEvent[] = [];
     for (const type of ['provider_fallback', 'provider_attempt', 'step_completed'] as const) {
       events.on(type, (event) => {
@@ -5572,42 +6029,42 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    expect(observed.map((event) => {
-      if (event.type === 'provider_fallback') return event;
-      if (event.type === 'provider_attempt') {
+    expect(
+      observed.map((event) => {
+        if (event.type === 'provider_fallback') return event;
+        if (event.type === 'provider_attempt') {
+          return {
+            type: event.type,
+            step: event.step,
+            provider: event.provider,
+            outcome: event.outcome,
+            invoked: event.invoked,
+            model: event.model,
+            reason: event.reason,
+            tokenUsage: event.tokenUsage,
+            ...(event.lifecycle === undefined
+              ? {}
+              : {
+                  lifecycle: {
+                    phase: event.lifecycle.phase,
+                    recoveryCount: event.lifecycle.recoveryCount,
+                    ...(event.lifecycle.outcome === undefined ? {} : { outcome: event.lifecycle.outcome }),
+                  },
+                }),
+          };
+        }
+        if (event.type !== 'step_completed') {
+          throw new Error(`unexpected observed event type: ${event.type}`);
+        }
         return {
           type: event.type,
           step: event.step,
-          provider: event.provider,
-          outcome: event.outcome,
-          invoked: event.invoked,
-          model: event.model,
-          reason: event.reason,
+          preferredProvider: event.preferredProvider,
+          actualProvider: event.actualProvider,
           tokenUsage: event.tokenUsage,
-          ...(event.lifecycle === undefined
-            ? {}
-            : {
-                lifecycle: {
-                  phase: event.lifecycle.phase,
-                  recoveryCount: event.lifecycle.recoveryCount,
-                  ...(event.lifecycle.outcome === undefined
-                    ? {}
-                    : { outcome: event.lifecycle.outcome }),
-                },
-              }),
         };
-      }
-      if (event.type !== 'step_completed') {
-        throw new Error(`unexpected observed event type: ${event.type}`);
-      }
-      return {
-        type: event.type,
-        step: event.step,
-        preferredProvider: event.preferredProvider,
-        actualProvider: event.actualProvider,
-        tokenUsage: event.tokenUsage,
-      };
-    })).toEqual([
+      }),
+    ).toEqual([
       {
         type: 'provider_attempt',
         step: 'plan',
@@ -5694,103 +6151,92 @@ describe('engine/conductor', () => {
         authFailure: true,
       } as StepRunResult,
     },
-  ])(
-    'keeps transient re-runs on the same Codex attempt: $signal',
-    async ({ signal, transient }) => {
-      await writeState(statePath, {
-        worktree: 'done',
-        memory: 'done',
-        explore: 'done',
-        complexity: 'done',
-        complexity_tier: 'M',
-        track: 'technical',
-        prd: 'skipped',
-        architecture_diagram: 'done',
-        architecture_review: 'done',
-        stories: 'done',
-        conflict_check: 'done',
-      } as ConductState);
+  ])('keeps transient re-runs on the same Codex attempt: $signal', async ({ signal, transient }) => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'M',
+      track: 'technical',
+      prd: 'skipped',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+    } as ConductState);
 
-      if (signal === 'auth-park') {
-        const { waitForCredentialsChange } = await import(
-          '../../src/engine/self-host/operator-credentials.js'
-        );
-        vi.mocked(waitForCredentialsChange).mockResolvedValue({
-          type: 'refreshed',
-          credentialsPath: '/.credentials.json',
+    if (signal === 'auth-park') {
+      const { waitForCredentialsChange } = await import('../../src/engine/self-host/operator-credentials.js');
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
+        type: 'refreshed',
+        credentialsPath: '/.credentials.json',
+      });
+    }
+
+    const dispatches: Array<{ model?: string; effort?: string }> = [];
+    let planCalls = 0;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions): Promise<StepRunResult> => {
+        if (step !== 'plan') return { success: true };
+        dispatches.push({
+          model: options?.modelOverride,
+          effort: options?.effortOverride,
+        });
+        planCalls += 1;
+        if (planCalls === 1) return transient;
+        return { success: false, output: 'ordinary plan failure' };
+      }),
+      resetSession: vi.fn().mockResolvedValue(undefined),
+    };
+    const retryEvents: Array<{
+      attempt: number;
+      model?: string;
+      effort?: string;
+    }> = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry' && event.step === 'plan') {
+        retryEvents.push({
+          attempt: event.attempt,
+          model: event.escalatedModel,
+          effort: event.escalatedEffort,
         });
       }
-
-      const dispatches: Array<{ model?: string; effort?: string }> = [];
-      let planCalls = 0;
-      const runner: StepRunner = {
-        run: vi.fn(async (
-          step: StepName,
-          _state: ConductState,
-          options?: StepRunOptions,
-        ): Promise<StepRunResult> => {
-          if (step !== 'plan') return { success: true };
-          dispatches.push({
-            model: options?.modelOverride,
-            effort: options?.effortOverride,
-          });
-          planCalls += 1;
-          if (planCalls === 1) return transient;
-          return { success: false, output: 'ordinary plan failure' };
-        }),
-        resetSession: vi.fn().mockResolvedValue(undefined),
-      };
-      const retryEvents: Array<{
-        attempt: number;
-        model?: string;
-        effort?: string;
-      }> = [];
-      events.on('step_retry', (event) => {
-        if (event.type === 'step_retry' && event.step === 'plan') {
-          retryEvents.push({
-            attempt: event.attempt,
-            model: event.escalatedModel,
-            effort: event.escalatedEffort,
-          });
-        }
-      });
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: runner,
-        events,
-        projectRoot: dir,
-        mode: 'auto',
-        daemon: true,
-        resume: true,
-        fromStep: 'plan',
-        sleepFn: vi.fn().mockResolvedValue(undefined),
-        config: {
-          steps: {
-            plan: {
-              model: 'gpt-5.6-luna',
-              effort: 'low',
-              max_retries: 2,
-            },
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      resume: true,
+      fromStep: 'plan',
+      sleepFn: vi.fn().mockResolvedValue(undefined),
+      config: {
+        steps: {
+          plan: {
+            model: 'gpt-5.6-luna',
+            effort: 'low',
+            max_retries: 2,
           },
-        } as HarnessConfig,
-        modelPolicy: CODEX_MODEL_POLICY,
-        escalateBuildFailure: vi.fn().mockResolvedValue({ prUrl: undefined }),
-      });
+        },
+      } as HarnessConfig,
+      modelPolicy: CODEX_MODEL_POLICY,
+      escalateBuildFailure: vi.fn().mockResolvedValue({ prUrl: undefined }),
+    });
 
-      await conductor.run();
+    await conductor.run();
 
-      expect({ dispatches, retryEvents }).toEqual({
-        dispatches: [
-          { model: 'gpt-5.6-luna', effort: 'low' },
-          { model: 'gpt-5.6-luna', effort: 'low' },
-          { model: 'gpt-5.6-luna', effort: 'medium' },
-        ],
-        retryEvents: [
-          { attempt: 2, model: 'gpt-5.6-luna', effort: 'medium' },
-        ],
-      });
-    },
-  );
+    expect({ dispatches, retryEvents }).toEqual({
+      dispatches: [
+        { model: 'gpt-5.6-luna', effort: 'low' },
+        { model: 'gpt-5.6-luna', effort: 'low' },
+        { model: 'gpt-5.6-luna', effort: 'medium' },
+      ],
+      retryEvents: [{ attempt: 2, model: 'gpt-5.6-luna', effort: 'medium' }],
+    });
+  });
 
   describe('rate-limit handling', () => {
     beforeEach(() => {
@@ -5938,9 +6384,7 @@ describe('engine/conductor', () => {
         // - Later deadline wins → shared deadline = later of the two
         // - Both conductors await episode.clear() → same promise, both resume together
 
-        const { create: createEpisode } = await import(
-          '../../src/engine/rate-limit-episode.js'
-        );
+        const { create: createEpisode } = await import('../../src/engine/rate-limit-episode.js');
 
         let fakeNow = 0;
         const sharedEpisode = createEpisode({
@@ -6005,10 +6449,7 @@ describe('engine/conductor', () => {
         });
 
         // Run both conductors concurrently
-        const [resultA, resultB] = await Promise.all([
-          conductorA.run(),
-          conductorB.run(),
-        ]);
+        const [resultA, resultB] = await Promise.all([conductorA.run(), conductorB.run()]);
 
         // Both should complete without errors
         expect(resultA).toBeUndefined();
@@ -6024,9 +6465,7 @@ describe('engine/conductor', () => {
 
       it('later-deadline-wins: 60s vs 120s → shared deadline respects 120s', async () => {
         // Verify that the later deadline (120s) wins over earlier (60s)
-        const { create: createEpisode } = await import(
-          '../../src/engine/rate-limit-episode.js'
-        );
+        const { create: createEpisode } = await import('../../src/engine/rate-limit-episode.js');
 
         const baseTime = 1000000;
         let fakeNow = baseTime;
@@ -6064,9 +6503,7 @@ describe('engine/conductor', () => {
         // Task 12: Verify backward compatibility
         // A single conductor should work identically to before (no behavior change)
 
-        const { create: createEpisode } = await import(
-          '../../src/engine/rate-limit-episode.js'
-        );
+        const { create: createEpisode } = await import('../../src/engine/rate-limit-episode.js');
 
         let attempt = 0;
         const runner: StepRunner = {
@@ -6117,44 +6554,41 @@ describe('engine/conductor', () => {
         resume: boolean;
       }> = [];
       const providerCalls = new Map<string, number>();
-      const invoke = (
-        provider: 'claude' | 'codex',
-      ) => async (options: InvokeOptions): Promise<InvokeResult> => {
-        const promptPrefix = provider === 'codex' ? '$' : '/';
-        if (
-          options.prompt !== `${promptPrefix}memory` &&
-          options.prompt !== `${promptPrefix}explore`
-        ) {
-          return { success: true, output: 'non-target step completed', exitCode: 0 };
-        }
-        const step = options.prompt === `${promptPrefix}memory` ? 'memory' : 'explore';
-        const key = `${step}:${provider}`;
-        const call = (providerCalls.get(key) ?? 0) + 1;
-        providerCalls.set(key, call);
-        calls.push({
-          step,
-          provider,
-          sessionId: options.sessionId,
-          resume: options.resume,
-        });
+      const invoke =
+        (provider: 'claude' | 'codex') =>
+        async (options: InvokeOptions): Promise<InvokeResult> => {
+          const promptPrefix = provider === 'codex' ? '$' : '/';
+          if (options.prompt !== `${promptPrefix}memory` && options.prompt !== `${promptPrefix}explore`) {
+            return { success: true, output: 'non-target step completed', exitCode: 0 };
+          }
+          const step = options.prompt === `${promptPrefix}memory` ? 'memory' : 'explore';
+          const key = `${step}:${provider}`;
+          const call = (providerCalls.get(key) ?? 0) + 1;
+          providerCalls.set(key, call);
+          calls.push({
+            step,
+            provider,
+            sessionId: options.sessionId,
+            resume: options.resume,
+          });
 
-        if (step === 'memory' && provider === 'codex' && call === 1) {
-          return {
-            success: false,
-            output: 'ordinary retryable failure',
-            exitCode: 1,
-          };
-        }
-        if (step === 'explore' && provider === 'codex') {
-          return {
-            success: false,
-            output: 'codex model unavailable',
-            exitCode: 1,
-            modelUnavailable: true,
-          };
-        }
-        return { success: true, output: 'completed', exitCode: 0 };
-      };
+          if (step === 'memory' && provider === 'codex' && call === 1) {
+            return {
+              success: false,
+              output: 'ordinary retryable failure',
+              exitCode: 1,
+            };
+          }
+          if (step === 'explore' && provider === 'codex') {
+            return {
+              success: false,
+              output: 'codex model unavailable',
+              exitCode: 1,
+              modelUnavailable: true,
+            };
+          }
+          return { success: true, output: 'completed', exitCode: 0 };
+        };
       const provider = (key: 'claude' | 'codex'): LLMProvider => {
         const invokeProvider = vi.fn(async (options: InvokeOptions) => {
           const permit = options.spawnPermit?.();
@@ -6185,12 +6619,7 @@ describe('engine/conductor', () => {
           availability: new ModelAvailability([]),
         },
       ]);
-      const ids = [
-        'memory-codex',
-        'memory-codex-retry',
-        'explore-codex',
-        'explore-claude',
-      ][Symbol.iterator]();
+      const ids = ['memory-codex', 'memory-codex-retry', 'explore-codex', 'explore-claude'][Symbol.iterator]();
       const sessions = new ProviderSessionStore({
         createSessionId: () => ids.next().value ?? 'unexpected-session',
       });
@@ -6202,17 +6631,12 @@ describe('engine/conductor', () => {
           explore: { llm_provider: 'codex' },
         },
       };
-      const runner = new DefaultStepRunner(
-        provider('claude'),
-        'legacy-session',
-        dir,
-        {
-          config,
-          sessionStore: sessions,
-          providerRuntimes: runtimes,
-          configuredProviders: ['codex', 'claude'],
-        },
-      );
+      const runner = new DefaultStepRunner(provider('claude'), 'legacy-session', dir, {
+        config,
+        sessionStore: sessions,
+        providerRuntimes: runtimes,
+        configuredProviders: ['codex', 'claude'],
+      });
       const resetSession = vi.spyOn(runner, 'resetSession');
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -6220,8 +6644,7 @@ describe('engine/conductor', () => {
         events,
         projectRoot: dir,
         config,
-        onCheckpoint: async (step) =>
-          step === 'explore' ? 'quit' : 'continue',
+        onCheckpoint: async (step) => (step === 'explore' ? 'quit' : 'continue'),
       });
 
       await conductor.run();
@@ -6230,8 +6653,7 @@ describe('engine/conductor', () => {
       // Session reuse was removed by design: every dispatch — the first
       // attempt, its retry, and each provider candidate — mints its own
       // fresh, unused UUID (never a store id).
-      const freshSessionIdRe =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const freshSessionIdRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const sessionIds = calls.map(({ sessionId }) => sessionId);
       expect(new Set(sessionIds).size).toBe(sessionIds.length);
       for (const id of sessionIds) expect(id).toMatch(freshSessionIdRe);
@@ -6241,12 +6663,8 @@ describe('engine/conductor', () => {
           provider: providerKey,
           resume,
         })),
-        beginStepCalls: beginStep.mock.calls.filter(([step]) =>
-          targetSteps.has(step)
-        ),
-        resetSessionCalls: resetSession.mock.calls.filter(
-          ([step]) => step === undefined || targetSteps.has(step),
-        ),
+        beginStepCalls: beginStep.mock.calls.filter(([step]) => targetSteps.has(step)),
+        resetSessionCalls: resetSession.mock.calls.filter(([step]) => step === undefined || targetSteps.has(step)),
       }).toEqual({
         calls: [
           { step: 'memory', provider: 'codex', resume: false },
@@ -6255,33 +6673,22 @@ describe('engine/conductor', () => {
           { step: 'explore', provider: 'claude', resume: false },
         ],
         beginStepCalls: [['memory'], ['explore']],
-        resetSessionCalls: [
-          ['memory'],
-          ['explore'],
-        ],
+        resetSessionCalls: [['memory'], ['explore']],
       });
     });
   });
 
   describe('auth-failure handling', () => {
     beforeEach(async () => {
-      await import(
-        '../../src/engine/self-host/operator-credentials.js'
-      );
+      await import('../../src/engine/self-host/operator-credentials.js');
       vi.clearAllMocks();
     });
 
     it('classifies an immediate operator OAuth preflight HALT as needs-human', async () => {
-      const { readOperatorCredentialsState } = await import(
-        '../../src/engine/self-host/operator-credentials.js'
-      );
+      const { readOperatorCredentialsState } = await import('../../src/engine/self-host/operator-credentials.js');
       vi.mocked(readOperatorCredentialsState).mockResolvedValue('expired');
       const credentialsPath = join(dir, '.credentials.json');
-      await writeFile(
-        credentialsPath,
-        JSON.stringify({ claudeAiOauth: { expiresAt: 1234 } }),
-        'utf-8',
-      );
+      await writeFile(credentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt: 1234 } }), 'utf-8');
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: createMockStepRunner(),
@@ -6301,9 +6708,8 @@ describe('engine/conductor', () => {
     });
 
     it('classifies a timed-out operator OAuth preflight HALT as needs-human', async () => {
-      const { readOperatorCredentialsState, waitForCredentialsChange } = await import(
-        '../../src/engine/self-host/operator-credentials.js'
-      );
+      const { readOperatorCredentialsState, waitForCredentialsChange } =
+        await import('../../src/engine/self-host/operator-credentials.js');
       vi.mocked(readOperatorCredentialsState).mockResolvedValue('expired');
       const credentialsPath = join(dir, '.credentials.json');
       vi.mocked(waitForCredentialsChange).mockResolvedValue({
@@ -6331,9 +6737,7 @@ describe('engine/conductor', () => {
     });
 
     it('preserves an existing classified marker during operator OAuth preflight', async () => {
-      const { readOperatorCredentialsState } = await import(
-        '../../src/engine/self-host/operator-credentials.js'
-      );
+      const { readOperatorCredentialsState } = await import('../../src/engine/self-host/operator-credentials.js');
       vi.mocked(readOperatorCredentialsState).mockResolvedValue('expired');
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline/HALT'), 'specific prior reason\n', 'utf-8');
@@ -6362,9 +6766,7 @@ describe('engine/conductor', () => {
     });
 
     it('parks on authFailure without burning retry budget', async () => {
-      const { waitForCredentialsChange } = await import(
-        '../../src/engine/self-host/operator-credentials.js'
-      );
+      const { waitForCredentialsChange } = await import('../../src/engine/self-host/operator-credentials.js');
 
       let attempt = 0;
       const runner: StepRunner = {
@@ -6432,9 +6834,7 @@ describe('engine/conductor', () => {
     });
 
     it('re-enters park on subsequent authFailure without budget burn', async () => {
-      const { waitForCredentialsChange } = await import(
-        '../../src/engine/self-host/operator-credentials.js'
-      );
+      const { waitForCredentialsChange } = await import('../../src/engine/self-host/operator-credentials.js');
 
       let attempt = 0;
       const runner: StepRunner = {
@@ -6468,9 +6868,7 @@ describe('engine/conductor', () => {
     });
 
     it('HALTs with credentials-specific reason when park timeout elapses', async () => {
-      const { waitForCredentialsChange } = await import(
-        '../../src/engine/self-host/operator-credentials.js'
-      );
+      const { waitForCredentialsChange } = await import('../../src/engine/self-host/operator-credentials.js');
       const credentialsPath = join(dir, '.credentials.json');
       const expiresAt = Date.now() - 1000; // expired
       await writeFile(credentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt } }), 'utf-8');
@@ -6527,9 +6925,7 @@ describe('engine/conductor', () => {
     // ── TR-4 Task 15: Auth HALT distinguishable from build-defect HALT ─────
 
     it('TR-4 Test B: auth-park timeout does not consume retry budget', async () => {
-      const { waitForCredentialsChange } = await import(
-        '../../src/engine/self-host/operator-credentials.js'
-      );
+      const { waitForCredentialsChange } = await import('../../src/engine/self-host/operator-credentials.js');
       const credentialsPath = join(dir, '.credentials.json');
       const expiresAt = Date.now() - 1000;
       await writeFile(credentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt } }), 'utf-8');
@@ -6550,10 +6946,19 @@ describe('engine/conductor', () => {
       // prior step stamped done — these tests exercise the auth-park path of
       // the build step only.
       await writeState(statePath, {
-        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-        stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'done',
-        architecture_diagram: 'done', architecture_review: 'done',
-        acceptance_specs: 'done', complexity_tier: 'M', track: 'technical',
+        worktree: 'done',
+        memory: 'done',
+        explore: 'done',
+        complexity: 'done',
+        stories: 'done',
+        conflict_check: 'done',
+        plan: 'done',
+        coherence_check: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
+        acceptance_specs: 'done',
+        complexity_tier: 'M',
+        track: 'technical',
         feature_desc: 'auth-park-test',
       } as ConductState);
 
@@ -6583,9 +6988,7 @@ describe('engine/conductor', () => {
     });
 
     it('TR-4 Test C: escalation PR body carries credentials-specific reason', async () => {
-      const { waitForCredentialsChange } = await import(
-        '../../src/engine/self-host/operator-credentials.js'
-      );
+      const { waitForCredentialsChange } = await import('../../src/engine/self-host/operator-credentials.js');
       const credentialsPath = join(dir, '.credentials.json');
       const expiresAt = Date.now() - 1000;
       await writeFile(credentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt } }), 'utf-8');
@@ -6609,10 +7012,19 @@ describe('engine/conductor', () => {
       // prior step stamped done — these tests exercise the auth-park path of
       // the build step only.
       await writeState(statePath, {
-        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-        stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'done',
-        architecture_diagram: 'done', architecture_review: 'done',
-        acceptance_specs: 'done', complexity_tier: 'M', track: 'technical',
+        worktree: 'done',
+        memory: 'done',
+        explore: 'done',
+        complexity: 'done',
+        stories: 'done',
+        conflict_check: 'done',
+        plan: 'done',
+        coherence_check: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
+        acceptance_specs: 'done',
+        complexity_tier: 'M',
+        track: 'technical',
         feature_desc: 'auth-park-test',
       } as ConductState);
 
@@ -6665,8 +7077,12 @@ describe('engine/conductor', () => {
     it('auto-approves conflict_check when no marker file exists', async () => {
       await seedConflictArtifact(dir);
       await writeState(statePath, {
-        bootstrap: 'done', memory: 'done', assess: 'done', explore: 'done',
-        stories: 'done', complexity_tier: 'M',
+        bootstrap: 'done',
+        memory: 'done',
+        assess: 'done',
+        explore: 'done',
+        stories: 'done',
+        complexity_tier: 'M',
       } as ConductState);
 
       const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
@@ -6692,8 +7108,12 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline/review-required-conflict_check'), '1');
       await writeState(statePath, {
-        bootstrap: 'done', memory: 'done', assess: 'done', explore: 'done',
-        stories: 'done', complexity_tier: 'M',
+        bootstrap: 'done',
+        memory: 'done',
+        assess: 'done',
+        explore: 'done',
+        stories: 'done',
+        complexity_tier: 'M',
       } as ConductState);
 
       const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
@@ -6720,8 +7140,12 @@ describe('engine/conductor', () => {
       const markerPath = join(dir, '.pipeline/review-required-conflict_check');
       await writeFile(markerPath, '1');
       await writeState(statePath, {
-        bootstrap: 'done', memory: 'done', assess: 'done', explore: 'done',
-        stories: 'done', complexity_tier: 'M',
+        bootstrap: 'done',
+        memory: 'done',
+        assess: 'done',
+        explore: 'done',
+        stories: 'done',
+        complexity_tier: 'M',
       } as ConductState);
 
       const runner = createMockStepRunner();
@@ -6738,7 +7162,10 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       const { access: _access } = await import('fs/promises');
-      const exists = await _access(markerPath).then(() => true, () => false);
+      const exists = await _access(markerPath).then(
+        () => true,
+        () => false,
+      );
       expect(exists).toBe(false);
     });
 
@@ -6747,7 +7174,10 @@ describe('engine/conductor', () => {
       // (.docs/specs); explore is advisory + artifact-less so it never prompts.
       await seedPrdArtifact(dir);
       await writeState(statePath, {
-        bootstrap: 'done', memory: 'done', assess: 'done', explore: 'done',
+        bootstrap: 'done',
+        memory: 'done',
+        assess: 'done',
+        explore: 'done',
         complexity_tier: 'M',
       } as ConductState);
 
@@ -6791,8 +7221,12 @@ describe('engine/conductor', () => {
 
       const retryEvents: unknown[] = [];
       const failedEvents: unknown[] = [];
-      events.on('step_retry', (e) => { retryEvents.push(e); });
-      events.on('step_failed', (e) => { failedEvents.push(e); });
+      events.on('step_retry', (e) => {
+        retryEvents.push(e);
+      });
+      events.on('step_failed', (e) => {
+        failedEvents.push(e);
+      });
 
       await conductor.run();
 
@@ -6899,9 +7333,7 @@ describe('engine/conductor', () => {
       const runner: StepRunner = {
         run: vi.fn(async (step) => {
           stepsRun.push(step);
-          return step === customStep
-            ? { success: true }
-            : { success: false, output: 'unexpected downstream dispatch' };
+          return step === customStep ? { success: true } : { success: false, output: 'unexpected downstream dispatch' };
         }),
       };
       events.on('step_failed', (event) => {
@@ -7013,7 +7445,7 @@ describe('engine/conductor', () => {
       resolveArtifacts.mockRestore();
     });
 
-    it("build step requires .pipeline/task-status.json with all tasks completed", async () => {
+    it('build step requires .pipeline/task-status.json with all tasks completed', async () => {
       const runner: StepRunner = {
         run: vi.fn().mockResolvedValue({ success: true }),
       };
@@ -7143,15 +7575,14 @@ describe('engine/conductor', () => {
         [
           '.pipeline/task-evidence.json',
           JSON.stringify({
-            evidenceStamps: { 'task-1': { sha: 'abc1234567890000000000000000000000000000', form: 'operator-verified' } },
+            evidenceStamps: {
+              'task-1': { sha: 'abc1234567890000000000000000000000000000', form: 'operator-verified' },
+            },
             noEvidenceAttempts: 0,
             migrationGrandfather: [],
           }),
         ],
-        [
-          '.pipeline/task-status.json',
-          JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
-        ],
+        ['.pipeline/task-status.json', JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] })],
       ];
       for (const [rel, content] of preFixtures) {
         const full = join(dir, rel);
@@ -7179,31 +7610,37 @@ describe('engine/conductor', () => {
             // grader writing a passing verdict so this artifact-happy-path
             // fixture doesn't trip the build_review completion predicate.
             await _mkdir(join(dir, '.pipeline'), { recursive: true });
-            await _wf(
-              join(dir, '.pipeline/build-review.json'),
-              JSON.stringify(passingBuildReviewAggregate()),
-            );
+            await _wf(join(dir, '.pipeline/build-review.json'), JSON.stringify(passingBuildReviewAggregate()));
           } else if (step === 'manual_test') {
             await _wf(
               join(dir, '.pipeline/manual-test-results.md'),
               '# Results\n\n| Story | Result |\n|---|---|\n| story-a | PASS |\n',
             );
           } else if (step === 'prd_audit') {
-            await persistPrdAuditVerdict(dir, {
-              complete: true,
-              judgment: {
-                version: 'v1',
-                criterionJudgments: [{
-                  criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
-                  evidence: 'The fixture supplies a complete typed audit judgment.',
-                  rationale: 'The artifact walk only needs a valid current verdict.',
-                  requirementAssociations: [], evidenceTaskIds: [],
-                }],
-                noOwnerObservations: [],
+            await persistPrdAuditVerdict(
+              dir,
+              {
+                complete: true,
+                judgment: {
+                  version: 'v1',
+                  criterionJudgments: [
+                    {
+                      criterion: { storyId: '1', ordinal: 1 },
+                      criterionId: 'S1.1',
+                      grade: 'PASS',
+                      evidence: 'The fixture supplies a complete typed audit judgment.',
+                      rationale: 'The artifact walk only needs a valid current verdict.',
+                      requirementAssociations: [],
+                      evidenceTaskIds: [],
+                    },
+                  ],
+                  noOwnerObservations: [],
+                },
+                diagnostics: [],
+                recordedDispositions: [],
               },
-              diagnostics: [],
-              recordedDispositions: [],
-            }, { attemptId: options?.runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' });
+              { attemptId: options?.runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' },
+            );
           } else if (step === 'architecture_review_as_built') {
             await _mkdir(join(dir, '.docs/decisions'), { recursive: true });
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
@@ -7277,7 +7714,9 @@ describe('engine/conductor', () => {
       });
 
       const failedEvents: unknown[] = [];
-      events.on('step_failed', (e) => { failedEvents.push(e); });
+      events.on('step_failed', (e) => {
+        failedEvents.push(e);
+      });
 
       await conductor.run();
 
@@ -7291,15 +7730,18 @@ describe('engine/conductor', () => {
     async function seedSerialAsBuiltRoute(): Promise<void> {
       await rm(join(dir, '.pipeline'), { recursive: true, force: true });
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await writeFile(join(dir, '.docs', 'plans', `${FEATURE}.md`), [
-        '### Task 1: Existing task',
-        '',
-        'Done when: the existing task is complete.',
-        '',
-        '### Task rem-as-built-t1: Prior as-built repair',
-        '',
-        'Done when: the prior repair is complete.',
-      ].join('\n'));
+      await writeFile(
+        join(dir, '.docs', 'plans', `${FEATURE}.md`),
+        [
+          '### Task 1: Existing task',
+          '',
+          'Done when: the existing task is complete.',
+          '',
+          '### Task rem-as-built-t1: Prior as-built repair',
+          '',
+          'Done when: the prior repair is complete.',
+        ].join('\n'),
+      );
       await writeState(statePath, {
         ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
         feature_desc: FEATURE,
@@ -7310,25 +7752,42 @@ describe('engine/conductor', () => {
 
     async function writeCaseStore(repairTaskIds: readonly string[] = ['rem-as-built-t1']): Promise<void> {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify({
-        version: 'v4',
-        feature: { version: 'v1', repository: 'fixture/conductor', feature: FEATURE },
-        cases: [], prdWideningCases: [], suppressions: [], outbox: [],
-        asBuiltCases: [{
-          id: 'as-built-case-1', domain: 'as_built', status: 'open', recurrenceCount: 0,
-          repairTaskIds,
-          sources: [{
-            findingId: 'as-built:prior:1', attemptId: 'prior', class: 'REMEDIABLE',
-            reference: { kind: 'plan-task', taskId: '1' }, summary: 'Prior repair context.',
-            relation: 'new', reason: 'First observation.',
-          }],
-        }],
-      }), 'utf8');
+      await writeFile(
+        join(dir, '.pipeline', 'remediation-cases.json'),
+        JSON.stringify({
+          version: 'v4',
+          feature: { version: 'v1', repository: 'fixture/conductor', feature: FEATURE },
+          cases: [],
+          prdWideningCases: [],
+          suppressions: [],
+          outbox: [],
+          asBuiltCases: [
+            {
+              id: 'as-built-case-1',
+              domain: 'as_built',
+              status: 'open',
+              recurrenceCount: 0,
+              repairTaskIds,
+              sources: [
+                {
+                  findingId: 'as-built:prior:1',
+                  attemptId: 'prior',
+                  class: 'REMEDIABLE',
+                  reference: { kind: 'plan-task', taskId: '1' },
+                  summary: 'Prior repair context.',
+                  relation: 'new',
+                  reason: 'First observation.',
+                },
+              ],
+            },
+          ],
+        }),
+        'utf8',
+      );
     }
 
     async function runBlockedAsBuilt(
       configure?: () => Promise<void>,
-      remediationProjectionLimitOverrides?: { priorAsBuiltCasesBytes: number },
     ): Promise<{ remediateRequests: StepRunOptions[]; halt: string; haltClass: string }> {
       await seedSerialAsBuiltRoute();
       await configure?.();
@@ -7353,7 +7812,6 @@ describe('engine/conductor', () => {
         daemon: true,
         verifyArtifacts: true,
         maxRetries: 1,
-        remediationProjectionLimitOverrides,
       }).run();
       return {
         remediateRequests,
@@ -7367,20 +7825,11 @@ describe('engine/conductor', () => {
       const empty = await runBlockedAsBuilt();
       expect(empty.remediateRequests).toHaveLength(1);
       expect(empty.remediateRequests[0]?.remediationRequest).toMatchObject({
-        mode: 'gap-plan', projection: { priorAsBuiltCases: [] },
+        mode: 'gap-plan',
+        projection: { priorAsBuiltCases: [] },
       });
 
-      const oversize = await runBlockedAsBuilt(
-        () => writeCaseStore(),
-        { priorAsBuiltCasesBytes: 1 },
-      );
-      expect(oversize.remediateRequests).toEqual([]);
-      expect(oversize.haltClass).toBe('needs-human');
-      expect(oversize.halt).toMatch(/prior-as-built-cases.*actual \d+, limit 1/);
-
-      const undeclaredRepair = await runBlockedAsBuilt(
-        () => writeCaseStore(['rem-as-built-missing']),
-      );
+      const undeclaredRepair = await runBlockedAsBuilt(() => writeCaseStore(['rem-as-built-missing']));
       expect(undeclaredRepair.remediateRequests).toEqual([]);
       expect(undeclaredRepair.haltClass).toBe('needs-human');
       expect(undeclaredRepair.halt).toContain('rem-as-built-missing');

@@ -99,7 +99,11 @@ import {
   retiresOpenBuildReviewCase,
 } from './remediation-case-reconciler.js';
 import { formatBuildReviewResolveCaseCommand } from './build-review-adjudication.js';
-import { buildRemediationProjection, type RemediationProjectionLimits } from './remediation-projection.js';
+import {
+  buildRemediationProjection,
+  type RemediationProjectionDependencies,
+  type RemediationProjectionLimits,
+} from './remediation-projection.js';
 import { readTypedRemediationPlan } from './remediation-plan-store.js';
 import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import { createGithubTrackerClient } from './tracker-client.js';
@@ -829,6 +833,7 @@ export class Conductor {
     };
   }
   private readonly remediationProjectionLimitOverrides: Partial<RemediationProjectionLimits> | undefined;
+  private readonly remediationProjectionDependencies: RemediationProjectionDependencies | undefined;
   private readonly executionLifecycle: ExecutionLifecycle;
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
@@ -3185,6 +3190,7 @@ export class Conductor {
     this.advanceChildRegion = opts.childRegionLifecycle?.advanceChildRegion ?? advanceChildRegion;
     this.requestRoutedExit = opts.childRegionLifecycle?.requestRoutedExit;
     this.remediationProjectionLimitOverrides = opts.remediationProjectionLimitOverrides;
+    this.remediationProjectionDependencies = opts.remediationProjectionDependencies;
     this.executionLifecycle = new ExecutionLifecycle({
       events: this.events,
       onTerminal: async ({ event }) => {
@@ -4936,15 +4942,16 @@ export class Conductor {
         ...(prdAuditOverScopeRoute?.kind === 'refusal-rework' ? { refusals: prdAuditOverScopeRoute.refusals } : {}),
       },
       this.remediationProjectionLimitOverrides,
+      this.remediationProjectionDependencies,
     );
     if (!projectionResult.ok) {
-      const { source, dimension, actual, limit, detail } = projectionResult.fault;
+      const { source, dimension, actual, limit, detail, cause } = projectionResult.fault;
       const bounds = actual === undefined || limit === undefined ? '' : ` (actual ${actual}, limit ${limit})`;
       // Only the operator-owned as-built history can require a human decision.
       // Every other projection input fault is a mechanical validator failure,
       // including PRD-only ledger and artifact faults.
       const haltClass =
-        dimension === 'prior-as-built-cases' || source === 'remediation case store' ? 'needs-human' : 'mechanical';
+        cause === 'prior-repair-task-missing' || cause === 'case-store-unreadable' ? 'needs-human' : 'mechanical';
       return this.haltForRemediationValidatorFault(
         state,
         hintSource,
@@ -4964,7 +4971,11 @@ export class Conductor {
       const dispatch = await this.stepRunner.run('remediate', state, {
         runId: attemptId,
         retryReason: dispatchContext,
-        remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
+        remediationRequest: {
+          mode: 'gap-plan',
+          projection: projectionResult.projection,
+          history: projectionResult.history,
+        },
       });
 
       // The native-schema preflight is a deterministic engine capability
