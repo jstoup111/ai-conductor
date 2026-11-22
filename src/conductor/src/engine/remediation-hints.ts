@@ -139,6 +139,28 @@ export function remediationDispositionRejectionsFromDispatchOutput(
   });
 }
 
+/** Bound on the prior-attempt fault carried into a gap-plan retry prompt. */
+export const REMEDIATION_RETRY_FAULT_CHAR_CAP = 4_000;
+
+/**
+ * Compose the retry context for a gap-plan attempt after a rejected or absent
+ * one. The dispatch context is unchanged; the prior attempt's named fault is
+ * appended so the fresh one-shot can correct the rejected field instead of
+ * repeating it. The fault is capped so a long diagnostic cannot grow the
+ * prompt without bound.
+ */
+export function withPriorRemediationAttemptFault(dispatchContext: string, lastFault: string): string {
+  const fault =
+    lastFault.length > REMEDIATION_RETRY_FAULT_CHAR_CAP
+      ? `${lastFault.slice(0, REMEDIATION_RETRY_FAULT_CHAR_CAP)}… (truncated)`
+      : lastFault;
+  return (
+    `${dispatchContext}\n\nPRIOR REMEDIATION ATTEMPT REJECTED (engine-owned): ${fault}\n` +
+    'Correct every named field in this attempt: an existing-task disposition binds only the owner task the ' +
+    'diagnostic names, and every required reference must be answered exactly once.'
+  );
+}
+
 /**
  * The earliest target step among a set of remediation fixes. The loop
  * navigateBacks here and re-runs forward, so picking the earliest re-runs every

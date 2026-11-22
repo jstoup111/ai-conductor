@@ -694,6 +694,7 @@ import {
   buildRetryHint,
   earliestRemediationTarget,
   remediationDispositionRejectionsFromDispatchOutput,
+  withPriorRemediationAttemptFault,
   remediationGapsFromTypedPlan,
   remediationProjectionSource,
   remediationGapTargetsAnotherFeatureSealedArtifact,
@@ -4963,7 +4964,11 @@ export class Conductor {
       const attemptId = randomUUID();
       const dispatch = await this.stepRunner.run('remediate', state, {
         runId: attemptId,
-        retryReason: dispatchContext,
+        // A retry that cannot see why the prior attempt was rejected repeats
+        // it verbatim and burns the whole allowance on one defect (seen as
+        // three identical owner-binding rejections, then a needs-human halt).
+        // Each fresh one-shot carries the prior attempt's named fault.
+        retryReason: attempt === 0 ? dispatchContext : withPriorRemediationAttemptFault(dispatchContext, lastFault),
         remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
       });
 
