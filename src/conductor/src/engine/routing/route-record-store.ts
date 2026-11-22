@@ -1,5 +1,11 @@
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import { journalRefFor, readRestackJournal, type ReadRestackJournalResult, type RestackJournal } from '../restack/restack-journal.js';
+import { parseChildId, type ChildId } from '../child-context.js';
+import {
+  journalRefFor,
+  readRestackJournal,
+  type ReadRestackJournalResult,
+  type RestackJournal,
+} from '../restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../restack/restack-types.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing-refs.js';
 import {
@@ -18,11 +24,41 @@ import {
 import type { ConductorEvent } from '../../types/events.js';
 import { routedRepairPhaseEvent, withOutboxEvent } from './routing-events.js';
 
-export type StoredRouteRecord = { readonly kind: 'record'; readonly slug: string; readonly blob: CommitSha; readonly record: RouteRecord };
-export type ReadRouteRecordResult = { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly blob?: CommitSha } | StoredRouteRecord;
-export type ReadRepairMarkerResult = { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly blob?: CommitSha } | { readonly kind: 'marker'; readonly slug: string; readonly blob: CommitSha; readonly marker: RepairMarker };
-export type ReadRevalidationQueueResult = { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly blob?: CommitSha } | { readonly kind: 'queue'; readonly slug: string; readonly blob: CommitSha; readonly queue: RevalidationQueueRecord };
-export type WriteRouteRecordResult = { readonly kind: 'updated' } | { readonly kind: 'cas-failed' } | { readonly kind: 'restack-journal-open' } | { readonly kind: 'unavailable' };
+export type StoredRouteRecord = {
+  readonly kind: 'record';
+  readonly slug: string;
+  readonly blob: CommitSha;
+  readonly record: RouteRecord;
+};
+export type ReadRouteRecordResult =
+  { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly blob?: CommitSha } | StoredRouteRecord;
+export type ReadRepairMarkerResult =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly blob?: CommitSha }
+  | { readonly kind: 'marker'; readonly slug: string; readonly blob: CommitSha; readonly marker: RepairMarker };
+export type ReadRevalidationQueueResult =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly blob?: CommitSha }
+  | {
+      readonly kind: 'queue';
+      readonly slug: string;
+      readonly blob: CommitSha;
+      readonly queue: RevalidationQueueRecord;
+    };
+/**
+ * Fold provenance belongs to the queue generation pinned at route admission.
+ * Do not collapse unavailable evidence into an absent fold: callers use that
+ * distinction to decide whether changing route or leaf-gate state is safe.
+ */
+export type ReadPinnedQueueFoldResult =
+  | { readonly kind: 'fold'; readonly fold: NonNullable<RevalidationQueueRecord['fold']> }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unavailable'; readonly detail: string };
+export type WriteRouteRecordResult =
+  | { readonly kind: 'updated' }
+  | { readonly kind: 'cas-failed' }
+  | { readonly kind: 'restack-journal-open' }
+  | { readonly kind: 'unavailable' };
 export type NextRoundIdResult = RoundId | { readonly kind: 'round-limit' } | { readonly kind: 'unavailable' };
 
 const ZERO_SHA = '0'.repeat(40);
@@ -34,9 +70,11 @@ const ZERO_SHA = '0'.repeat(40);
 export function routingFenceOpen(journal: ReadRestackJournalResult, ownerOpId?: RestackOpId): boolean {
   if (journal.kind === 'missing') return true;
   if (journal.kind !== 'journal') return false;
-  return journal.journal.state === 'aborted'
-    || (journal.journal.state === 'applied' && journal.journal.followOnCause === undefined)
-    || (journal.journal.state === 'synced' && ownerOpId === journal.journal.opId);
+  return (
+    journal.journal.state === 'aborted' ||
+    (journal.journal.state === 'applied' && journal.journal.followOnCause === undefined) ||
+    (journal.journal.state === 'synced' && ownerOpId === journal.journal.opId)
+  );
 }
 
 function isFeatureBranchRef(ref: string): boolean {
@@ -58,33 +96,126 @@ export type RoutingTransactionOp =
   | { readonly kind: 'update-record'; readonly previous: StoredRouteRecord; readonly record: RouteRecord }
   | { readonly kind: 'delete-record'; readonly previous: StoredRouteRecord }
   | { readonly kind: 'create-marker'; readonly marker: RepairMarker }
-  | { readonly kind: 'replace-marker'; readonly previous: ReadRepairMarkerResult & { readonly kind: 'marker' }; readonly marker: RepairMarker }
-  | { readonly kind: 'update-queue'; readonly previous: ReadRevalidationQueueResult & { readonly kind: 'queue' }; readonly queue: RevalidationQueueRecord }
+  | {
+      readonly kind: 'replace-marker';
+      readonly previous: ReadRepairMarkerResult & { readonly kind: 'marker' };
+      readonly marker: RepairMarker;
+    }
+  | {
+      readonly kind: 'update-queue';
+      readonly previous: ReadRevalidationQueueResult & { readonly kind: 'queue' };
+      readonly queue: RevalidationQueueRecord;
+    }
   | { readonly kind: 'delete-queue'; readonly previous: ReadRevalidationQueueResult & { readonly kind: 'queue' } }
   | { readonly kind: 'update-branch'; readonly ref: string; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
   | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'delete-marker'; readonly old: CommitSha }
   /** A value-only fence for authority refs not otherwise written by this transaction. */
-  | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha };
+  | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha }
+  /**
+   * A restack's already-rendered terminal transaction. Its journal transition
+   * is its CAS fence, so the route store must commit it without adding a
+   * second verify for the same journal ref after that transition.
+   */
+  | { readonly kind: 'restack-applied'; readonly ownerOpId: RestackOpId; readonly lines: readonly string[] };
 
-export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
+export interface RouteRecordStoreDependencies {
+  readonly git?: GitRunner;
+}
+
+/** A deferred leaf placement, read from its owning durable routing round. */
+interface DeferredPlacementBase {
+  readonly host: ChildId;
+  readonly roundId: RoundId;
+  readonly leafEntryTip: CommitSha;
+  readonly findingIds: readonly string[];
+}
+
+/** An in-progress leaf repair that blocks base refresh and publication. */
+export interface OpenDeferredPlacement extends DeferredPlacementBase {}
+
+/** A completed leaf interval that is eligible for folding. */
+export interface FoldableDeferredPlacement extends DeferredPlacementBase {
+  readonly exitTip: CommitSha;
+}
+
+export type DeferredPlacement = OpenDeferredPlacement | FoldableDeferredPlacement;
+
+export type DeferredPlacementInventory =
+  | {
+      readonly kind: 'inventory';
+      readonly open: readonly OpenDeferredPlacement[];
+      readonly foldable: readonly FoldableDeferredPlacement[];
+    }
+  | { readonly kind: 'unavailable'; readonly detail: string };
+
+/** Enumerates every deferred placement from one checked route namespace read. */
+export async function deferredPlacementInventory(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<DeferredPlacementInventory> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  let listed: Awaited<ReturnType<typeof git>>;
+  try {
+    listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  } catch {
+    return { kind: 'unavailable', detail: 'cannot enumerate routing rounds' };
+  }
+  if (listed.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot enumerate routing rounds' };
+  const open: OpenDeferredPlacement[] = [];
+  const foldable: FoldableDeferredPlacement[] = [];
+  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+    const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (!roundId || ref !== `refs/conductor/${slug}/routes/${roundId}`)
+      return { kind: 'unavailable', detail: `routing ref ${ref} has an invalid round id` };
+    const stored = await readRouteRecord(worktree, slug, roundId, { git });
+    if (stored.kind !== 'record') return { kind: 'unavailable', detail: `routing round ${roundId} is unreadable` };
+    for (const [rawHost, placement] of Object.entries(stored.record.placements ?? {})) {
+      if (placement.state !== 'deferred') continue;
+      const host = parseChildId(Number(rawHost));
+      if (!host)
+        return { kind: 'unavailable', detail: `routing round ${roundId} has an invalid deferred host ${rawHost}` };
+      const base = {
+        host,
+        roundId,
+        leafEntryTip: placement.leafEntryTip,
+        findingIds: stored.record.items.filter((item) => item.host === host).map((item) => item.findingId),
+      };
+      if (placement.exitTip === undefined) open.push(base);
+      else foldable.push({ ...base, exitTip: placement.exitTip });
+    }
+  }
+  return { kind: 'inventory', open, foldable };
+}
+
 /**
  * Every newly admitted audit or operator route seals its authored-task
  * denominator. A revalidate route authors no remediation tasks, so it seals none.
  */
 export type CreateRouteRecordInput = Pick<
   RouteRecord,
-  'roundId' | 'items' | 'allocation' | 'pendingAsBuiltFindings' | 'operator'
+  'roundId' | 'items' | 'allocation' | 'execution' | 'placements' | 'pendingAsBuiltFindings' | 'operator'
 > & { readonly receipt?: RouteRecord['receipt'] } & (
-  | { readonly kind: 'audit'; readonly sealedAuthored: number }
-  | { readonly kind: 'revalidate'; readonly sealedAuthored?: never }
-  | { readonly kind: 'operator'; readonly sealedAuthored: number }
-);
+    | { readonly kind: 'audit'; readonly sealedAuthored: number }
+    | { readonly kind: 'revalidate'; readonly sealedAuthored?: never }
+    | { readonly kind: 'operator'; readonly sealedAuthored: number }
+  );
 export type PersistOutboxEvent = (event: ConductorEvent) => Promise<'persisted' | 'duplicate'>;
-export type DrainOutboxResult = { readonly kind: 'drained' } | { readonly kind: 'persist-failed' } | { readonly kind: 'retry' } | { readonly kind: 'restack-journal-open' } | { readonly kind: 'unavailable' };
+export type DrainOutboxResult =
+  | { readonly kind: 'drained' }
+  | { readonly kind: 'persist-failed' }
+  | { readonly kind: 'retry' }
+  | { readonly kind: 'restack-journal-open' }
+  | { readonly kind: 'unavailable' };
 
-async function readBlob(ref: string, git: GitRunner): Promise<{ readonly kind: 'absent' } | { readonly kind: 'unreadable' } | { readonly blob: CommitSha; readonly content: string }> {
+async function readBlob(
+  ref: string,
+  git: GitRunner,
+): Promise<
+  { readonly kind: 'absent' } | { readonly kind: 'unreadable' } | { readonly blob: CommitSha; readonly content: string }
+> {
   try {
     const refResult = await git(['rev-parse', '-q', '--verify', ref]);
     if (refResult.exitCode === 1) return { kind: 'absent' };
@@ -92,29 +223,81 @@ async function readBlob(ref: string, git: GitRunner): Promise<{ readonly kind: '
     if (!blob) return { kind: 'unreadable' };
     const content = await git(['cat-file', '-p', blob]);
     return content.exitCode === 0 ? { blob, content: content.stdout } : { kind: 'unreadable' };
-  } catch { return { kind: 'unreadable' }; }
+  } catch {
+    return { kind: 'unreadable' };
+  }
 }
 
-export async function readRouteRecord(worktree: string, slug: string, roundId: RoundId, dependencies: RouteRecordStoreDependencies = {}): Promise<ReadRouteRecordResult> {
+export async function readRouteRecord(
+  worktree: string,
+  slug: string,
+  roundId: RoundId,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<ReadRouteRecordResult> {
   const value = await readBlob(routeRecordRefFor(slug, roundId), dependencies.git ?? makeGitRunner(worktree));
-  if ('blob' in value) { const record = parseRouteRecord(value.content); return record ? { kind: 'record', slug, blob: value.blob, record } : { kind: 'unreadable', blob: value.blob }; }
+  if ('blob' in value) {
+    const record = parseRouteRecord(value.content);
+    return record ? { kind: 'record', slug, blob: value.blob, record } : { kind: 'unreadable', blob: value.blob };
+  }
   return { kind: value.kind };
 }
 
-export async function readRepairMarker(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<ReadRepairMarkerResult> {
+export async function readRepairMarker(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<ReadRepairMarkerResult> {
   const value = await readBlob(repairMarkerRefFor(slug), dependencies.git ?? makeGitRunner(worktree));
-  if ('blob' in value) { const marker = parseRepairMarker(value.content); return marker ? { kind: 'marker', slug, blob: value.blob, marker } : { kind: 'unreadable', blob: value.blob }; }
+  if ('blob' in value) {
+    const marker = parseRepairMarker(value.content);
+    return marker ? { kind: 'marker', slug, blob: value.blob, marker } : { kind: 'unreadable', blob: value.blob };
+  }
   return { kind: value.kind };
 }
 
-export async function readRevalidationQueue(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<ReadRevalidationQueueResult> {
+export async function readRevalidationQueue(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<ReadRevalidationQueueResult> {
   const value = await readBlob(revalidationQueueRefFor(slug), dependencies.git ?? makeGitRunner(worktree));
-  if ('blob' in value) { const queue = parseRevalidationQueueRecord(value.content); return queue ? { kind: 'queue', slug, blob: value.blob, queue } : { kind: 'unreadable', blob: value.blob }; }
+  if ('blob' in value) {
+    const queue = parseRevalidationQueueRecord(value.content);
+    return queue ? { kind: 'queue', slug, blob: value.blob, queue } : { kind: 'unreadable', blob: value.blob };
+  }
   return { kind: value.kind };
+}
+
+/**
+ * Reads fold provenance from the exact queue generation a route pinned when it
+ * was admitted, never from the live queue or branch history.
+ */
+export async function readPinnedQueueFold(
+  stored: StoredRouteRecord,
+  git: GitRunner,
+): Promise<ReadPinnedQueueFoldResult> {
+  const pin = stored.record.entry?.revalidation;
+  if (!pin) return { kind: 'absent' };
+  let blob: Awaited<ReturnType<GitRunner>>;
+  try {
+    blob = await git(['cat-file', '-p', pin.queueBlob]);
+  } catch {
+    return { kind: 'unavailable', detail: 'cannot read pinned revalidation queue' };
+  }
+  if (blob.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot read pinned revalidation queue' };
+  const queue = parseRevalidationQueueRecord(blob.stdout);
+  if (!queue) return { kind: 'unavailable', detail: 'pinned revalidation queue is malformed' };
+  if (queue.generation !== pin.generation)
+    return { kind: 'unavailable', detail: 'pinned revalidation queue generation changed' };
+  return queue.fold === undefined ? { kind: 'absent' } : { kind: 'fold', fold: queue.fold };
 }
 
 /** Allocates the next route namespace segment without mutating any ref. */
-export async function nextRoundId(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<NextRoundIdResult> {
+export async function nextRoundId(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<NextRoundIdResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   const prefix = `refs/conductor/${slug}/routes/`;
   try {
@@ -134,8 +317,18 @@ export async function nextRoundId(worktree: string, slug: string, dependencies: 
   }
 }
 
-export async function writeRouteRecord(worktree: string, previous: StoredRouteRecord, next: RouteRecord, dependencies: RouteRecordStoreDependencies = {}): Promise<WriteRouteRecordResult> {
-  return writeRoutingTransaction(worktree, previous.slug, [{ kind: 'update-record', previous, record: next }], dependencies);
+export async function writeRouteRecord(
+  worktree: string,
+  previous: StoredRouteRecord,
+  next: RouteRecord,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<WriteRouteRecordResult> {
+  return writeRoutingTransaction(
+    worktree,
+    previous.slug,
+    [{ kind: 'update-record', previous, record: next }],
+    dependencies,
+  );
 }
 
 /**
@@ -153,7 +346,11 @@ export async function writeRoutingTransaction(
   const git = dependencies.git ?? makeGitRunner(worktree);
   const journal = await readRestackJournal(worktree, slug, { git });
   if (journal.kind === 'unreadable') return { kind: 'unavailable' };
-  if (!routingFenceOpen(journal)) {
+  const restackApplied = ops.find(
+    (op): op is Extract<RoutingTransactionOp, { readonly kind: 'restack-applied' }> => op.kind === 'restack-applied',
+  );
+  if (restackApplied !== undefined && ops.length !== 1) return { kind: 'unavailable' };
+  if (!routingFenceOpen(journal, restackApplied?.ownerOpId)) {
     return { kind: 'restack-journal-open' };
   }
   try {
@@ -173,7 +370,8 @@ export async function writeRoutingTransaction(
           break;
         }
         case 'update-record': {
-          if (op.previous.slug !== slug || op.previous.record.roundId !== op.record.roundId) return { kind: 'unavailable' };
+          if (op.previous.slug !== slug || op.previous.record.roundId !== op.record.roundId)
+            return { kind: 'unavailable' };
           const serialized = serializeRouteRecord(op.record);
           if (serialized === undefined) return { kind: 'unavailable' };
           const blobResult = await git(['hash-object', '-w', '--stdin'], { input: serialized });
@@ -232,12 +430,17 @@ export async function writeRoutingTransaction(
         case 'verify-ref':
           lines.push(`verify ${op.ref} ${op.value}`);
           break;
+        case 'restack-applied':
+          lines.push(...op.lines);
+          break;
       }
     }
     // Keep the ordinary record update first for compatibility with Git's
     // transaction grammar, while retaining the journal fence in this exact
     // atomic transaction before prepare/commit.
-    lines.push(`verify ${journalRefFor(slug)} ${journal.kind === 'journal' ? journal.blob : ZERO_SHA}`, 'prepare', 'commit', '');
+    if (restackApplied === undefined)
+      lines.push(`verify ${journalRefFor(slug)} ${journal.kind === 'journal' ? journal.blob : ZERO_SHA}`);
+    lines.push('prepare', 'commit', '');
     const input = lines.join('\n');
     const updated = await git(['update-ref', '--stdin'], { input });
     if (updated.exitCode === 0) return { kind: 'updated' };
@@ -253,29 +456,59 @@ export async function writeRoutingTransaction(
     };
     for (const op of ops) {
       switch (op.kind) {
-        case 'create-record': expectRef(routeRecordRefFor(slug, op.record.roundId), undefined); break;
-        case 'update-record': expectRef(routeRecordRefFor(slug, op.record.roundId), op.previous.blob); break;
-        case 'delete-record': expectRef(routeRecordRefFor(slug, op.previous.record.roundId), op.previous.blob); break;
-        case 'create-marker': expectRef(repairMarkerRefFor(slug), undefined); break;
-        case 'replace-marker': expectRef(repairMarkerRefFor(slug), op.previous.blob); break;
-        case 'update-queue': expectRef(revalidationQueueRefFor(slug), op.previous.blob); break;
-        case 'delete-queue': expectRef(revalidationQueueRefFor(slug), op.previous.blob); break;
-        case 'update-branch': expectRef(op.ref, op.old); break;
-        case 'create-pin': expectRef(op.ref, undefined); break;
+        case 'create-record':
+          expectRef(routeRecordRefFor(slug, op.record.roundId), undefined);
+          break;
+        case 'update-record':
+          expectRef(routeRecordRefFor(slug, op.record.roundId), op.previous.blob);
+          break;
+        case 'delete-record':
+          expectRef(routeRecordRefFor(slug, op.previous.record.roundId), op.previous.blob);
+          break;
+        case 'create-marker':
+          expectRef(repairMarkerRefFor(slug), undefined);
+          break;
+        case 'replace-marker':
+          expectRef(repairMarkerRefFor(slug), op.previous.blob);
+          break;
+        case 'update-queue':
+          expectRef(revalidationQueueRefFor(slug), op.previous.blob);
+          break;
+        case 'delete-queue':
+          expectRef(revalidationQueueRefFor(slug), op.previous.blob);
+          break;
+        case 'update-branch':
+          expectRef(op.ref, op.old);
+          break;
+        case 'create-pin':
+          expectRef(op.ref, undefined);
+          break;
         case 'update-marker':
-        case 'delete-marker': expectRef(repairMarkerRefFor(slug), op.old); break;
-        case 'verify-ref': expectRef(op.ref, op.value); break;
+        case 'delete-marker':
+          expectRef(repairMarkerRefFor(slug), op.old);
+          break;
+        case 'verify-ref':
+          expectRef(op.ref, op.value);
+          break;
+        // The supplied applied transaction already compare-and-swaps the
+        // journal as its final state transition. A generic re-read cannot
+        // safely classify its arbitrary ref set after a failed transaction.
+        case 'restack-applied':
+          return { kind: 'unavailable' };
       }
     }
     expectRef(journalRefFor(slug), journal.kind === 'journal' ? journal.blob : undefined);
     for (const [ref, value] of expected) {
       const reread = await git(['rev-parse', '-q', '--verify', ref]);
-      const actual = reread.exitCode === 1 ? undefined : reread.exitCode === 0 ? parseCommitSha(reread.stdout.trim()) : undefined;
+      const actual =
+        reread.exitCode === 1 ? undefined : reread.exitCode === 0 ? parseCommitSha(reread.stdout.trim()) : undefined;
       if (reread.exitCode !== 0 && reread.exitCode !== 1) return { kind: 'unavailable' };
       if (actual !== value) return { kind: 'cas-failed' };
     }
     return { kind: 'unavailable' };
-  } catch { return { kind: 'unavailable' }; }
+  } catch {
+    return { kind: 'unavailable' };
+  }
 }
 
 export async function createRouteRecord(
@@ -283,10 +516,23 @@ export async function createRouteRecord(
   slug: string,
   input: CreateRouteRecordInput,
   dependencies: RouteRecordStoreDependencies = {},
-): Promise<{ readonly kind: 'created'; readonly record: RouteRecord } | Exclude<WriteRouteRecordResult, { readonly kind: 'updated' }>> {
-  const hosts = Object.keys(input.allocation).reduce((result, value) => ({ ...result, [value]: 'pending' as const }), {} as Record<string, RouteRecord['hosts'][keyof RouteRecord['hosts']]>);
+): Promise<
+  | { readonly kind: 'created'; readonly record: RouteRecord }
+  | Exclude<WriteRouteRecordResult, { readonly kind: 'updated' }>
+> {
+  const hosts = Object.keys(input.allocation).reduce(
+    (result, value) => ({ ...result, [value]: 'pending' as const }),
+    {} as Record<string, RouteRecord['hosts'][keyof RouteRecord['hosts']]>,
+  );
   if (Object.keys(hosts).length === 0) return { kind: 'unavailable' };
-  const record: RouteRecord = { ...input, phase: 'prepared', hosts, currentHostIndex: 0, receipt: input.receipt ?? emptyUnsettledReceipt(), outbox: [] };
+  const record: RouteRecord = {
+    ...input,
+    phase: 'prepared',
+    hosts,
+    currentHostIndex: 0,
+    receipt: input.receipt ?? emptyUnsettledReceipt(),
+    outbox: [],
+  };
   const write = await writeRoutingTransaction(worktree, slug, [{ kind: 'create-record', record }], dependencies);
   return write.kind === 'updated' ? { kind: 'created', record } : write;
 }
@@ -302,9 +548,10 @@ export function transitionHost(
     return { kind: 'illegal-transition' };
   }
   const priorReasons = stored.record.hostReasons ?? {};
-  const nextReasons = options.reason === undefined
-    ? Object.fromEntries(Object.entries(priorReasons).filter(([rawHost]) => Number(rawHost) !== host))
-    : { ...priorReasons, [host]: options.reason };
+  const nextReasons =
+    options.reason === undefined
+      ? Object.fromEntries(Object.entries(priorReasons).filter(([rawHost]) => Number(rawHost) !== host))
+      : { ...priorReasons, [host]: options.reason };
   const record = {
     ...stored.record,
     hosts: { ...stored.record.hosts, [host]: to },
@@ -351,20 +598,28 @@ export function routedAppliedLines(
   ];
 }
 
-
 /**
  * At-least-once delivery for a route record. A persistence acknowledgement is
  * intentionally separate from the CAS removal: a crash in that window merely
  * replays the event and the canonical persister removes the duplicate.
  */
-export async function drainOutbox(worktree: string, stored: StoredRouteRecord, persist: PersistOutboxEvent, dependencies: RouteRecordStoreDependencies = {}): Promise<DrainOutboxResult> {
+export async function drainOutbox(
+  worktree: string,
+  stored: StoredRouteRecord,
+  persist: PersistOutboxEvent,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<DrainOutboxResult> {
   let current = stored;
   while (current.record.outbox.length > 0) {
     const entry = current.record.outbox[0]!;
     // The durable envelope is the identity authority at this replay boundary.
     // Parsing has already proved these values agree with the inner event.
     const event = { ...entry.event, eventId: entry.eventId, occurredAt: entry.occurredAt } as ConductorEvent;
-    try { await persist(event); } catch { return { kind: 'persist-failed' }; }
+    try {
+      await persist(event);
+    } catch {
+      return { kind: 'persist-failed' };
+    }
     const next = { ...current.record, outbox: current.record.outbox.slice(1) };
     const wrote = await writeRouteRecord(worktree, current, next, dependencies);
     if (wrote.kind === 'updated') {
@@ -392,11 +647,26 @@ export async function drainQueueOutbox(
   while (current.queue.outbox.length > 0) {
     const entry = current.queue.outbox[0]!;
     const event = { ...entry.event, eventId: entry.eventId, occurredAt: entry.occurredAt } as ConductorEvent;
-    try { await persist(event); } catch { return { kind: 'persist-failed' }; }
+    try {
+      await persist(event);
+    } catch {
+      return { kind: 'persist-failed' };
+    }
     const queue = { ...current.queue, outbox: current.queue.outbox.slice(1) };
-    const wrote = queue.entries.length === 0 && queue.outbox.length === 0
-      ? await writeRoutingTransaction(worktree, current.slug, [{ kind: 'delete-queue', previous: current }], dependencies)
-      : await writeRoutingTransaction(worktree, current.slug, [{ kind: 'update-queue', previous: current, queue }], dependencies);
+    const wrote =
+      queue.entries.length === 0 && queue.outbox.length === 0
+        ? await writeRoutingTransaction(
+            worktree,
+            current.slug,
+            [{ kind: 'delete-queue', previous: current }],
+            dependencies,
+          )
+        : await writeRoutingTransaction(
+            worktree,
+            current.slug,
+            [{ kind: 'update-queue', previous: current, queue }],
+            dependencies,
+          );
     if (wrote.kind === 'restack-journal-open') return { kind: 'restack-journal-open' };
     if (wrote.kind !== 'updated') return wrote.kind === 'cas-failed' ? { kind: 'retry' } : { kind: 'unavailable' };
     if (queue.entries.length === 0 && queue.outbox.length === 0) return { kind: 'drained' };
@@ -408,7 +678,12 @@ export async function drainQueueOutbox(
 }
 
 /** Enumerates durable route records, never inferring them from a transient marker. */
-export async function drainRoutingOutboxes(worktree: string, slug: string, persist: PersistOutboxEvent, dependencies: RouteRecordStoreDependencies = {}): Promise<DrainOutboxResult> {
+export async function drainRoutingOutboxes(
+  worktree: string,
+  slug: string,
+  persist: PersistOutboxEvent,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<DrainOutboxResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   try {
     const queue = await readRevalidationQueue(worktree, slug, { git });
@@ -429,5 +704,7 @@ export async function drainRoutingOutboxes(worktree: string, slug: string, persi
       if (drained.kind !== 'drained') return drained;
     }
     return { kind: 'drained' };
-  } catch { return { kind: 'unavailable' }; }
+  } catch {
+    return { kind: 'unavailable' };
+  }
 }

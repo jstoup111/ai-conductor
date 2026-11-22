@@ -28,6 +28,7 @@ import {
   appendBuildReviewAcceptedRisk,
   appendBuildReviewReducedCoverageEvidence,
   appendBuildReviewMetrics,
+  appendRestackSection,
   parseStoriesReference,
   specHash,
   renderShippedRecord,
@@ -50,8 +51,7 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
 
 export type ShippedRecordDispatch =
-  | { kind: 'write'; slug: string; pr: string; engineVersion?: string }
-  | { kind: 'guide' };
+  { kind: 'write'; slug: string; pr: string; engineVersion?: string } | { kind: 'guide' };
 
 /**
  * Parse argv for the `shipped-record` subcommand.
@@ -82,11 +82,7 @@ export function detectShippedRecordCommand(argv: string[]): ShippedRecordDispatc
  * when it resolves, else the same-stem fallback — the SAME resolution order
  * `discoverBacklog` uses, so a record hash and a candidate hash computed from
  * identical committed bytes always agree. */
-async function readStoriesBytes(
-  cwd: string,
-  slug: string,
-  planContent: string,
-): Promise<Buffer | null> {
+async function readStoriesBytes(cwd: string, slug: string, planContent: string): Promise<Buffer | null> {
   const reference = parseStoriesReference(planContent);
   if (reference && !isAbsolute(reference)) {
     try {
@@ -104,10 +100,7 @@ async function readStoriesBytes(
   }
 }
 
-export async function dispatchShippedRecord(
-  cmd: ShippedRecordDispatch,
-  cwd: string,
-): Promise<number> {
+export async function dispatchShippedRecord(cmd: ShippedRecordDispatch, cwd: string): Promise<number> {
   if (cmd.kind === 'guide') {
     console.error(
       'conduct shipped-record --slug <slug> --pr <url|local>\n' +
@@ -126,9 +119,10 @@ export async function dispatchShippedRecord(
       .map((name) => join('.docs/plans', name));
     const resolution = resolveShipmentIdentity(requestedSlug, planPaths);
     if (resolution.kind !== 'resolved') {
-      const detail = resolution.kind === 'ambiguous'
-        ? `ambiguous plan candidates: ${resolution.candidates.join(', ')}`
-        : `plan not found: ${resolution.expected}`;
+      const detail =
+        resolution.kind === 'ambiguous'
+          ? `ambiguous plan candidates: ${resolution.candidates.join(', ')}`
+          : `plan not found: ${resolution.expected}`;
       throw new Error(detail);
     }
     const { identity } = resolution;
@@ -171,10 +165,7 @@ export async function dispatchShippedRecord(
     // unreadable ledger must not discard a safe Cost result, and a Cost
     // failure must not prevent timing from being computed and committed.
     try {
-      recordBody = appendTimingSection(
-        recordBody,
-        await computeTimingRollup(cwd),
-      );
+      recordBody = appendTimingSection(recordBody, await computeTimingRollup(cwd));
     } catch (err) {
       console.error(
         `timing rollup failed — shipped record written with unavailable Time for ${identity.slug}: ${
@@ -186,11 +177,24 @@ export async function dispatchShippedRecord(
     try {
       recordBody = appendBuildReviewMetrics(
         recordBody,
-        computeBuildReviewMetrics(await readMergedFeatureEvents(cwd) ?? []),
+        computeBuildReviewMetrics((await readMergedFeatureEvents(cwd)) ?? []),
       );
     } catch (err) {
       console.error(
         `build-review rollup failed — shipped record written without a Build Review block for ${identity.slug}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    // A Restack block is always rendered for a real stack, even when no
+    // resolver had to run.  It is a projection of the same events used by
+    // Cost, never a second source of accounting truth.
+    try {
+      const [events, children] = await Promise.all([readMergedFeatureEvents(cwd), listExistingChildren(cwd)]);
+      recordBody = appendRestackSection(recordBody, events ?? [], children.length > 1);
+    } catch (err) {
+      console.error(
+        `restack rollup failed — shipped record written without a Restack block for ${identity.slug}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
@@ -213,9 +217,13 @@ export async function dispatchShippedRecord(
       ]);
       const unreadableCaseRead = caseReads.find((read) => !read.ok);
       const readableCaseReads = caseReads.filter((read): read is Extract<typeof read, { ok: true }> => read.ok);
-      const caseRead = unreadableCaseRead && !unreadableCaseRead.ok
-        ? unreadableCaseRead
-        : { ok: true as const, state: { ...readableCaseReads[0]!.state, cases: readableCaseReads.flatMap((read) => read.state.cases) } };
+      const caseRead =
+        unreadableCaseRead && !unreadableCaseRead.ok
+          ? unreadableCaseRead
+          : {
+              ok: true as const,
+              state: { ...readableCaseReads[0]!.state, cases: readableCaseReads.flatMap((read) => read.state.cases) },
+            };
       recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records, caseRead);
 
       const reducedCoverage = await new BuildReviewDispositionStore(cwd).listReducedCoverage(feature);
@@ -228,25 +236,36 @@ export async function dispatchShippedRecord(
         }
         recordBody = appendBuildReviewReducedCoverageEvidence(recordBody, undefined);
       } else {
-        const aggregateText = await readFile(join(cwd, '.pipeline', 'build-review.json'), 'utf-8').catch(() => undefined);
-        const aggregate = aggregateText === undefined ? undefined : parseBuildReviewAggregate(JSON.parse(aggregateText));
+        const aggregateText = await readFile(join(cwd, '.pipeline', 'build-review.json'), 'utf-8').catch(
+          () => undefined,
+        );
+        const aggregate =
+          aggregateText === undefined ? undefined : parseBuildReviewAggregate(JSON.parse(aggregateText));
         if (reducedCoverage.records.length > 0 && !aggregate) {
           throw new Error('reduced build-review coverage has no renderable current-lap evidence');
         }
         const rendered = renderBuildReviewReducedCoverageEvidence({
           state: 'known',
           records: reducedCoverage.records,
-          currentFailures: aggregate === undefined
-            ? []
-            : [
-                ...Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
-                ...(aggregate.currentCustomRubrics ?? []).flatMap((rubric) => {
-                  const member = aggregate.customResults?.[rubric];
-                  return member?.result.kind === 'infrastructure-failure' && member.declaration !== undefined
-                    ? [{ rubric, reason: member.result.reason, detail: member.result.detail, declaration: member.declaration }]
-                    : [];
-                }),
-              ],
+          currentFailures:
+            aggregate === undefined
+              ? []
+              : [
+                  ...Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+                  ...(aggregate.currentCustomRubrics ?? []).flatMap((rubric) => {
+                    const member = aggregate.customResults?.[rubric];
+                    return member?.result.kind === 'infrastructure-failure' && member.declaration !== undefined
+                      ? [
+                          {
+                            rubric,
+                            reason: member.result.reason,
+                            detail: member.result.detail,
+                            declaration: member.declaration,
+                          },
+                        ]
+                      : [];
+                  }),
+                ],
         });
         if (!rendered.ok) throw new Error(rendered.message);
         recordBody = appendBuildReviewReducedCoverageEvidence(recordBody, rendered.section);
@@ -267,10 +286,7 @@ export async function dispatchShippedRecord(
       reject: false,
       stripFinalNewline: false,
     }).catch(() => undefined);
-    if (
-      committed?.exitCode === 0
-      && committed.stdout === recordBody
-    ) {
+    if (committed?.exitCode === 0 && committed.stdout === recordBody) {
       await writeShippedRecord(join(cwd, relPath), committed.stdout);
       console.log(`  ✓ shipped record already committed: ${relPath}`);
       return 0;
@@ -294,10 +310,14 @@ export async function dispatchShippedRecord(
         reject: false,
       });
       if (staged.exitCode !== 0) {
-        await execa('git', ['commit', '-m', withDaemonCoAuthorTrailer(`shipped record: ${identity.slug}`), '--no-verify'], {
-          cwd,
-          env: withEngineCommitEnv(),
-        });
+        await execa(
+          'git',
+          ['commit', '-m', withDaemonCoAuthorTrailer(`shipped record: ${identity.slug}`), '--no-verify'],
+          {
+            cwd,
+            env: withEngineCommitEnv(),
+          },
+        );
         console.log(`  ✓ shipped record committed: ${relPath}`);
       } else {
         console.log(`  ✓ shipped record already committed: ${relPath}`);

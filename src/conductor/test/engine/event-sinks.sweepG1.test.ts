@@ -12,8 +12,7 @@ import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 type Equal<Left, Right> =
-  (<Value>() => Value extends Left ? 1 : 2) extends
-  (<Value>() => Value extends Right ? 1 : 2) ? true : false;
+  (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2 ? true : false;
 
 const RESTACK_REFUSAL_REASONS = [
   'cascade-cap',
@@ -31,18 +30,25 @@ const RESTACK_REFUSAL_REASONS = [
   'published-stack',
   'deferred-base-refresh',
   'restack-resolution-stale',
+  'fold-owner-invalid',
+  'fold-misrouted',
+  'fold-tree-mismatch',
+  'fold-boundary-lost',
 ] as const;
 
 describe('restack_refused on the event spine (sweep G1)', () => {
   // Covers: task:1, task:2, task:11
-  it('closes restack_refused to the fifteen ADR reasons and persists child and detail through EventPersister', async () => {
-    const closedVocabulary: Equal<Extract<ConductorEvent, { type: 'restack_refused' }>['reason'], typeof RESTACK_REFUSAL_REASONS[number]> = true;
-    const sharedVocabulary: Equal<RestackRefusalReason, typeof RESTACK_REFUSAL_REASONS[number]> = true;
+  it('closes restack_refused to the nineteen ADR reasons and persists child and detail through EventPersister', async () => {
+    const closedVocabulary: Equal<
+      Extract<ConductorEvent, { type: 'restack_refused' }>['reason'],
+      (typeof RESTACK_REFUSAL_REASONS)[number]
+    > = true;
+    const sharedVocabulary: Equal<RestackRefusalReason, (typeof RESTACK_REFUSAL_REASONS)[number]> = true;
     expect([closedVocabulary, sharedVocabulary]).toEqual([true, true]);
     // @ts-expect-error -- any string outside the closed reason vocabulary is rejected.
     const unknownReason: ConductorEvent = { type: 'restack_refused', reason: 'not-a-restack-reason' };
     void unknownReason;
-    expect(new Set(RESTACK_REFUSAL_REASONS).size).toBe(15);
+    expect(new Set(RESTACK_REFUSAL_REASONS).size).toBe(19);
 
     const projectRoot = await mkdtemp(join(tmpdir(), 'restack-refused-sweep-'));
     const events = new ConductorEventEmitter();
@@ -58,7 +64,9 @@ describe('restack_refused on the event spine (sweep G1)', () => {
       persister.stop();
 
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
-        .trim().split('\n').map((line) => {
+        .trim()
+        .split('\n')
+        .map((line) => {
           const { ts: _ts, ...record } = JSON.parse(line) as Record<string, unknown>;
           return record;
         });

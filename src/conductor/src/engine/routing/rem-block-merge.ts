@@ -1,7 +1,4 @@
-import {
-  parsePlanTaskBlocks,
-  type ParsedPlanTaskBlock,
-} from '../plan-task-parse.js';
+import { parsePlanTaskBlocks, type ParsedPlanTaskBlock } from '../plan-task-blocks.js';
 
 export type UnionRemBlocksResult =
   | { readonly kind: 'merged'; readonly text: string }

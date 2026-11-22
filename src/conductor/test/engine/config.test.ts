@@ -18,6 +18,7 @@ import {
   mergeConfigs,
   resolveMemoryProvider,
   resolveValidationConcurrency,
+  foldRoutedFixesOn,
 } from '../../src/engine/config.js';
 import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
 import {
@@ -3387,6 +3388,23 @@ steps:
       });
       if (!result.ok) return;
       expect(result.config.stacked_prs).not.toHaveProperty('max_restack_cascades');
+    });
+  });
+
+  // Covers: task:1
+  it('enables routed-fix folding unless stacked_prs explicitly disables it', () => {
+    expect(foldRoutedFixesOn({})).toBe(true);
+    expect(foldRoutedFixesOn({ stacked_prs: { fold_routed_fixes: false } })).toBe(false);
+  });
+
+  // Covers: task:1
+  it('rejects a non-boolean stacked_prs.fold_routed_fixes value', () => {
+    expect(validateConfig({ stacked_prs: { fold_routed_fixes: 'yes' } })).toEqual({
+      ok: false,
+      error: {
+        type: 'validation_error',
+        message: 'stacked_prs.fold_routed_fixes must be a boolean',
+      },
     });
   });
 

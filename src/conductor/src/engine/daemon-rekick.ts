@@ -39,7 +39,7 @@ import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { applyRebaseTransition } from './rebase-transition.js';
 import { runRestack } from './restack/restack-executor.js';
-import { routedRoundOpen } from './routing/round-admission.js';
+import { deferredPlacementsExist, routedRoundOpen } from './routing/round-admission.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
@@ -189,9 +189,7 @@ export interface ClearHaltForResumeDeps {
  * authorization unconsumed; repairing first is the only ordering under which
  * "stays halted" is literally true rather than a marker already deleted.
  */
-export async function clearHaltForResume(
-  deps: ClearHaltForResumeDeps,
-): Promise<ResumeHaltClearResult> {
+export async function clearHaltForResume(deps: ClearHaltForResumeDeps): Promise<ResumeHaltClearResult> {
   const prUrl = await deps.resolvePrUrl?.(deps.slug);
   if (prUrl && deps.cleanupPresentation) {
     const presentation = await deps.cleanupPresentation(prUrl);
@@ -247,9 +245,7 @@ export interface ConsumeResumeAuthorizationsDeps {
  * halt must still be the cap halt the authorization was bound to, then the
  * atomic clear, and only a CONFIRMED clear consumes the authorization.
  */
-export async function consumeResumeAuthorizations(
-  deps: ConsumeResumeAuthorizationsDeps,
-): Promise<string[]> {
+export async function consumeResumeAuthorizations(deps: ConsumeResumeAuthorizationsDeps): Promise<string[]> {
   const cleared: string[] = [];
   for (const slug of await deps.listHaltedWorktrees()) {
     try {
@@ -268,44 +264,57 @@ export async function consumeResumeAuthorizations(
       }
       const path = deps.worktreePath(slug);
       const children = await listExistingChildren(path);
-      const activeChild = children.length === 0 ? undefined : await (async () => {
-        const activeChild = await (deps.resolveActiveChild ?? resolveActiveChild)(path, slug);
-        if (activeChild.kind !== 'active' && activeChild.kind !== 'repair-pending') {
-          throw new Error(`active child cursor is ${activeChild.kind}`);
-        }
-        return activeChild;
-      })();
+      const activeChild =
+        children.length === 0
+          ? undefined
+          : await (async () => {
+              const activeChild = await (deps.resolveActiveChild ?? resolveActiveChild)(path, slug);
+              if (activeChild.kind !== 'active' && activeChild.kind !== 'repair-pending') {
+                throw new Error(`active child cursor is ${activeChild.kind}`);
+              }
+              return activeChild;
+            })();
       const flatLedger = await readKickbackLedger(path);
       const execution = activeChild === undefined ? undefined : resolveExecutionChild(activeChild, slug);
       const executionChild = execution !== undefined && 'target' in execution ? execution.target.child : undefined;
       // A restack cap belongs to the cursor range (normally the leaf), even
       // while a routed host temporarily owns the BUILD region.
       const cursorChild = activeChild === undefined ? undefined : activeChild.child;
-      const executionLedger = executionChild === undefined ? flatLedger : await readKickbackLedger(path, executionChild);
-      const cursorLedger = cursorChild === undefined || cursorChild === executionChild
-        ? executionLedger
-        : await readKickbackLedger(path, cursorChild);
-      const haltGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
-      const liveGate = [flatLedger, executionLedger, cursorLedger].flatMap((ledger) => Object.entries(ledger.gates))
-        .find(([, entry]) => entry.capEvidence?.haltGeneration === haltGeneration)?.[0];
-      const ledger = liveGate === 'restack'
-        ? cursorLedger
-        : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
+      const executionLedger =
+        executionChild === undefined ? flatLedger : await readKickbackLedger(path, executionChild);
+      const cursorLedger =
+        cursorChild === undefined || cursorChild === executionChild
           ? executionLedger
-          : flatLedger;
-      const ledgerChild = liveGate === 'restack' ? cursorChild
-        : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate) ? executionChild
-          : undefined;
+          : await readKickbackLedger(path, cursorChild);
+      const haltGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
+      const liveGate = [flatLedger, executionLedger, cursorLedger]
+        .flatMap((ledger) => Object.entries(ledger.gates))
+        .find(([, entry]) => entry.capEvidence?.haltGeneration === haltGeneration)?.[0];
+      const ledger =
+        liveGate === 'restack'
+          ? cursorLedger
+          : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
+            ? executionLedger
+            : flatLedger;
+      const ledgerChild =
+        liveGate === 'restack'
+          ? cursorChild
+          : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
+            ? executionChild
+            : undefined;
       if (isUnreadableKickbackLedger(ledger)) {
         throw new Error('kickback ledger is unreadable');
       }
       // adr-2026-08-31 decision 3: a malformed sibling gate never invalidates a
       // healthy gate's authorization, but its own gate is never honored.
-      const candidates = Object.entries(ledger.gates).filter(([gate, entry]) =>
-        !isUnreadableKickbackGate(ledger, gate) &&
-        entry.capEvidence && entry.resumeAuthorization && !entry.resumeAuthorization.consumed &&
-        entry.capEvidence.gate === gate &&
-        entry.capEvidence.haltGeneration === entry.resumeAuthorization.haltGeneration,
+      const candidates = Object.entries(ledger.gates).filter(
+        ([gate, entry]) =>
+          !isUnreadableKickbackGate(ledger, gate) &&
+          entry.capEvidence &&
+          entry.resumeAuthorization &&
+          !entry.resumeAuthorization.consumed &&
+          entry.capEvidence.gate === gate &&
+          entry.capEvidence.haltGeneration === entry.resumeAuthorization.haltGeneration,
       );
       if (candidates.length === 0) continue;
       // The live halt must still be THIS gate's cap halt. Without this an
@@ -341,7 +350,9 @@ export async function consumeResumeAuthorizations(
         await deps.emit?.(slug, { type: 'halt_cleared', cause: 'kickback-budget' });
         cleared.push(slug);
       }
-    } catch (error) { deps.log?.(`kickback-budget ${slug}: retained (${errMsg(error)})`); }
+    } catch (error) {
+      deps.log?.(`kickback-budget ${slug}: retained (${errMsg(error)})`);
+    }
   }
   return cleared;
 }
@@ -449,10 +460,7 @@ const warnedShippedByDeps = new WeakMap<RekickSweepDeps, Set<string>>();
  * Never throws: a per-worktree failure is logged and isolated; the sweep
  * continues with the rest (FR-7 / FR-10).
  */
-export async function rekickSweep(
-  deps: RekickSweepDeps,
-  sha: string,
-): Promise<RekickSweepResult> {
+export async function rekickSweep(deps: RekickSweepDeps, sha: string): Promise<RekickSweepResult> {
   const log = deps.log ?? (() => {});
   const cleared: string[] = [];
   const skipped: string[] = [];
@@ -551,16 +559,14 @@ export async function rekickSweep(
     // durable root lease before touching either a paused rebase or its HALT
     // marker, then re-check the operator's intent in the acquisition window.
     let dispatchLease: Extract<FeatureDispatchLeaseAcquireResult, { kind: 'acquired' }>['lease'] | undefined;
-    if (deps.hasDurableChildState && await deps.hasDurableChildState(slug) === true) {
-      const leaseResult = deps.acquireFeatureDispatchLease
-        ? await deps.acquireFeatureDispatchLease(slug)
-        : undefined;
+    if (deps.hasDurableChildState && (await deps.hasDurableChildState(slug)) === true) {
+      const leaseResult = deps.acquireFeatureDispatchLease ? await deps.acquireFeatureDispatchLease(slug) : undefined;
       if (!leaseResult || leaseResult.kind !== 'acquired') {
         skipped.push(slug);
         if (leaseResult?.kind === 'live-owner') {
           log(
             `re-kick ${slug}: skipped — feature-lease-held ` +
-            `(${leaseResult.owner.purpose}, pid ${leaseResult.owner.pid})`,
+              `(${leaseResult.owner.purpose}, pid ${leaseResult.owner.pid})`,
           );
         } else {
           log(`re-kick ${slug}: skipped — feature-lease-held`);
@@ -925,7 +931,11 @@ export async function resumeRebaseFirst(opts: {
 
   // An open routed round owns the stack.  Keep the sentinel so its eventual
   // close can perform the deferred refresh instead of silently losing it.
-  if (opts.slug && await routedRoundOpen(opts.worktreePath, opts.slug)) {
+  if (
+    opts.slug &&
+    ((await routedRoundOpen(opts.worktreePath, opts.slug)) ||
+      (await deferredPlacementsExist(opts.worktreePath, opts.slug)))
+  ) {
     await opts.events.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
     return 'skipped';
   }
@@ -937,7 +947,12 @@ export async function resumeRebaseFirst(opts: {
   // completion evidence: every refusal and unavailable dependency parks the
   // worktree without writing synthetic success markers.
   if (opts.prUrl && !opts.slug) {
-    await writeHalt(opts.worktreePath, [], 'durable shipment evidence: shipment-evidence-inputs-incomplete', opts.events);
+    await writeHalt(
+      opts.worktreePath,
+      [],
+      'durable shipment evidence: shipment-evidence-inputs-incomplete',
+      opts.events,
+    );
     return 'halted';
   }
   if (opts.runGh && opts.prUrl && opts.slug) {
@@ -1016,13 +1031,21 @@ export async function resumeRebaseFirst(opts: {
         await writeHalt(opts.worktreePath, [], 'cannot inspect completed stacked re-kick', opts.events);
         return 'halted';
       }
-      const allChangedPaths = delta.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+      const allChangedPaths = delta.stdout
+        .split('\n')
+        .map((path) => path.trim())
+        .filter(Boolean);
       stackedOutcome = {
         kind: 'changed',
         baseSha: targetSha,
-        changedCodePaths: allChangedPaths.filter((path) => /(?:^|\/)(?:src|test)\//.test(path) || /\.(?:[cm]?[jt]sx?)$/.test(path)),
+        changedCodePaths: allChangedPaths.filter(
+          (path) => /(?:^|\/)(?:src|test)\//.test(path) || /\.(?:[cm]?[jt]sx?)$/.test(path),
+        ),
         allChangedPaths,
-        featureSurface: featureSurface.stdout.split('\n').map((path) => path.trim()).filter(Boolean),
+        featureSurface: featureSurface.stdout
+          .split('\n')
+          .map((path) => path.trim())
+          .filter(Boolean),
         documentInputs: [],
         replay: {
           preRebaseHead: previousSha,
@@ -1047,14 +1070,13 @@ export async function resumeRebaseFirst(opts: {
       origHead: string,
       head: string,
       flatten?: import('./rebase.js').FlattenedReplayPlan,
-    ): Promise<void> => defaultTranslateAfterRebase(
-      g, projectRoot, onto, origHead, head, opts.events, undefined, flatten,
-    ));
+    ): Promise<void> =>
+      defaultTranslateAfterRebase(g, projectRoot, onto, origHead, head, opts.events, undefined, flatten));
   let outcome: RebaseOutcome;
   try {
-    outcome = await (opts.performRebase ?? performRebase)(
-      git, opts.worktreePath, opts.localBase, { translateAfterRebase },
-    );
+    outcome = await (opts.performRebase ?? performRebase)(git, opts.worktreePath, opts.localBase, {
+      translateAfterRebase,
+    });
   } catch (err) {
     if (err instanceof ProtectedArtifactSealRejection) {
       await writeSealHalt(opts.worktreePath, err.message, opts.events);
@@ -1082,13 +1104,10 @@ export async function resumeRebaseFirst(opts: {
       cap: opts.resolveAttempts ?? 0,
       resolve: opts.resolveConflict,
       translateAfterRebase,
-      onAttempt: (index, cap) =>
-        opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
+      onAttempt: (index, cap) => opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
       onSettled: (kind) =>
         opts.events.emit(
-          kind === 'exhausted'
-            ? { type: 'rebase_resolution_exhausted' }
-            : { type: 'rebase_resolution_succeeded' },
+          kind === 'exhausted' ? { type: 'rebase_resolution_exhausted' } : { type: 'rebase_resolution_succeeded' },
         ),
     });
   }
@@ -1116,7 +1135,10 @@ export async function resumeRebaseFirst(opts: {
   // the ordinary repair route below.
   let rawState: Record<string, unknown> | undefined;
   try {
-    rawState = JSON.parse(await readFile(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, unknown>;
+    rawState = JSON.parse(await readFile(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
   } catch {
     // Older re-kick entries may not yet have conduct state. They do not assert
     // a completed BUILD, so retain their established entry behavior.
@@ -1156,13 +1178,7 @@ export async function resumeRebaseFirst(opts: {
       }
     }
   }
-  const rebaseVerdict = await applyRebaseVerdicts(
-    opts.worktreePath,
-    outcome,
-    opts.ranManualTest,
-    preVerify,
-    git,
-  );
+  const rebaseVerdict = await applyRebaseVerdicts(opts.worktreePath, outcome, opts.ranManualTest, preVerify, git);
   const transitionReplay = rebaseVerdict.replay;
   let appliedGateDecision = rebaseVerdict;
   if (transitionReplay) {
@@ -1177,7 +1193,12 @@ export async function resumeRebaseFirst(opts: {
       reverified: rebaseVerdict.reverified,
     });
     if (transition.stateResult === 'refused') {
-      await writeHalt(opts.worktreePath, [], 'rebase continuation state transition was refused; inspect concurrent state updates before resuming', opts.events);
+      await writeHalt(
+        opts.worktreePath,
+        [],
+        'rebase continuation state transition was refused; inspect concurrent state updates before resuming',
+        opts.events,
+      );
       return 'halted';
     }
     // Keep spine reporting bound to the exact operation persisted by the
@@ -1201,12 +1222,7 @@ export async function resumeRebaseFirst(opts: {
       `re-kick ${basename(opts.worktreePath)}: ${step} gate re-verified mechanically after rebase — dispatch skipped`,
     );
   }
-  await emitGateInvalidationEvents(
-    opts.events,
-    outcome,
-    opts.ranManualTest,
-    appliedGateDecision,
-  );
+  await emitGateInvalidationEvents(opts.events, outcome, opts.ranManualTest, appliedGateDecision);
   // #436: stamp state.rebase = 'done' for clean/noop/changelog-resolved
   // outcomes via the shared helper (no-ops on conflict_halt) — same call
   // the in-loop runRebaseStep makes, so the pre-loop re-kick path leaves
@@ -1242,7 +1258,9 @@ export async function resumeRebaseFirst(opts: {
         kind: 'needs-human',
         reason: `rebase resolution paused — provider setup unavailable: ${outcome.reason}`,
       });
-      opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`);
+      opts.log?.(
+        `re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`,
+      );
       return 'halted';
     case 'changed':
     case 'noop':

@@ -44,6 +44,7 @@ import {
 } from './stack-publication-record.js';
 import type { GitRunner as PublicationRecordGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
+import { deferredPlacementInventory } from './routing/round-admission.js';
 import { checkChildBodyPostconditions, renderChildBody, renderStackNavigation } from './stack-member-body.js';
 import { splitStoryBlocks } from './story-criteria.js';
 import { loadSliceTopology } from './slice-topology.js';
@@ -1277,6 +1278,18 @@ async function establishChildPrs(input: {
   if (!leaf || !input.operations || !input.remoteMutation)
     throw new Error('stack child publication boundary unavailable');
   const stackGit = publicationRecordGit(input.git, input.root);
+  const deferred = await deferredPlacementInventory(input.root, input.slug, { git: stackGit });
+  const deferredPlacements = deferred.kind === 'inventory' ? [...deferred.open, ...deferred.foldable] : [];
+  if (deferred.kind !== 'inventory' || deferredPlacements.length > 0) {
+    const detail =
+      deferred.kind !== 'inventory' || deferredPlacements.length === 0
+        ? `feature ${input.slug}`
+        : deferredPlacements.map((placement) => `host ${placement.host} round ${placement.roundId}`).join(', ');
+    throw new StackPublicationHaltError(
+      'stack_publication_precondition_failed',
+      `deferred routed placement remains (${detail}); run the fold rebase before publication`,
+    );
+  }
   const children = await readStackPublicationChildren(input.root, input.slug, { git: stackGit });
   if (children === 'unreadable') throw new Error('stack child positions are unreadable');
   const positions = await readSealedPositions(input.slug, stackGit);

@@ -183,6 +183,7 @@ import {
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
   BUILD_PROGRESS_HALT_DEFAULTS,
+  foldRoutedFixesOn,
   resolveValidationConcurrency,
   RETRY_ROUTING_DEFAULTS,
 } from './config.js';
@@ -272,6 +273,7 @@ import { changedPathsByPosition, resolveCitedPaths, selectHost } from './routing
 import {
   admitRound,
   checkRoundAdmissionFence,
+  deferredPlacementsExist,
   diagnoseAffectedRounds,
   exitRoutedHostAndReconcile,
   recordRoundStall,
@@ -5992,6 +5994,7 @@ export class Conductor {
                   ? routingFenceHalt(fence.detail)
                   : { kind: 'halt', haltClass: 'needs-human', detail: fence.detail };
               }
+              const execution = foldRoutedFixesOn(this.config) ? ('leaf' as const) : undefined;
               const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
                 roundId,
                 kind: 'audit',
@@ -6000,6 +6003,7 @@ export class Conductor {
                 receipt,
                 sealedAuthored,
                 pendingAsBuiltFindings: [...this.pendingAsBuiltRemediationFindings.values()],
+                ...(execution === undefined ? {} : { execution }),
               });
               if (created.kind !== 'created')
                 return {
@@ -6015,6 +6019,7 @@ export class Conductor {
                   await this.events.emitOrThrow(event);
                   return 'persisted';
                 },
+                ...(execution === undefined ? {} : { execution }),
               });
               if (admission.kind !== 'admitted') {
                 return admission.fence
@@ -6788,7 +6793,7 @@ export class Conductor {
       this.config.stacked_prs?.route_whole_feature_fixes === true &&
       leaf !== undefined &&
       leaf > 1 &&
-      (await routedRoundOpen(this.projectRoot, slug))
+      ((await routedRoundOpen(this.projectRoot, slug)) || (await deferredPlacementsExist(this.projectRoot, slug)))
     ) {
       // A route marker, open round, unreadable queue, or queued child is
       // durable unfinished work.  Never mint terminal state around it.
@@ -6936,6 +6941,10 @@ export class Conductor {
           // returnToLeaf re-pends whole-feature gates in the root state file.
           // Do not keep the former routed host's overlay or its CAS baseline.
           await this.restoreWholeFeatureState(state);
+          if (continued.next.kind === 'leaf-returned' && continued.next.mode === 'fold') {
+            await this.commitStateChanges(state, 'resume rebase after fold leaf return', { rebase: 'pending' });
+            return { index: indexOf('rebase') };
+          }
           return { index: indexOf('manual_test') };
         }
         break;
@@ -7028,6 +7037,10 @@ export class Conductor {
       // guard selects a host. Restore the same root state that a live routed
       // exit uses, then let whole-feature validation resume normally.
       await this.restoreWholeFeatureState(state);
+      if (reconciled.mode === 'fold') {
+        await this.commitStateChanges(state, 'resume rebase after fold leaf return', { rebase: 'pending' });
+        return { index: indexOf('rebase') };
+      }
       return { index: indexOf('manual_test') };
     }
     if (admission.kind === 'admitted' || admission.kind === 'continue' || admission.kind === 'busy') {
@@ -12796,6 +12809,10 @@ export class Conductor {
                         case 'audit':
                           return { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId };
                         case 'revalidate':
+                          // A fold-produced revalidation must validate a
+                          // prerequisite claim at the same engine boundary as an
+                          // audit host, so it can halt rather than reroute it.
+                          return { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId };
                         case 'operator':
                           return undefined;
                       }
@@ -18806,6 +18823,72 @@ export class Conductor {
   }
 
   private async runRebaseStepBody(state: ConductState): Promise<StepRunResult> {
+    const stackSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    // Folding is a local stack repair, not a remote/default-branch rebase.
+    // It must therefore run in interactive and test dispatches as well as in
+    // the daemon path below.  Keep the ordinary base rebase daemon-only.
+    const git = makeGitRunner(this.projectRoot);
+
+    if (stackSlug && (await hasDurableChildState(this.projectRoot, stackSlug))) {
+      if (await publishedStackRefusal(this.projectRoot, stackSlug, { git })) {
+        await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+        return { success: true };
+      }
+      const preflight = await this.stackPreflight({
+        worktree: this.projectRoot,
+        slug: stackSlug,
+        events: this.events,
+        resolver: this.stepRunner.resolveRebaseConflict
+          ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+          : undefined,
+        resolverCap: resolveRebaseResolutionAttempts(this.config),
+      });
+      if (preflight.kind === 'halted' || preflight.kind === 'unavailable') {
+        const reason = `stack preflight ${preflight.kind}: ${preflight.detail}`;
+        return { success: false, output: reason };
+      }
+
+      // Deferred audit work is intentionally left on the leaf until FINISH.
+      // The recorded execution mode, not the current config toggle, is the
+      // authority for the recovery.
+      if (
+        !(await routedRoundOpen(this.projectRoot, stackSlug, { git })) &&
+        (await deferredPlacementsExist(this.projectRoot, stackSlug, { git }))
+      ) {
+        const folded = await runRestack({
+          worktree: this.projectRoot,
+          slug: stackSlug,
+          cause: 'fold',
+          events: this.events,
+          git,
+          resolver: this.stepRunner.resolveRebaseConflict
+            ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+            : undefined,
+          resolverCap: resolveRebaseResolutionAttempts(this.config),
+        });
+        if (folded.kind !== 'applied') {
+          const detail =
+            folded.kind === 'unavailable' ? folded.detail : folded.kind === 'halted' ? folded.detail : folded.kind;
+          return { success: false, output: `stack fold ${folded.kind}: ${detail}` };
+        }
+        // A fold owns a fresh revalidation generation.  Admit its first child
+        // in this same rebase dispatch so publication and base refresh cannot
+        // race ahead of the newly rebuilt child regions.
+        const queue = await readRevalidationQueue(this.projectRoot, stackSlug, { git });
+        if (queue.kind === 'queue' && queue.queue.entries.length > 0) {
+          const admission = await admitQueuedRevalidation({
+            worktree: this.projectRoot,
+            slug: stackSlug,
+            persist: (event) => persistOnActiveEventSpine(this.events, event),
+            git,
+          });
+          if (admission.kind === 'unavailable' || admission.kind === 'stalled') {
+            return { success: false, output: `fold revalidation admission ${admission.kind}: ${admission.detail}` };
+          }
+        }
+      }
+    }
+
     // Phase 9.0: the native rebase-on-latest is a DAEMON finish-time mechanism.
     // In non-daemon runs (interactive `/conduct` and the entire test suite) we
     // must NOT invoke git here: a real `git rebase origin/<default>` against the
@@ -18836,7 +18919,6 @@ export class Conductor {
       return { success: true };
     }
 
-    const git = makeGitRunner(this.projectRoot);
     const localBase = await this.discoverLocalBase(git);
 
     // A stacked feature is one history, not a collection of independently
@@ -18845,26 +18927,11 @@ export class Conductor {
     // `applyRestackTransition` owns the resulting verdict/operation write;
     // this boundary records the FINISH completion and emits the ordinary
     // rebase observation for that whole-stack operation.
-    const stackSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     if (stackSlug && (await hasDurableChildState(this.projectRoot, stackSlug))) {
       if (await publishedStackRefusal(this.projectRoot, stackSlug, { git })) {
         await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
         return { success: true };
       }
-      const preflight = await this.stackPreflight({
-        worktree: this.projectRoot,
-        slug: stackSlug,
-        events: this.events,
-        resolver: this.stepRunner.resolveRebaseConflict
-          ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
-          : undefined,
-        resolverCap: resolveRebaseResolutionAttempts(this.config),
-      });
-      if (preflight.kind === 'halted' || preflight.kind === 'unavailable') {
-        const reason = `stack preflight ${preflight.kind}: ${preflight.detail}`;
-        return { success: false, output: reason };
-      }
-
       const base = await resolveBase(git, localBase);
       const defaultTip = await git(['rev-parse', '--verify', base.ref]);
       const oldLeaf = await git(['rev-parse', '--verify', 'HEAD']);
@@ -18900,7 +18967,10 @@ export class Conductor {
           await recordRebaseStepCompletion(this.stateFilePath, outcome);
           return { success: true };
         }
-        if (await routedRoundOpen(this.projectRoot, stackSlug, { git })) {
+        if (
+          (await routedRoundOpen(this.projectRoot, stackSlug, { git })) ||
+          (await deferredPlacementsExist(this.projectRoot, stackSlug, { git }))
+        ) {
           await this.events.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
           return { success: false, output: 'stack base refresh deferred: routed round open' };
         }

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { type ChildId } from '../child-context.js';
+import { CHILD_REGION_STEPS, type ChildId } from '../child-context.js';
 import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { loadMergedConfigForRead } from '../config.js';
@@ -21,6 +22,7 @@ import {
   journalStateUpdateLines,
   recordRoutedApplyPlan,
   type RestackJournalDraft,
+  type RestackJournalDeferredRoute,
   type RestackJournalRouted,
   type StoredRestackJournal,
 } from './restack-journal.js';
@@ -34,10 +36,35 @@ import {
   type RestackMoveRef,
 } from './restack-move.js';
 import { planRestackRanges } from './restack-plan.js';
-import { adaptedPathsFor, checkPathOwnership, checkResolvedTipOwnership, parentOverlapPaths } from './restack-ownership.js';
+import { collectFoldSet, placeFoldCommits } from './fold-plan.js';
+import type { FoldCommitPlan, FoldFrozenBlock, FoldPart, FoldRange, FoldSourceCommit } from './fold-types.js';
+import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
+import { unionRemBlocks } from '../routing/rem-block-merge.js';
+import {
+  adaptedPathsFor,
+  checkPathOwnership,
+  checkResolvedTipOwnership,
+  parentOverlapPaths,
+} from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
-import { haltRecordedRestackConflict, replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { conflictDeleteLines, conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines, readConflictRecord, refusedTipRefFor, retireRecordedResolution } from './restack-conflict-record.js';
+import { authorOf, messageOf } from './restack-commit-metadata.js';
+import {
+  haltRecordedRestackConflict,
+  replayCandidateSubjects,
+  resolveRestackConflict,
+  type RestackResolver,
+} from './restack-resolver.js';
+import {
+  conflictDeleteLines,
+  conflictFlattenedTipRefFor,
+  conflictParentRefFor,
+  conflictRecordRefFor,
+  consumeRecordedResolution,
+  decisionDeleteLines,
+  readConflictRecord,
+  refusedTipRefFor,
+  retireRecordedResolution,
+} from './restack-conflict-record.js';
 import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
@@ -46,16 +73,30 @@ import { emitRestackRefused } from './restack-events.js';
 import { applyRestackTransition } from './restack-transition.js';
 import { cleanClearedAbortedRestackJournal } from './restack-recovery.js';
 import { resolveUnenteredLeafOwner, type ConsumedTipCorrespondence } from './restack-unentered-leaf.js';
-import {
-  cascadeUpdateLines,
-  checkCascadeCap,
-} from './cascade-cap.js';
+import { cascadeUpdateLines, checkCascadeCap } from './cascade-cap.js';
 import { formatCascadeAllowance, resolveCascadeAllowanceForWorktree } from './cascade-allowance.js';
-import { readRevalidationQueue, readRouteRecord, routedAppliedLines, routedRecordAfterExit } from '../routing/route-record-store.js';
-import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../routing/routing-refs.js';
+import {
+  readRevalidationQueue,
+  readRouteRecord,
+  routedAppliedLines,
+  routedRecordAfterExit,
+  deferredPlacementInventory,
+  writeRoutingTransaction,
+} from '../routing/route-record-store.js';
+import {
+  closureRefFor,
+  repairMarkerRefFor,
+  revalidationQueueRefFor,
+  routeRecordRefFor,
+} from '../routing/routing-refs.js';
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
 import { childRevalidatedEvent } from '../routing/routing-events.js';
-import { parseRevalidationQueueRecord, routingEligible, type RevalidationQueueRecord } from '../routing/route-types.js';
+import {
+  parseRevalidationQueueRecord,
+  routingEligible,
+  type RevalidationQueueEntry,
+  type RevalidationQueueRecord,
+} from '../routing/route-types.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
@@ -118,8 +159,9 @@ function transaction(lines: readonly string[]): string {
 
 /** Return the durable diagnostic rather than losing it at the routed boundary. */
 async function haltedResult(worktree: string): Promise<Extract<RunRestackResult, { readonly kind: 'halted' }>> {
-  const detail = await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8')
-    .catch(() => 'restack halt marker could not be read');
+  const detail = await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8').catch(
+    () => 'restack halt marker could not be read',
+  );
   return { kind: 'halted', detail };
 }
 
@@ -131,13 +173,12 @@ async function queueTrackingAtCreation(
   git: GitRunner,
 ): Promise<{ readonly queueTracked: true; readonly queueOld?: CommitSha } | undefined> {
   const config = await loadMergedConfigForRead(worktree);
-  if (!config.ok || !routingEligible({ kind: 'active' }, config.config as Parameters<typeof routingEligible>[1])) return undefined;
-  if (!await hasDurableChildState(worktree, slug, { git })) return undefined;
+  if (!config.ok || !routingEligible({ kind: 'active' }, config.config as Parameters<typeof routingEligible>[1]))
+    return undefined;
+  if (!(await hasDurableChildState(worktree, slug, { git }))) return undefined;
   const queue = await readRevalidationQueue(worktree, slug, { git });
   if (queue.kind === 'unreadable') throw new Error('cannot read revalidation queue before restack');
-  return queue.kind === 'queue'
-    ? { queueTracked: true, queueOld: queue.blob }
-    : { queueTracked: true };
+  return queue.kind === 'queue' ? { queueTracked: true, queueOld: queue.blob } : { queueTracked: true };
 }
 
 async function queueRecordAtJournalStart(
@@ -157,7 +198,8 @@ async function writeQueuePlan(
   entries: Awaited<ReturnType<typeof applyRestackTransition>>['queueInvalidation'],
   git: GitRunner,
 ): Promise<CommitSha | undefined> {
-  if (journal.journal.queueTracked !== true || (entries.length === 0 && journal.journal.routed === undefined)) return undefined;
+  if (journal.journal.queueTracked !== true || (entries.length === 0 && journal.journal.routed === undefined))
+    return undefined;
   const current = await queueRecordAtJournalStart(journal, git);
   const host = journal.journal.routed?.host;
   const acknowledged = host === undefined ? undefined : current.entries.find((entry) => entry.child === host);
@@ -166,7 +208,12 @@ async function writeQueuePlan(
     const event = childRevalidatedEvent(host!, next.generation, acknowledged.closureSha, 'fixed');
     next = { ...next, outbox: [...next.outbox, { eventId: event.eventId, occurredAt: event.occurredAt, event }] };
   }
-  if (next.entries.length === current.entries.length && next.outbox.length === current.outbox.length && entries.length === 0) return undefined;
+  if (
+    next.entries.length === current.entries.length &&
+    next.outbox.length === current.outbox.length &&
+    entries.length === 0
+  )
+    return undefined;
   const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(next));
   const queueNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
   if (!queueNew) throw new Error('cannot write revalidation queue blob');
@@ -201,11 +248,14 @@ export async function defaultTip(git: GitRunner, supplied?: string): Promise<Com
 async function commitsInRange(git: GitRunner, range: string, context: string): Promise<CommitSha[]> {
   const result = await runGit(git, ['rev-list', '--reverse', range]);
   if (result.exitCode !== 0) throw new Error(`cannot list ${context}`);
-  return result.stdout.split('\n').filter(Boolean).map((value) => {
-    const commit = parseCommitSha(value);
-    if (!commit) throw new Error(`cannot parse ${context} commit`);
-    return commit;
-  });
+  return result.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((value) => {
+      const commit = parseCommitSha(value);
+      if (!commit) throw new Error(`cannot parse ${context} commit`);
+      return commit;
+    });
 }
 
 async function descendsFrom(git: GitRunner, ancestor: CommitSha, descendant: CommitSha): Promise<boolean> {
@@ -268,7 +318,11 @@ interface RestackCursorDivergence {
   readonly divergent: { readonly child: ChildId; readonly check: 'closed-child-rewritten' | 'range-not-ancestor' };
 }
 
-async function activeFor(worktree: string, slug: string, git: GitRunner): Promise<RestackActiveChild | RestackCursorDivergence> {
+async function activeFor(
+  worktree: string,
+  slug: string,
+  git: GitRunner,
+): Promise<RestackActiveChild | RestackCursorDivergence> {
   const cursor = await resolveActiveChild(worktree, slug, { git });
   if (cursor.kind === 'divergent') return { divergent: { child: cursor.child, check: cursor.check } };
   if (cursor.kind === 'active' || cursor.kind === 'repair-pending') {
@@ -288,7 +342,11 @@ function branchRefForRange(slug: string, range: ChildRange): RefName {
   return ref(`refs/heads/${branch.branch}`);
 }
 
-async function journalRefs(git: GitRunner, slug: string, ranges: readonly ChildRange[]): Promise<{ readonly ref: RefName; readonly oldSha: CommitSha }[]> {
+async function journalRefs(
+  git: GitRunner,
+  slug: string,
+  ranges: readonly ChildRange[],
+): Promise<{ readonly ref: RefName; readonly oldSha: CommitSha }[]> {
   const refs: { ref: RefName; oldSha: CommitSha }[] = [];
   for (const range of ranges) {
     const branchRef = branchRefForRange(slug, range);
@@ -313,10 +371,15 @@ async function transitionState(
   state: 'ready' | 'synced' | 'applied' | 'aborted',
   git: GitRunner,
 ): Promise<StoredRestackJournal> {
-  if (!isLegalJournalTransition(journal.journal.state, state)) throw new Error(`illegal restack state transition to ${state}`);
+  if (!isLegalJournalTransition(journal.journal.state, state))
+    throw new Error(`illegal restack state transition to ${state}`);
   const next = { ...journal.journal, state };
   const blob = await writeRestackJournalBlob(worktree, next, { git });
-  const updated = await runGit(git, ['update-ref', '--stdin'], transaction(journalStateUpdateLines(journal, blob, state)));
+  const updated = await runGit(
+    git,
+    ['update-ref', '--stdin'],
+    transaction(journalStateUpdateLines(journal, blob, state)),
+  );
   if (updated.exitCode !== 0) throw new Error(`cannot transition restack journal to ${state}`);
   return { slug: journal.slug, blob, journal: next };
 }
@@ -332,7 +395,8 @@ export async function appliedTransactionLines(
   journal: StoredRestackJournal,
   git: GitRunner,
 ): Promise<{ readonly journal: StoredRestackJournal; readonly lines: readonly string[] }> {
-  if (!isLegalJournalTransition(journal.journal.state, 'applied')) throw new Error('illegal restack state transition to applied');
+  if (!isLegalJournalTransition(journal.journal.state, 'applied'))
+    throw new Error('illegal restack state transition to applied');
   const next = { ...journal.journal, state: 'applied' as const };
   const blob = await writeRestackJournalBlob(worktree, next, { git });
   const lines: string[] = [];
@@ -346,6 +410,12 @@ export async function appliedTransactionLines(
     if (routed === 'refused') throw new Error('cannot build routed applied transaction');
     lines.push(...routed);
   }
+  for (const route of (journal.journal.deferredRoutes ?? []).filter(
+    (entry) => entry.roundId !== journal.journal.routed?.roundId,
+  )) {
+    if (route.routeNew === undefined) throw new Error('cannot build deferred placement applied transaction');
+    lines.push(`update ${routeRecordRefFor(journal.slug, route.roundId)} ${route.routeNew} ${route.routeOld}`);
+  }
   if (journal.journal.queueTracked === true && journal.journal.queueNew !== undefined) {
     const queueRef = revalidationQueueRefFor(journal.slug);
     if (journal.journal.queueOld === undefined) lines.push(`create ${queueRef} ${journal.journal.queueNew}`);
@@ -357,8 +427,9 @@ export async function appliedTransactionLines(
       throw new Error('cannot delete flattened tip for a changed conflict record');
     }
     const refused = await git(['rev-parse', '-q', '--verify', refusedTipRefFor(journal.slug)]);
-    const refusedTip = refused.exitCode === 1 ? undefined : refused.exitCode === 0 ? parseCommitSha(refused.stdout.trim()) : undefined;
-    if (refused.exitCode !== 0 && refused.exitCode !== 1 || refused.exitCode === 0 && !refusedTip) {
+    const refusedTip =
+      refused.exitCode === 1 ? undefined : refused.exitCode === 0 ? parseCommitSha(refused.stdout.trim()) : undefined;
+    if ((refused.exitCode !== 0 && refused.exitCode !== 1) || (refused.exitCode === 0 && !refusedTip)) {
       throw new Error('cannot delete refused tip for a changed conflict record');
     }
     lines.push(...conflictDeleteLines(journal.slug, journal.journal.consumedResolution, refusedTip));
@@ -368,10 +439,12 @@ export async function appliedTransactionLines(
   }
   if (journal.journal.deliveredDecision !== undefined) {
     const decision = journal.journal.deliveredDecision;
-    lines.push(...decisionDeleteLines(journal.slug, {
-      blob: decision.blob,
-      decision: { child: decision.child },
-    }));
+    lines.push(
+      ...decisionDeleteLines(journal.slug, {
+        blob: decision.blob,
+        decision: { child: decision.child },
+      }),
+    );
     lines.push(`delete ${conflictRecordRefFor(journal.slug)} ${decision.record}`);
     lines.push(`delete ${conflictParentRefFor(journal.slug)} ${decision.parent}`);
     const conflict = await readConflictRecord(worktree, journal.slug, { git });
@@ -379,8 +452,9 @@ export async function appliedTransactionLines(
       throw new Error('cannot delete flattened tip for a changed conflict record');
     }
     const refused = await git(['rev-parse', '-q', '--verify', refusedTipRefFor(journal.slug)]);
-    const refusedTip = refused.exitCode === 1 ? undefined : refused.exitCode === 0 ? parseCommitSha(refused.stdout.trim()) : undefined;
-    if (refused.exitCode !== 0 && refused.exitCode !== 1 || refused.exitCode === 0 && !refusedTip) {
+    const refusedTip =
+      refused.exitCode === 1 ? undefined : refused.exitCode === 0 ? parseCommitSha(refused.stdout.trim()) : undefined;
+    if ((refused.exitCode !== 0 && refused.exitCode !== 1) || (refused.exitCode === 0 && !refusedTip)) {
       throw new Error('cannot delete refused tip for a changed conflict record');
     }
     if (refusedTip !== undefined) lines.push(`delete ${refusedTipRefFor(journal.slug)} ${refusedTip}`);
@@ -405,11 +479,21 @@ export async function changedRoutedAppliedRef(
 ): Promise<string | undefined> {
   const routed = journal.journal.routed;
   const expected = [
-    ...(routed === undefined ? [] : [
-      { ref: routeRecordRefFor(journal.slug, routed.roundId), old: routed.routeOld },
-      { ref: repairMarkerRefFor(journal.slug), old: routed.markerOld },
-    ]),
-    ...(journal.journal.queueTracked === true ? [{ ref: revalidationQueueRefFor(journal.slug), old: journal.journal.queueOld }] : []),
+    ...(routed === undefined
+      ? []
+      : [
+          { ref: routeRecordRefFor(journal.slug, routed.roundId), old: routed.routeOld },
+          { ref: repairMarkerRefFor(journal.slug), old: routed.markerOld },
+        ]),
+    ...(journal.journal.queueTracked === true
+      ? [{ ref: revalidationQueueRefFor(journal.slug), old: journal.journal.queueOld }]
+      : []),
+    ...(journal.journal.deferredRoutes ?? [])
+      .filter((entry) => entry.roundId !== routed?.roundId)
+      .map((route) => ({
+        ref: routeRecordRefFor(journal.slug, route.roundId),
+        old: route.routeOld,
+      })),
   ];
   for (const entry of expected) {
     const result = await runGit(git, ['rev-parse', '-q', '--verify', entry.ref]);
@@ -427,6 +511,73 @@ export class RoutedApplyPlanRefChangedError extends Error {
     super(`routed applied ref changed: ${ref}`);
     this.name = 'RoutedApplyPlanRefChangedError';
   }
+}
+
+/** Capture every route record which owns an open deferred leaf placement. */
+async function deferredRouteSnapshots(
+  worktree: string,
+  slug: string,
+  git: GitRunner,
+): Promise<readonly RestackJournalDeferredRoute[]> {
+  const inventory = await deferredPlacementInventory(worktree, slug, { git });
+  if (inventory.kind !== 'inventory') throw new Error(inventory.detail);
+  const roundIds = [...new Set([...inventory.open, ...inventory.foldable].map((placement) => placement.roundId))];
+  const routes: RestackJournalDeferredRoute[] = [];
+  for (const roundId of roundIds) {
+    const stored = await readRouteRecord(worktree, slug, roundId, { git });
+    if (stored.kind !== 'record') throw new Error(`cannot read deferred placement route ${roundId}`);
+    routes.push({ roundId, routeOld: stored.blob });
+  }
+  return routes;
+}
+
+type DeferredRouteRemap =
+  | { readonly kind: 'updated'; readonly journal: StoredRestackJournal }
+  | { readonly kind: 'boundary-lost'; readonly host: ChildId }
+  | { readonly kind: 'unavailable'; readonly detail: string };
+
+/** Journal deferred placement translations before the branch-ref move. */
+async function journalDeferredRouteRemap(
+  worktree: string,
+  journal: StoredRestackJournal,
+  git: GitRunner,
+): Promise<DeferredRouteRemap> {
+  const routes = journal.journal.deferredRoutes;
+  if (routes === undefined || routes.length === 0) return { kind: 'updated', journal };
+  const rewrites = new Map<CommitSha, CommitSha>();
+  for (const child of journal.journal.children)
+    for (const rewrite of child.rewrites ?? []) rewrites.set(rewrite.from, rewrite.to);
+  const planned: RestackJournalDeferredRoute[] = [];
+  for (const route of routes) {
+    const stored = await readRouteRecord(worktree, journal.slug, route.roundId, { git });
+    if (stored.kind !== 'record' || stored.blob !== route.routeOld)
+      return { kind: 'unavailable', detail: `deferred placement route ${route.roundId} changed before remap` };
+    const placements = { ...(stored.record.placements ?? {}) };
+    for (const [rawHost, placement] of Object.entries(placements)) {
+      if (placement.state !== 'deferred') continue;
+      const host = Number(rawHost) as ChildId;
+      const leafEntryTip = rewrites.get(placement.leafEntryTip) ?? placement.leafEntryTip;
+      if (placement.exitTip === undefined) {
+        placements[host] = { state: 'deferred', leafEntryTip };
+        continue;
+      }
+      const exitTip = rewrites.get(placement.exitTip);
+      if (exitTip === undefined) return { kind: 'boundary-lost', host };
+      placements[host] = { state: 'deferred', leafEntryTip, exitTip };
+    }
+    const written = await git(['hash-object', '-w', '--stdin'], {
+      input: JSON.stringify({ ...stored.record, placements }),
+    });
+    const routeNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+    if (routeNew === undefined)
+      return { kind: 'unavailable', detail: `cannot write deferred placement route ${route.roundId}` };
+    planned.push({ ...route, routeNew });
+  }
+  const next = { ...journal.journal, deferredRoutes: planned };
+  const blob = await writeRestackJournalBlob(worktree, next, { git });
+  const wrote = await runGit(git, ['update-ref', journalRefFor(journal.slug), blob, journal.blob]);
+  if (wrote.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot journal deferred placement remap' };
+  return { kind: 'updated', journal: { slug: journal.slug, blob, journal: next } };
 }
 
 /** Persist a routed route-record replacement before the applied transaction can use it. */
@@ -461,12 +612,17 @@ export async function journalRoutedApplyPlan(
   }
   const queueNew = await writeQueuePlan(journal, transition.queueInvalidation, git);
   if (routeNew === undefined && queueNew === undefined) return journal;
-  const planned = await recordRoutedApplyPlan(worktree, journal, {
-    routeNew,
-    queueNew,
-    invalidation: transition.queueInvalidation.map(({ child, gates }) => ({ child, gates: [...gates] })),
-    queueInvalidation: transition.queueInvalidation,
-  }, { git });
+  const planned = await recordRoutedApplyPlan(
+    worktree,
+    journal,
+    {
+      routeNew,
+      queueNew,
+      invalidation: transition.queueInvalidation.map(({ child, gates }) => ({ child, gates: [...gates] })),
+      queueInvalidation: transition.queueInvalidation,
+    },
+    { git },
+  );
   if (planned.kind !== 'updated') throw new Error('cannot record routed apply plan');
   return planned.journal;
 }
@@ -480,7 +636,12 @@ async function cleanAppliedJournal(journal: StoredRestackJournal, git: GitRunner
   if (deleted.exitCode !== 0) throw new Error('cannot remove applied restack journal');
 }
 
-async function abortJournal(worktree: string, journal: StoredRestackJournal, git: GitRunner, moves: readonly RestackMoveRef[]): Promise<void> {
+async function abortJournal(
+  worktree: string,
+  journal: StoredRestackJournal,
+  git: GitRunner,
+  moves: readonly RestackMoveRef[],
+): Promise<void> {
   if (journal.journal.state === 'moved') {
     await rollbackRestackMove(worktree, journal, moves, { git });
     return;
@@ -496,6 +657,32 @@ async function abortJournal(worktree: string, journal: StoredRestackJournal, git
       // error from a second abort attempt.
       const current = await readRestackJournal(worktree, journal.slug, { git });
       if (current.kind !== 'journal' || current.journal.state !== 'aborted') throw error;
+    }
+  }
+}
+
+interface JournaledRestackLifecycle {
+  journal?: StoredRestackJournal;
+  moves: readonly RestackMoveRef[];
+  terminal: boolean;
+}
+
+/**
+ * Keep the live journal's terminal release in one owner. Both ordinary
+ * restacks and folds stage different histories, but any non-terminal exit
+ * must leave an aborted journal (and, after a move, the old refs) behind.
+ */
+async function runJournaledRestack<T>(
+  worktree: string,
+  git: GitRunner,
+  run: (lifecycle: JournaledRestackLifecycle) => Promise<T>,
+): Promise<T> {
+  const lifecycle: JournaledRestackLifecycle = { moves: [], terminal: false };
+  try {
+    return await run(lifecycle);
+  } finally {
+    if (!lifecycle.terminal && lifecycle.journal !== undefined) {
+      await abortJournal(worktree, lifecycle.journal, git, lifecycle.moves);
     }
   }
 }
@@ -518,8 +705,14 @@ async function replayConflict(git: GitRunner, slug: string, error: unknown): Pro
   const changed = await runGit(git, ['diff', '--no-renames', '--name-only', `${commit}^`, commit]);
   if (changed.exitCode !== 0) throw new Error(`cannot determine conflicted paths for ${commit}`);
   const haltRecordPath = haltRecordPathFor(slug);
-  const paths = [...new Set(changed.stdout.split('\n').map((path) => path.trim()).filter((path) => path && path !== haltRecordPath))]
-    .sort((left, right) => left.localeCompare(right));
+  const paths = [
+    ...new Set(
+      changed.stdout
+        .split('\n')
+        .map((path) => path.trim())
+        .filter((path) => path && path !== haltRecordPath),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
   return { commit, paths };
 }
 
@@ -541,36 +734,761 @@ async function haltUnresolvedConflict(
   // Keep the journaled original tip reachable for every conflict. Ownership
   // refusals additionally retain the resolver's attempted tip in the durable
   // conflict hand-off, while no feature branch has moved.
-  if (!await pinStagingRef(worktree, slug, range.child, range.oldTip, { git })) {
+  if (!(await pinStagingRef(worktree, slug, range.child, range.oldTip, { git }))) {
     throw new Error(`cannot pin original tip for conflicted child ${range.child}`);
   }
   await abortJournal(worktree, journal, git, []);
-  await events?.emit({ type: 'restack_conflict', opId: journal.journal.opId, child: range.child, commit: conflict.commit, paths: [...conflict.paths] });
-  const refusedDetail = refusedTip === undefined ? undefined : [
-    `refused tip: ${refusedTipRefFor(slug)}`,
-    ...refusedPaths.map(({ path, cause }) => `${path} (${cause})`),
-  ].join('\n');
+  await events?.emit({
+    type: 'restack_conflict',
+    opId: journal.journal.opId,
+    child: range.child,
+    commit: conflict.commit,
+    paths: [...conflict.paths],
+  });
+  const refusedDetail =
+    refusedTip === undefined
+      ? undefined
+      : [`refused tip: ${refusedTipRefFor(slug)}`, ...refusedPaths.map(({ path, cause }) => `${path} (${cause})`)].join(
+          '\n',
+        );
   const detail = `commit ${conflict.commit}; paths: ${conflict.paths.join(', ')}${resolutionDetail === undefined ? '' : `\n${resolutionDetail}`}${refusedDetail === undefined ? '' : `\n${refusedDetail}`}`;
   if (refusedTip !== undefined) {
-    await events?.emit(emitRestackRefused({
-      reason: 'replay-mismatch', child: range.child,
-      detail: refusedPaths.map(({ path, cause }) => `${path} (${cause})`).join(', '),
-    }));
+    await events?.emit(
+      emitRestackRefused({
+        reason: 'replay-mismatch',
+        child: range.child,
+        detail: refusedPaths.map(({ path, cause }) => `${path} (${cause})`).join(', '),
+      }),
+    );
     await haltRecordedRestackConflict({
-      worktree, slug, journal, range, replayParent: newParent,
-      comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: slug,
+      worktree,
+      slug,
+      journal,
+      range,
+      replayParent: newParent,
+      comparisonCommits: journal.journal.comparisonCommits,
+      haltRecordSlug: slug,
       candidateSubjects: await replayCandidateSubjects(git, candidates),
-      commit: conflict.commit, paths: conflict.paths, detail, refusedTip, events, git, writeHalt: haltRestackConflict,
+      commit: conflict.commit,
+      paths: conflict.paths,
+      detail,
+      refusedTip,
+      events,
+      git,
+      writeHalt: haltRestackConflict,
     });
-  } else if (reason === 'replay-mismatch') await haltRestack(worktree, 'replay-mismatch', events, { child: range.child, detail });
+  } else if (reason === 'replay-mismatch')
+    await haltRestack(worktree, 'replay-mismatch', events, { child: range.child, detail });
   else {
     await haltRecordedRestackConflict({
-      worktree, slug, journal, range, replayParent: newParent,
-      comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: slug,
+      worktree,
+      slug,
+      journal,
+      range,
+      replayParent: newParent,
+      comparisonCommits: journal.journal.comparisonCommits,
+      haltRecordSlug: slug,
       candidateSubjects: await replayCandidateSubjects(git, candidates),
-      commit: conflict.commit, paths: conflict.paths, detail, events, git, writeHalt: haltRestackConflict,
+      commit: conflict.commit,
+      paths: conflict.paths,
+      detail,
+      events,
+      git,
+      writeHalt: haltRestackConflict,
     });
   }
+}
+
+function foldCommitEnvironment(author: Awaited<ReturnType<typeof authorOf>>, stamp: CommitterStamp): NodeJS.ProcessEnv {
+  return {
+    GIT_AUTHOR_NAME: author.name,
+    GIT_AUTHOR_EMAIL: author.email,
+    GIT_AUTHOR_DATE: author.date,
+    GIT_COMMITTER_NAME: stamp.name,
+    GIT_COMMITTER_EMAIL: stamp.email,
+    GIT_COMMITTER_DATE: stamp.date,
+  };
+}
+
+async function textAtRevision(
+  git: GitRunner,
+  revision: string,
+  path: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const result = await git(
+    ['show', revision === ':' ? `:${path}` : `${revision}:${path}`],
+    env === undefined ? undefined : { env },
+  );
+  return result.exitCode === 0 ? result.stdout : undefined;
+}
+
+function blockOnlyPlan(base: string, blocks: readonly FoldFrozenBlock[]): string {
+  const additions = blocks.map((block) => block.body).join('');
+  return `${base}${base.endsWith('\n') ? '\n' : '\n\n'}${additions}`;
+}
+
+async function materializeFrozenBlocks(
+  git: GitRunner,
+  source: CommitSha,
+  blocks: readonly FoldFrozenBlock[],
+  index: string,
+): Promise<void> {
+  const env = { GIT_INDEX_FILE: index };
+  const changed = await git(['diff-tree', '--no-commit-id', '--name-only', '-r', source]);
+  if (changed.exitCode !== 0) throw new Error(`cannot list frozen fold paths for ${source}: ${changed.stderr}`);
+  const paths = changed.stdout.split('\n').filter((path) => path.startsWith('.docs/plans/') && path.endsWith('.md'));
+  let materialized = false;
+  const stageFrozenText = async (path: string, text: string): Promise<void> => {
+    const blob = await git(['hash-object', '-w', '--stdin'], { input: text });
+    const blobSha = blob.exitCode === 0 ? parseCommitSha(blob.stdout.trim()) : undefined;
+    if (!blobSha) throw new Error(`cannot write frozen fold block for ${source}: ${blob.stderr}`);
+    const updated = await git(['update-index', '--add', '--cacheinfo', `100644,${blobSha},${path}`], { env });
+    if (updated.exitCode !== 0) throw new Error(`cannot stage frozen fold block for ${source}: ${updated.stderr}`);
+    materialized = true;
+  };
+  for (const path of paths) {
+    const [base, ours] = await Promise.all([
+      textAtRevision(git, `${source}^`, path),
+      textAtRevision(git, ':', path, env),
+    ]);
+    if (base === undefined || ours === undefined) continue;
+    const merged = unionRemBlocks(base, ours, blockOnlyPlan(base, blocks));
+    if (merged.kind === 'body-mismatch')
+      throw new Error(`cannot re-materialize frozen fold block ${merged.remId} for ${source}`);
+    const text =
+      merged.kind === 'declined'
+        ? blocks.every((block) => ours.includes(block.body))
+          ? ours
+          : blockOnlyPlan(ours, blocks)
+        : merged.text;
+    await stageFrozenText(path, text);
+    if (merged.kind === 'declined') {
+      // The merge-tree replay may already have retained this exact frozen
+      // block while carrying the source hunk. It is materialized in that case;
+      // do not turn the idempotent re-materialization into a false conflict.
+      // A residual patch can also leave a non-canonical plan body; append the
+      // exact frozen block rather than discarding the placement.
+      continue;
+    }
+  }
+  if (!materialized) throw new Error(`cannot re-materialize frozen fold blocks for ${source}`);
+}
+
+async function writeFoldCommit(
+  git: GitRunner,
+  parent: CommitSha,
+  source: FoldCommitPlan,
+  parts: readonly FoldPart[],
+  stamp: CommitterStamp,
+  index: string,
+): Promise<CommitSha> {
+  const env = { GIT_INDEX_FILE: index };
+  const seeded = await git(['read-tree', parent], { env });
+  if (seeded.exitCode !== 0) throw new Error(`cannot seed fold index: ${seeded.stderr}`);
+  const sourceParent = await git(['rev-parse', `${source.sha}^`]);
+  const sourceParentSha = sourceParent.exitCode === 0 ? parseCommitSha(sourceParent.stdout.trim()) : undefined;
+  if (!sourceParentSha) throw new Error(`cannot read fold source parent for ${source.sha}`);
+  let placedTip = parent;
+  const frozen = parts.filter((part): part is Extract<FoldPart, { readonly kind: 'blocks' }> => part.kind === 'blocks');
+  for (const part of parts) {
+    if (part.kind === 'whole') continue;
+    if (part.kind === 'blocks') continue;
+    // Replay with the same three-way merge-tree operation that established this
+    // placement. Direct patch application can choose a different location after
+    // an earlier insertion on the child, invalidating the planner's proof.
+    const merged = await git([
+      'merge-tree',
+      '--write-tree',
+      '--merge-base',
+      sourceParentSha,
+      placedTip,
+      part.hunk.probe,
+    ]);
+    const tree = merged.exitCode === 0 ? parseCommitSha(merged.stdout.trim()) : undefined;
+    if (!tree) throw new Error(`cannot apply fold hunk ${source.sha}:${part.path}: ${merged.stderr}`);
+    const placed = await git(['commit-tree', tree, '-p', placedTip], {
+      input: withDaemonCoAuthorTrailer('fold replay probe\n'),
+    });
+    const next = placed.exitCode === 0 ? parseCommitSha(placed.stdout.trim()) : undefined;
+    if (!next) throw new Error(`cannot write fold replay probe for ${source.sha}:${part.path}: ${placed.stderr}`);
+    placedTip = next;
+    const staged = await git(['read-tree', tree], { env });
+    if (staged.exitCode !== 0) throw new Error(`cannot stage fold hunk ${source.sha}:${part.path}: ${staged.stderr}`);
+  }
+  // A residual hunk was probed before the frozen task block was materialized.
+  // Re-materialize blocks only after every hunk has replayed that same proof.
+  for (const part of frozen) await materializeFrozenBlocks(git, source.sha, part.blocks, index);
+  const tree = await git(['write-tree'], { env });
+  const treeSha = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
+  if (!treeSha) throw new Error(`cannot write fold tree for ${source.sha}`);
+  const [author, message] = await Promise.all([authorOf(git, source.sha), messageOf(git, source.sha)]);
+  const commit = await git(['commit-tree', treeSha, '-p', parent], {
+    input: withDaemonCoAuthorTrailer(`${message.trimEnd()}\n\nFolded-from: ${source.sha}\n`),
+    env: foldCommitEnvironment(author, stamp),
+  });
+  const tip = commit.exitCode === 0 ? parseCommitSha(commit.stdout.trim()) : undefined;
+  if (!tip) throw new Error(`cannot write folded commit for ${source.sha}: ${commit.stderr}`);
+  return tip;
+}
+
+async function replayLeafWithoutFoldSources(
+  git: GitRunner,
+  range: ChildRange,
+  parent: CommitSha,
+  omitted: ReadonlySet<CommitSha>,
+  stamp: CommitterStamp,
+): Promise<{ readonly tip: CommitSha; readonly rewrites: ReadonlyMap<CommitSha, CommitSha> }> {
+  const listed = await git(['rev-list', '--first-parent', '--reverse', `${range.oldParent}..${range.oldTip}`]);
+  if (listed.exitCode !== 0) throw new Error(`cannot enumerate leaf fold range: ${listed.stderr}`);
+  let tip = parent;
+  const rewrites = new Map<CommitSha, CommitSha>();
+  for (const raw of listed.stdout.split('\n').filter(Boolean)) {
+    const commit = parseCommitSha(raw);
+    if (!commit) throw new Error('cannot parse leaf fold commit');
+    if (omitted.has(commit)) continue;
+    const merged = await git(['merge-tree', '--write-tree', '--merge-base', `${commit}^1`, tip, commit]);
+    const tree = merged.exitCode === 0 ? parseCommitSha(merged.stdout.trim().split('\n', 1)[0] ?? '') : undefined;
+    // Keep the fold replay on the same conflict seam as ordinary stacked
+    // replay.  The executor parses this stable prefix and hands it to the
+    // bounded resolver instead of treating merge-tree plumbing as unavailable.
+    if (!tree) throw new Error(`merge-tree failed for ${commit}: folding leaf commit`);
+    const [author, message] = await Promise.all([authorOf(git, commit), messageOf(git, commit)]);
+    const written = await git(['commit-tree', tree, '-p', tip], {
+      input: withDaemonCoAuthorTrailer(message),
+      env: foldCommitEnvironment(author, stamp),
+    });
+    const next = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+    if (!next) throw new Error(`cannot replay leaf commit ${commit}: ${written.stderr}`);
+    rewrites.set(commit, next);
+    tip = next;
+  }
+  return { tip, rewrites };
+}
+
+/** Read fold candidates at the routing boundary so the fold planner remains routing-free. */
+async function deferredFoldRanges(
+  worktree: string,
+  slug: string,
+  git: GitRunner,
+): Promise<
+  | { readonly kind: 'ranges'; readonly ranges: readonly FoldRange[] }
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'missing-closure'; readonly host: ChildId }
+> {
+  const inventory = await deferredPlacementInventory(worktree, slug, { git });
+  if (inventory.kind !== 'inventory') return { kind: 'unavailable' };
+  const ranges: FoldRange[] = [];
+  for (const placement of inventory.foldable) {
+    const closure = await git(['rev-parse', '-q', '--verify', closureRefFor(slug, placement.host)]);
+    if (closure.exitCode !== 0)
+      return closure.exitCode === 1 ? { kind: 'missing-closure', host: placement.host } : { kind: 'unavailable' };
+    ranges.push({
+      host: placement.host,
+      roundId: placement.roundId,
+      findingIds: placement.findingIds,
+      leafEntryTip: placement.leafEntryTip,
+      exitTip: placement.exitTip,
+    });
+  }
+  return { kind: 'ranges', ranges };
+}
+
+async function foldFrozenBlocks(
+  worktree: string,
+  slug: string,
+  source: FoldSourceCommit,
+  git: GitRunner,
+): Promise<readonly FoldFrozenBlock[] | undefined> {
+  const stored = await readRouteRecord(worktree, slug, source.roundId, { git });
+  if (stored.kind !== 'record') return undefined;
+  const allocation = stored.record.allocation[source.owner];
+  if (allocation === undefined || allocation.remTaskIds.length === 0) return undefined;
+  return allocation.blockBodies.map((body, index) => ({ id: allocation.remTaskIds[index]!, body }));
+}
+
+/**
+ * Fold deferred leaf ranges back onto their owners.  The normal restacker is
+ * intentionally range-centric; folding adds a source-to-placement plan first,
+ * then rebuilds the stack once so the leaf tree is unchanged while the source
+ * commits disappear from its history.
+ */
+async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promise<RunRestackResult> {
+  const ranges = await deferredFoldRanges(options.worktree, options.slug, git);
+  if (ranges.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot collect deferred fold ranges' };
+  if (ranges.kind === 'missing-closure') {
+    await haltRestack(options.worktree, 'fold-owner-invalid', options.events, {
+      child: ranges.host,
+      detail: `deferred fold host ${ranges.host} closure is missing`,
+    });
+    return haltedResult(options.worktree);
+  }
+  const collected = await collectFoldSet({ ranges: ranges.ranges, slug: options.slug, git });
+  if (collected.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot collect deferred fold ranges' };
+  if (collected.kind === 'refused') {
+    await haltRestack(options.worktree, 'fold-owner-invalid', options.events, {
+      child: collected.host,
+      detail: `fold owner invalid for ${collected.commit}`,
+    });
+    return haltedResult(options.worktree);
+  }
+  if (collected.commits.length === 0) return { kind: 'applied', opId: randomUUID() as RestackOpId };
+  const folded = await placeFoldCommits({
+    worktree: options.worktree,
+    slug: options.slug,
+    commits: collected.commits,
+    ranges: ranges.ranges,
+    git,
+    frozenBlocksFor: (source) => foldFrozenBlocks(options.worktree, options.slug, source, git),
+  });
+  if (folded.kind === 'refused') {
+    const detail =
+      folded.reason === 'fold-misrouted'
+        ? `fold-misrouted host c${folded.host}; findings ${folded.findingIds.join(', ') || '(none)'}; accepting children ${folded.acceptingChildren.map((child) => `c${child}`).join(', ') || '(none)'}`
+        : `${folded.reason}: ${folded.commit}; ${folded.paths.join(', ')}`;
+    await haltRestack(options.worktree, 'fold-misrouted', options.events, {
+      ...(folded.reason === 'fold-misrouted' ? { child: folded.host } : {}),
+      detail,
+    });
+    return haltedResult(options.worktree);
+  }
+  // Placement validity is per recorded host range, not per source commit.
+  // `placeFoldCommits` has already proved every host retains a material part
+  // on its owner; an individual source may legitimately land above that host.
+  const foldTargets = [
+    ...new Set(
+      folded.commits.flatMap((source) => source.parts.flatMap((part) => (part.child === 'leaf' ? [] : [part.child]))),
+    ),
+  ].sort((left, right) => Number(left) - Number(right));
+  const allowance = await resolveCascadeAllowanceForWorktree(options.worktree);
+  const cap = await checkCascadeCap(options.worktree, options.slug, foldTargets, allowance.limit, { git });
+  if (cap.kind === 'exhausted') {
+    const entry = await recordKickbackCapEvidence(
+      options.worktree,
+      'restack',
+      {
+        consumed: cap.count,
+        limit: cap.limit,
+        latestReason: `fold cascade cap for target child ${cap.child}`,
+        allowance: 'restacks',
+      },
+      cap.child,
+    );
+    const rendered = renderKickbackBudgetView(entry, 'restack', cap.limit, undefined, undefined, cap.child);
+    const capDetail =
+      cap.detail ??
+      `fold target child ${cap.child} reached ${cap.count}/${cap.limit} cascades — ${formatCascadeAllowance(allowance)}` +
+        `${cap.raised ? `; raised to ${cap.limit}` : ''}`;
+    await haltRestack(options.worktree, 'cascade-cap', options.events, {
+      child: cap.child,
+      detail: `${capDetail}\n${rendered}\nKickback halt generation: ${entry.capEvidence!.haltGeneration}`,
+    });
+    return haltedResult(options.worktree);
+  }
+
+  const active = await activeFor(options.worktree, options.slug, git);
+  if ('divergent' in active)
+    return { kind: 'unavailable', detail: `cannot fold divergent child ${active.divergent.child}` };
+  // A fold is a feature-repair operation, not a base refresh.  Its stack must
+  // remain rooted at child 1's recorded parent even when origin/HEAD advanced
+  // after the audit round started.
+  const childOne = childBranchFor(options.slug, 1);
+  if (!childOne.ok) return { kind: 'unavailable', detail: childOne.reason };
+  const childOneParent = await requiredSha(git, `refs/heads/${childOne.branch}^1`, 'child 1 existing parent for fold');
+  const base = childOneParent;
+  const planned = await planRestackRanges(
+    options.worktree,
+    { slug: options.slug, oldDefaultTip: base, cause: 'base-refresh', active },
+    { git },
+  );
+  if (planned.kind !== 'planned')
+    return planned.kind === 'repair-pending'
+      ? { kind: 'repair-pending', child: planned.child }
+      : {
+          kind: 'unavailable',
+          detail: planned.kind === 'unavailable' ? planned.detail : `cannot fold ${planned.kind}`,
+        };
+  const leafRange = planned.ranges.find((range) => range.kind === 'leaf-active');
+  if (!leafRange) return { kind: 'unavailable', detail: 'fold requires the leaf to be the active stack branch' };
+
+  const draft: RestackJournalDraft = {
+    opId: randomUUID() as RestackOpId,
+    cause: 'fold',
+    committer: await committerStamp(git),
+    ...((await queueTrackingAtCreation(options.worktree, options.slug, git)) ?? {}),
+    foldPlan: folded.commits,
+    dirtyPaths: [],
+    refs: await journalRefs(git, options.slug, planned.ranges),
+    ranges: planned.ranges,
+    children: planned.ranges.map((range) => ({ child: range.child, status: 'pending' as const, rewrites: [] })),
+  };
+  const created = await createRestackJournal(options.worktree, options.slug, draft, options.events, { git });
+  if (created.kind === 'refused') return { kind: 'refused', reason: created.reason };
+  if (created.kind === 'unavailable') return { kind: 'unavailable', detail: created.detail };
+  return runJournaledRestack(options.worktree, git, async (lifecycle) => {
+    let journal = created.journal;
+    let moves: RestackMoveRef[] = [];
+    let terminal = false;
+    try {
+      const foldRounds = [...new Set(folded.commits.map((source) => source.roundId))];
+      await options.events?.emit({
+        type: 'restack_planned',
+        opId: draft.opId,
+        cause: 'fold',
+        children: planned.ranges.map((range) => range.child),
+        ...(foldRounds.length === 1 ? { roundId: foldRounds[0]! } : {}),
+      });
+      await options.events?.emit({
+        type: 'fold_planned',
+        opId: draft.opId,
+        commits: folded.commits.map((source) => ({
+          sha: source.sha,
+          roundId: source.roundId,
+          owner: source.owner,
+          placements: source.parts.flatMap((part) =>
+            part.child === 'leaf'
+              ? []
+              : [
+                  {
+                    child: part.child,
+                    paths: part.kind === 'hunks' ? [part.path] : [],
+                    reason: part.reason,
+                  },
+                ],
+          ),
+        })),
+      });
+
+      const byChild = new Map<ChildId, Array<{ source: FoldCommitPlan; parts: FoldPart[] }>>();
+      for (const source of folded.commits)
+        for (const part of source.parts) {
+          if (part.child === 'leaf') continue;
+          const entries = byChild.get(part.child) ?? [];
+          const last = entries.at(-1);
+          if (last?.source.sha === source.sha) last.parts.push(part);
+          else entries.push({ source, parts: [part] });
+          byChild.set(part.child, entries);
+        }
+      const directory = await mkdtemp(join(tmpdir(), 'restack-fold-index-'));
+      const omitted = new Set(folded.commits.map((commit) => commit.sha));
+      const staged = new Map<ChildId, CommitSha>();
+      try {
+        let parent = base;
+        for (const range of planned.ranges) {
+          let replay;
+          try {
+            if (range.kind === 'leaf-active')
+              replay = await replayLeafWithoutFoldSources(git, range, parent, omitted, draft.committer);
+            else replay = await replayChildRange(range, parent, draft.committer, git, { haltRecordSlug: options.slug });
+          } catch (error) {
+            const conflict = await replayConflict(git, options.slug, error);
+            if (!conflict) throw error;
+            const resolution = await resolveRestackConflict({
+              worktree: options.worktree,
+              range,
+              newParent: parent,
+              stamp: draft.committer,
+              haltRecordSlug: options.slug,
+              omittedCommits: [...omitted],
+              resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
+              cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
+              restack: {
+                opId: draft.opId,
+                cause: 'fold',
+                ...(folded.commits.length === 0 ? {} : { roundId: folded.commits[0]!.roundId }),
+              },
+              git,
+            });
+            if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
+              await haltUnresolvedConflict(
+                options.worktree,
+                options.slug,
+                journal,
+                range,
+                conflict,
+                options.events,
+                git,
+                parent,
+                'conflict',
+                'reason' in resolution.outcome ? resolution.outcome.reason : undefined,
+                resolution.candidates,
+              );
+              terminal = true;
+              return haltedResult(options.worktree);
+            }
+            replay = { tip: resolution.tip, rewrites: resolution.rewrites };
+          }
+          let tip = replay.tip;
+          try {
+            for (const entry of byChild.get(range.child) ?? []) {
+              tip = await writeFoldCommit(
+                git,
+                tip,
+                entry.source,
+                entry.parts,
+                draft.committer,
+                join(directory, `c${range.child}-${entry.source.sha}.index`),
+              );
+            }
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            if (detail.startsWith('cannot apply fold hunk') || detail.includes('frozen fold')) {
+              await abortJournal(options.worktree, journal, git, []);
+              await haltRestackConflict(
+                options.worktree,
+                range.child,
+                `unresolved-restack-conflict ${detail}`,
+                options.events,
+              );
+              return haltedResult(options.worktree);
+            }
+            throw error;
+          }
+          const rewrites = new Map(replay.rewrites);
+          const updated = await updateRestackChildStatus(
+            options.worktree,
+            options.slug,
+            journal,
+            range.child,
+            'replayed',
+            tip,
+            rewrites,
+            { git },
+          );
+          if (updated.kind !== 'updated')
+            return { kind: 'unavailable', detail: `cannot stage fold child ${range.child}: ${updated.kind}` };
+          journal = updated.journal;
+          staged.set(range.child, tip);
+          parent = tip;
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+      const leafTip = staged.get(leafRange.child);
+      const oldTree = await git(['rev-parse', `${leafRange.oldTip}^{tree}`]);
+      const newTree = leafTip === undefined ? undefined : await git(['rev-parse', `${leafTip}^{tree}`]);
+      if (oldTree.exitCode !== 0 || newTree?.exitCode !== 0 || oldTree.stdout.trim() !== newTree.stdout.trim()) {
+        const changed =
+          leafTip === undefined ? undefined : await git(['diff', '--name-only', leafRange.oldTip, leafTip]);
+        const paths = changed?.exitCode === 0 ? changed.stdout.split('\n').filter(Boolean) : [];
+        const touchedBy = new Set<CommitSha>();
+        for (const source of folded.commits) {
+          const sourceChanged = await git(['diff-tree', '--no-commit-id', '--name-only', '-r', source.sha]);
+          const sourcePaths = sourceChanged.exitCode === 0 ? sourceChanged.stdout.split('\n').filter(Boolean) : [];
+          if (sourcePaths.some((path) => paths.includes(path))) touchedBy.add(source.sha);
+        }
+        await haltRestack(options.worktree, 'fold-tree-mismatch', options.events, {
+          detail: `leaf tree changed at ${paths.join(', ') || '(unknown path)'}; folded source ${[...touchedBy].join(', ') || folded.commits.map((commit) => commit.sha).join(', ')}`,
+        });
+        return haltedResult(options.worktree);
+      }
+      journal = await transitionState(options.worktree, journal, 'ready', git);
+      moves = planned.ranges.flatMap((range) => {
+        const branch = branchRefForRange(options.slug, range);
+        const old = journal.journal.refs.find((entry) => entry.ref === branch)?.oldSha;
+        const next = staged.get(range.child);
+        if (!old || !next) throw new Error(`missing fold move for child ${range.child}`);
+        const closure = ref(`refs/conductor/${options.slug}/closed/c${range.child}`);
+        const closureOld =
+          range.kind === 'closed' ? journal.journal.refs.find((entry) => entry.ref === closure)?.oldSha : undefined;
+        return [
+          { ref: branch, oldSha: old, newSha: next, child: range.child },
+          ...(range.kind === 'closed' && closureOld
+            ? [{ ref: closure, oldSha: closureOld, newSha: next, child: range.child }]
+            : []),
+        ];
+      });
+      const checkedOut = await checkedOutRef(git);
+      const preMove = await checkRestackPreMove(options.worktree, moves, checkedOut, { git });
+      if (preMove.kind === 'refused') {
+        await haltRestack(options.worktree, preMove.reason, options.events, { detail: preMove.detail });
+        return haltedResult(options.worktree);
+      }
+      if (preMove.kind === 'seal-refused') {
+        await writeSealHalt(options.worktree, preMove.detail, options.events);
+        return haltedResult(options.worktree);
+      }
+      if (preMove.kind === 'unavailable') throw new Error(preMove.detail);
+      // Prepare every route replacement while its old blob is still the CAS value
+      // carried into the fold's applied transaction.  These writes are authority
+      // state and must not be left for a second transaction after journal cleanup.
+      const foldedHosts = new Map<import('../routing/route-types.js').RoundId, Set<ChildId>>();
+      for (const source of folded.commits) {
+        const hosts = foldedHosts.get(source.roundId) ?? new Set<ChildId>();
+        hosts.add(source.owner);
+        foldedHosts.set(source.roundId, hosts);
+      }
+      const leafHead = staged.get(leafRange.child)!;
+      const foldRoutes: Array<{
+        readonly roundId: import('../routing/route-types.js').RoundId;
+        readonly old: CommitSha;
+        readonly next: CommitSha;
+      }> = [];
+      for (const [roundId, hosts] of foldedHosts) {
+        const stored = await readRouteRecord(options.worktree, options.slug, roundId, { git });
+        if (stored.kind !== 'record') return { kind: 'unavailable', detail: `cannot prepare fold route ${roundId}` };
+        const placements = { ...(stored.record.placements ?? {}) };
+        for (const host of hosts) {
+          const placement = placements[host];
+          if (placement?.state === 'deferred' && placement.exitTip !== undefined)
+            placements[host] = { state: 'placed', leafEntryTip: placement.leafEntryTip, exitTip: placement.exitTip };
+        }
+        const written = await git(['hash-object', '-w', '--stdin'], {
+          input: JSON.stringify({
+            ...stored.record,
+            placements,
+            leafReturn: { branch: leafBranchFor(options.slug), head: leafHead },
+          }),
+        });
+        const next = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+        if (!next) return { kind: 'unavailable', detail: `cannot prepare fold route ${roundId}` };
+        foldRoutes.push({ roundId, old: stored.blob, next });
+      }
+      const moved = await applyRestackMove(options.worktree, journal, moves, { git, events: options.events });
+      if (moved.kind !== 'moved')
+        return { kind: 'unavailable', detail: moved.kind === 'unavailable' ? moved.detail : moved.detail };
+      journal = moved.journal;
+      const verified = await verifyRestackMove(options.worktree, journal, moves, { git });
+      if (verified.kind === 'failed') {
+        const rolledBack = await rollbackRestackMove(options.worktree, journal, moves, { git });
+        if (rolledBack.kind !== 'aborted') throw new Error(rolledBack.detail);
+        await haltRestack(options.worktree, 'verification-failed', options.events, { detail: verified.detail });
+        terminal = true;
+        return haltedResult(options.worktree);
+      }
+      if (verified.kind === 'unavailable') throw new Error(verified.detail);
+      const checked = moves.find((move) => move.ref === checkedOut);
+      if (!checked) return { kind: 'unavailable', detail: 'checked-out leaf was not moved by fold' };
+      await syncRestackedWorktree(options.worktree, checked.oldSha, checked.newSha, { git });
+      journal = await transitionState(options.worktree, journal, 'synced', git);
+      // The fold's branch moves are already verified.  Its route placement state
+      // and terminal journal transition now commit together, guarded by the route
+      // blobs observed before any ref moved.
+      // Every non-leaf range rebuilt by a fold must be revalidated before the
+      // stack can publish.  Record the generation in the journal before the
+      // applied transaction so crash recovery has one durable authority for the
+      // queue CAS as well as the route replacements.
+      if (journal.journal.queueTracked === true) {
+        const queueBefore = await queueRecordAtJournalStart(journal, git);
+        const entries: RevalidationQueueEntry[] = [];
+        for (const [index, range] of planned.ranges.entries()) {
+          if (range.kind === 'leaf-active' || range.kind === 'leaf-unentered') continue;
+          const move = moves.find(
+            (candidate) => candidate.child === range.child && candidate.ref.startsWith('refs/heads/'),
+          );
+          if (move === undefined) continue;
+          const [oldTree, newTree] = await Promise.all([
+            git(['rev-parse', `${move.oldSha}^{tree}`]),
+            git(['rev-parse', `${move.newSha}^{tree}`]),
+          ]);
+          if (oldTree.exitCode !== 0 || newTree.exitCode !== 0)
+            return { kind: 'unavailable', detail: `cannot compare fold child ${range.child} trees` };
+          if (oldTree.stdout.trim() === newTree.stdout.trim()) continue;
+          const prior = planned.ranges[index - 1];
+          entries.push({
+            child: range.child,
+            position: range.child,
+            closureSha: move.newSha,
+            gates: [...CHILD_REGION_STEPS],
+            replay: {
+              oldParent: range.oldParent,
+              newParent: prior === undefined ? base : (staged.get(prior.child) ?? base),
+            },
+            state: 'queued',
+          });
+        }
+        const leafTree = await requiredSha(git, `${leafHead}^{tree}`, 'fold leaf tree');
+        const nextQueue = mergeQueueGeneration(queueBefore, entries, {
+          fold: {
+            opId: journal.journal.opId,
+            sources: Object.fromEntries(
+              [...new Set(folded.commits.map((source) => source.owner))].map((owner) => [
+                String(owner),
+                folded.commits.filter((source) => source.owner === owner).map((source) => source.sha),
+              ]),
+            ),
+            leafTree,
+          },
+        });
+        const queueBlob = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(nextQueue));
+        const queueNew = queueBlob.exitCode === 0 ? parseCommitSha(queueBlob.stdout.trim()) : undefined;
+        if (queueNew === undefined) return { kind: 'unavailable', detail: 'cannot write fold revalidation queue' };
+        const recorded = await recordRoutedApplyPlan(
+          options.worktree,
+          journal,
+          {
+            queueNew,
+            invalidation: entries.map(({ child, gates }) => ({ child, gates })),
+            queueInvalidation: entries,
+          },
+          { git },
+        );
+        if (recorded.kind !== 'updated')
+          return { kind: 'unavailable', detail: 'cannot journal fold revalidation queue' };
+        journal = recorded.journal;
+      }
+      const applied = { ...journal.journal, state: 'applied' as const };
+      const appliedBlob = await writeRestackJournalBlob(options.worktree, applied, { git });
+      const cascade = await cascadeUpdateLines(options.worktree, options.slug, foldTargets, { git });
+      if (cascade.kind !== 'lines') return { kind: 'unavailable', detail: cascade.detail };
+      const appliedLines = [
+        ...foldRoutes.map(
+          (route) => `update ${routeRecordRefFor(options.slug, route.roundId)} ${route.next} ${route.old}`,
+        ),
+        ...cascade.lines,
+        ...(journal.journal.queueTracked !== true || journal.journal.queueNew === undefined
+          ? []
+          : journal.journal.queueOld === undefined
+            ? [`create ${revalidationQueueRefFor(options.slug)} ${journal.journal.queueNew}`]
+            : [
+                `update ${revalidationQueueRefFor(options.slug)} ${journal.journal.queueNew} ${journal.journal.queueOld}`,
+              ]),
+        ...journalStateUpdateLines(journal, appliedBlob, 'applied'),
+      ];
+      const appliedWrite = await writeRoutingTransaction(
+        options.worktree,
+        options.slug,
+        [
+          {
+            kind: 'restack-applied',
+            ownerOpId: journal.journal.opId,
+            lines: appliedLines,
+          },
+        ],
+        { git },
+      );
+      if (appliedWrite.kind !== 'updated') {
+        await haltRestack(options.worktree, 'stack-ref-changed', options.events, {
+          detail: 'fold route record changed during applied transaction',
+        });
+        return haltedResult(options.worktree);
+      }
+      journal = { slug: journal.slug, blob: appliedBlob, journal: applied };
+      await cleanAppliedJournal(journal, git);
+      for (const range of planned.ranges) {
+        const move = moves.find((entry) => entry.child === range.child && entry.ref.startsWith('refs/heads/'))!;
+        await options.events?.emit({
+          type: 'restack_applied',
+          opId: draft.opId,
+          cause: 'fold',
+          child: range.child,
+          oldTip: range.oldTip,
+          newTip: move.newSha,
+          wouldInvalidate: [],
+          parentOverlapPaths: [],
+          adaptedPaths: [],
+        });
+      }
+      terminal = true;
+      return { kind: 'applied', opId: draft.opId };
+    } catch (error) {
+      return { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
+    } finally {
+      lifecycle.journal = journal;
+      lifecycle.moves = moves;
+      lifecycle.terminal = terminal;
+    }
+  });
 }
 
 /**
@@ -580,6 +1498,15 @@ async function haltUnresolvedConflict(
  */
 export async function runRestack(options: RunRestackOptions): Promise<RunRestackResult> {
   const git = options.git ?? makeGitRunner(options.worktree);
+  if (options.cause === 'fold') return runFoldRestack(options, git);
+  return runJournaledRestack(options.worktree, git, async (lifecycle) => runOrdinaryRestack(options, git, lifecycle));
+}
+
+async function runOrdinaryRestack(
+  options: RunRestackOptions,
+  git: GitRunner,
+  lifecycle: JournaledRestackLifecycle,
+): Promise<RunRestackResult> {
   let journal: StoredRestackJournal | undefined;
   let moves: RestackMoveRef[] = [];
   let terminal = false;
@@ -602,7 +1529,8 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     // any matching authorization.  Do one narrow, terminal-only recheck here
     // so a cleared halt cannot make the next restack look outstanding.
     const staleCleanup = await cleanClearedAbortedRestackJournal(options.worktree, options.slug, { git });
-    if (staleCleanup === 'unavailable') return { kind: 'unavailable', detail: 'cannot remove cleared aborted restack journal' };
+    if (staleCleanup === 'unavailable')
+      return { kind: 'unavailable', detail: 'cannot remove cleared aborted restack journal' };
     const active = await activeFor(options.worktree, options.slug, git);
     if ('divergent' in active) {
       await haltRestack(options.worktree, active.divergent.check, options.events, { child: active.divergent.child });
@@ -613,15 +1541,24 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     // planning instead of borrowing the active child's closure, which is an
     // intermediate stack tip rather than the whole feature's base.
     const planningDefault = await defaultTip(git, options.cause === 'base-refresh' ? options.newDefault : undefined);
-    const plan = await planRestackRanges(options.worktree, {
-      slug: options.slug,
-      oldDefaultTip: planningDefault,
-      cause: options.cause,
-      active,
-      ...(active.isLeaf ? {} : {
-        unenteredLeaf: { child: active.unenteredLeaf, branchRef: ref(`refs/heads/${leafBranchFor(options.slug)}`) },
-      }),
-    }, { git });
+    const plan = await planRestackRanges(
+      options.worktree,
+      {
+        slug: options.slug,
+        oldDefaultTip: planningDefault,
+        cause: options.cause,
+        active,
+        ...(active.isLeaf
+          ? {}
+          : {
+              unenteredLeaf: {
+                child: active.unenteredLeaf,
+                branchRef: ref(`refs/heads/${leafBranchFor(options.slug)}`),
+              },
+            }),
+      },
+      { git },
+    );
     if (plan.kind === 'refused') {
       await haltRestack(options.worktree, plan.reason, options.events, { child: plan.child });
       terminal = true;
@@ -633,9 +1570,10 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     }
     if (plan.kind === 'unavailable') throw new Error(plan.detail);
 
-    const originating = options.originatingChildren === undefined
-      ? plan.originating
-      : [...new Set(options.originatingChildren)].sort((left, right) => left - right);
+    const originating =
+      options.originatingChildren === undefined
+        ? plan.originating
+        : [...new Set(options.originatingChildren)].sort((left, right) => left - right);
     if (options.routed !== undefined && !originating.includes(options.routed.host)) {
       await haltRestack(options.worktree, 'range-not-ancestor', options.events, {
         child: options.routed.host,
@@ -649,19 +1587,26 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       const allowance = await resolveCascadeAllowanceForWorktree(options.worktree);
       const cap = await checkCascadeCap(options.worktree, options.slug, originating, allowance.limit, { git });
       if (cap.kind === 'exhausted') {
-        const entry = await recordKickbackCapEvidence(options.worktree, 'restack', {
-          consumed: cap.count,
-          limit: cap.limit,
-          latestReason: `restack cascade cap for originating child ${cap.child}`,
-          allowance: 'restacks',
-        }, active.child);
+        const entry = await recordKickbackCapEvidence(
+          options.worktree,
+          'restack',
+          {
+            consumed: cap.count,
+            limit: cap.limit,
+            latestReason: `restack cascade cap for originating child ${cap.child}`,
+            allowance: 'restacks',
+          },
+          active.child,
+        );
         const rendered = renderKickbackBudgetView(entry, 'restack', cap.limit, undefined, undefined, active.child);
-        const capDetail = cap.detail ??
+        const capDetail =
+          cap.detail ??
           `originating child ${cap.child} reached ${cap.count}/${cap.limit} cascades — ${formatCascadeAllowance(allowance)}` +
-          `${cap.raised ? `; raised to ${cap.limit}` : ''}`;
+            `${cap.raised ? `; raised to ${cap.limit}` : ''}`;
         await haltRestack(options.worktree, 'cascade-cap', options.events, {
           child: cap.child,
-          detail: capDetail +
+          detail:
+            capDetail +
             `${options.routed === undefined ? '' : '\nRunbook: Routed repair halted on the cascade cap'}` +
             `\n${rendered}\nKickback halt generation: ${entry.capEvidence!.haltGeneration}`,
         });
@@ -673,11 +1618,11 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     // A repair keeps the stack on the default it already sits on: child 1's
     // old parent. The resolved default tip may be a freshly fetched
     // origin/main, which only a later base refresh may carry into the stack.
-    const stackDefault = options.cause === 'feature-repair' && plan.ranges[0] !== undefined
-      ? plan.ranges[0].oldParent
-      : planningDefault;
+    const stackDefault =
+      options.cause === 'feature-repair' && plan.ranges[0] !== undefined ? plan.ranges[0].oldParent : planningDefault;
     const comparison = await comparisonCommits(git, options.cause, plan.ranges, planningDefault);
     const queueTracking = await queueTrackingAtCreation(options.worktree, options.slug, git);
+    const deferredRoutes = await deferredRouteSnapshots(options.worktree, options.slug, git);
     const draft: RestackJournalDraft = {
       opId: randomUUID() as RestackOpId,
       cause: options.cause,
@@ -687,15 +1632,23 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       comparisonCommits: comparison,
       ...(options.cause === 'feature-repair' ? { originatingChildren: originating } : {}),
       ...(options.routed === undefined ? {} : { routed: options.routed }),
+      ...(deferredRoutes.length === 0 ? {} : { deferredRoutes }),
       ...(queueTracking === undefined ? {} : queueTracking),
       dirtyPaths: [],
       refs: await journalRefs(git, options.slug, plan.ranges),
       ranges: plan.ranges,
       children: plan.ranges.map((range) => ({ child: range.child, status: 'pending' as const, rewrites: [] })),
     };
-    const created = options.replacesAppliedJournal === undefined
-      ? await createRestackJournal(options.worktree, options.slug, draft, options.events, { git })
-      : await replaceAppliedJournalWithFollowOn(options.worktree, options.slug, options.replacesAppliedJournal, draft, { git });
+    const created =
+      options.replacesAppliedJournal === undefined
+        ? await createRestackJournal(options.worktree, options.slug, draft, options.events, { git })
+        : await replaceAppliedJournalWithFollowOn(
+            options.worktree,
+            options.slug,
+            options.replacesAppliedJournal,
+            draft,
+            { git },
+          );
     if (created.kind === 'refused') {
       terminal = true;
       // The journal belongs to another operation, which remains its sole
@@ -710,7 +1663,13 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     }
     if (created.kind === 'unavailable') throw new Error(created.detail);
     journal = created.journal;
-    await options.events?.emit({ type: 'restack_planned', opId: draft.opId, cause: draft.cause, children: plan.ranges.map((range) => range.child) });
+    await options.events?.emit({
+      type: 'restack_planned',
+      opId: draft.opId,
+      cause: draft.cause,
+      children: plan.ranges.map((range) => range.child),
+      ...(options.routed === undefined ? {} : { roundId: options.routed.roundId }),
+    });
 
     const newStackCommits = comparison;
     const mergeAudit = { flattenedMerges: [] as string[], ancestryOnlyMerges: [] as string[], sideLineageCount: 0 };
@@ -724,36 +1683,54 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const consumedTipCorrespondences = new Map<ChildId, ConsumedTipCorrespondence>();
     const unenteredLeafOwners = new Map<ChildId, ChildId>();
     let parent = planningDefault;
-    const lastOriginIndex = options.cause === 'feature-repair'
-      ? Math.max(-1, ...plan.ranges.map((range, index) => originating.includes(range.child) ? index : -1))
-      : -1;
+    const lastOriginIndex =
+      options.cause === 'feature-repair'
+        ? Math.max(-1, ...plan.ranges.map((range, index) => (originating.includes(range.child) ? index : -1)))
+        : -1;
     for (const [rangeIndex, range] of plan.ranges.entries()) {
       replayParents.set(range.child, parent);
       if (range.kind === 'leaf-unentered') {
-        const resolution = await resolveUnenteredLeafOwner(
-          git, range.oldTip, exactRewrites, [...consumedTipCorrespondences.values()],
-        );
+        const resolution = await resolveUnenteredLeafOwner(git, range.oldTip, exactRewrites, [
+          ...consumedTipCorrespondences.values(),
+        ]);
         const resolvedMatches = resolution.matches;
         // A repair adopts every child through the highest origin unchanged
         // (originating or not), so a pre-region leaf contained by one of those
         // ranges has no rewritten counterpart. Its durable identity is its
         // original tip, not the adopted child's tip.
-        const identityMatches = resolvedMatches.length === 0 && options.cause === 'feature-repair'
-          ? (await Promise.all(plan.ranges.slice(0, rangeIndex).map(async (candidate, candidateIndex) => {
-            if (candidateIndex > lastOriginIndex || candidate.kind === 'leaf-unentered') return undefined;
-            return await leafIsInsideRange(git, range.oldTip, candidate)
-              ? { child: candidate.child, rewritten: range.oldTip }
-              : undefined;
-          }))).filter((match): match is { child: ChildId; rewritten: CommitSha } => match !== undefined)
-          : [];
+        const identityMatches =
+          resolvedMatches.length === 0 && options.cause === 'feature-repair'
+            ? (
+                await Promise.all(
+                  plan.ranges.slice(0, rangeIndex).map(async (candidate, candidateIndex) => {
+                    if (candidateIndex > lastOriginIndex || candidate.kind === 'leaf-unentered') return undefined;
+                    return (await leafIsInsideRange(git, range.oldTip, candidate))
+                      ? { child: candidate.child, rewritten: range.oldTip }
+                      : undefined;
+                  }),
+                )
+              ).filter((match): match is { child: ChildId; rewritten: CommitSha } => match !== undefined)
+            : [];
         const matches = resolvedMatches.length === 0 ? identityMatches : resolvedMatches;
         if (matches.length !== 1) {
           throw new Error(`cannot resolve unentered leaf ${range.child} from its owning child rewrite map`);
         }
         const { child: owner, rewritten } = matches[0]!;
         const rewrites = new Map([[range.oldTip, rewritten]]);
-        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', rewritten, rewrites, { git });
-        if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while moving unentered leaf' : updated.detail);
+        const updated = await updateRestackChildStatus(
+          options.worktree,
+          options.slug,
+          journal,
+          range.child,
+          'replayed',
+          rewritten,
+          rewrites,
+          { git },
+        );
+        if (updated.kind !== 'updated')
+          throw new Error(
+            updated.kind === 'stale' ? 'restack journal changed while moving unentered leaf' : updated.detail,
+          );
         journal = updated.journal;
         // A leaf's move is still journaled, but a correspondence recovered
         // from a consumed duplicate-subject resolution must remain local to
@@ -771,13 +1748,24 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       // lower child whose branch no longer descends from its (adopted)
       // parent, such as a second originating child above an appended one, is
       // replayed onto that parent so one repair carries both appends.
-      const adoptable = options.cause === 'feature-repair' && rangeIndex <= lastOriginIndex
-        ? await requiredSha(git, branchRefForRange(options.slug, range), `branch for child ${range.child}`)
-        : undefined;
-      if (adoptable !== undefined && (rangeIndex === 0 || await descendsFrom(git, parent, adoptable))) {
+      const adoptable =
+        options.cause === 'feature-repair' && rangeIndex <= lastOriginIndex
+          ? await requiredSha(git, branchRefForRange(options.slug, range), `branch for child ${range.child}`)
+          : undefined;
+      if (adoptable !== undefined && (rangeIndex === 0 || (await descendsFrom(git, parent, adoptable)))) {
         const adopted = adoptable;
-        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', adopted, new Map(), { git });
-        if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while adopting child' : updated.detail);
+        const updated = await updateRestackChildStatus(
+          options.worktree,
+          options.slug,
+          journal,
+          range.child,
+          'replayed',
+          adopted,
+          new Map(),
+          { git },
+        );
+        if (updated.kind !== 'updated')
+          throw new Error(updated.kind === 'stale' ? 'restack journal changed while adopting child' : updated.detail);
         journal = updated.journal;
         overlaps.set(range.child, []);
         parent = adopted;
@@ -785,13 +1773,16 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       }
       {
         const recorded = await consumeRecordedResolution({
-          slug: options.slug, range, parent, committer: journal.journal.committer, git,
-          replay: (replayRange, replayParent, replayCommitter, replayGit) => replayChildRange(
-            replayRange, replayParent, replayCommitter, replayGit, {
+          slug: options.slug,
+          range,
+          parent,
+          committer: journal.journal.committer,
+          git,
+          replay: (replayRange, replayParent, replayCommitter, replayGit) =>
+            replayChildRange(replayRange, replayParent, replayCommitter, replayGit, {
               comparisonCommits: [],
               haltRecordSlug: options.slug,
-            },
-          ),
+            }),
         });
         if (recorded.kind === 'stale') {
           // An answer can outlive either its conflict record (an orphan) or
@@ -808,17 +1799,36 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
             preserveConflictRecord: recorded.field !== 'record',
           });
           if (retired.kind !== 'retired') throw new Error(`cannot retire stale restack resolution: ${retired.kind}`);
-          await options.events?.emit({ type: 'restack_resolution', opId: journal.journal.opId, child: range.child, action: 'retired', tip: retired.tip });
+          await options.events?.emit({
+            type: 'restack_resolution',
+            opId: journal.journal.opId,
+            child: range.child,
+            action: 'retired',
+            tip: retired.tip,
+          });
           if (recorded.field !== 'record') {
             if (!retired.record) throw new Error('stale restack resolution lost its matching conflict record');
-            await options.events?.emit(emitRestackRefused({ reason: 'restack-resolution-stale', child: range.child, detail: recorded.field }));
+            await options.events?.emit(
+              emitRestackRefused({ reason: 'restack-resolution-stale', child: range.child, detail: recorded.field }),
+            );
             await haltRecordedRestackConflict({
-              worktree: options.worktree, slug: options.slug, journal, range, replayParent: parent,
-              comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: options.slug,
-              candidateSubjects: await replayCandidateSubjects(git, await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`)),
-              commit: retired.record.commit, paths: retired.record.paths,
+              worktree: options.worktree,
+              slug: options.slug,
+              journal,
+              range,
+              replayParent: parent,
+              comparisonCommits: journal.journal.comparisonCommits,
+              haltRecordSlug: options.slug,
+              candidateSubjects: await replayCandidateSubjects(
+                git,
+                await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`),
+              ),
+              commit: retired.record.commit,
+              paths: retired.record.paths,
               detail: `restack-resolution-stale\n${recorded.field}`,
-              events: options.events, git, writeHalt: haltRestackConflict,
+              events: options.events,
+              git,
+              writeHalt: haltRestackConflict,
             });
             terminal = true;
             return haltedResult(options.worktree);
@@ -837,13 +1847,28 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
             terminal = true;
             return haltedResult(options.worktree);
           }
-          const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', recorded.tip, recorded.rewrites, {
-            git,
-            consumedResolution: recorded.resolution,
-          });
+          const updated = await updateRestackChildStatus(
+            options.worktree,
+            options.slug,
+            journal,
+            range.child,
+            'resolved',
+            recorded.tip,
+            recorded.rewrites,
+            {
+              git,
+              consumedResolution: recorded.resolution,
+            },
+          );
           if (updated.kind !== 'updated') throw new Error('restack journal changed while consuming resolution');
           journal = updated.journal;
-          await options.events?.emit({ type: 'restack_resolution', opId: journal.journal.opId, child: range.child, action: 'consumed', tip: recorded.tip });
+          await options.events?.emit({
+            type: 'restack_resolution',
+            opId: journal.journal.opId,
+            child: range.child,
+            action: 'consumed',
+            tip: recorded.tip,
+          });
           exactRewrites.set(range.child, recorded.rewrites);
           consumedTipCorrespondences.set(range.child, {
             child: range.child,
@@ -866,16 +1891,34 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         });
       } catch (error) {
         if (error instanceof RemBlockBodyMismatchError) {
-          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, {
-            commit: error.commit, paths: [error.path],
-          }, options.events, git, parent, 'conflict', `remediation block body mismatch: ${error.remId}`, await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`));
+          await haltUnresolvedConflict(
+            options.worktree,
+            options.slug,
+            journal,
+            range,
+            {
+              commit: error.commit,
+              paths: [error.path],
+            },
+            options.events,
+            git,
+            parent,
+            'conflict',
+            `remediation block body mismatch: ${error.remId}`,
+            await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`),
+          );
           terminal = true;
           return haltedResult(options.worktree);
         }
         const conflict = await replayConflict(git, options.slug, error);
         if (!conflict) throw error;
         const decisionDelivery = await prepareRestackDecisionDelivery({
-          worktree: options.worktree, slug: options.slug, range, opId: journal.journal.opId, git, events: options.events,
+          worktree: options.worktree,
+          slug: options.slug,
+          range,
+          opId: journal.journal.opId,
+          git,
+          events: options.events,
         });
         if (decisionDelivery === undefined) {
           throw new Error('cannot record delivered decision conflict state');
@@ -889,32 +1932,77 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           haltRecordSlug: options.slug,
           resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
           cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
-          ...(decisionDelivery.operatorDecision === undefined ? {} : { operatorDecision: decisionDelivery.operatorDecision }),
+          restack: {
+            opId: journal.journal.opId,
+            cause: options.cause,
+            ...(options.routed === undefined ? {} : { roundId: options.routed.roundId }),
+          },
+          ...(decisionDelivery.operatorDecision === undefined
+            ? {}
+            : { operatorDecision: decisionDelivery.operatorDecision }),
           git,
         });
         if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
-          const detail = [
-            ...restackDecisionDetailLines(decisionDelivery),
-            ...('reason' in resolution.outcome ? [resolution.outcome.reason] : []),
-          ].join('\n') || undefined;
-          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, conflict, options.events, git, parent, 'conflict', detail, resolution.candidates);
-          terminal = true;
-          return haltedResult(options.worktree);
-        }
-        const ownership = await checkResolvedTipOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: options.routed !== undefined });
-        if (ownership.kind === 'refused') {
+          const detail =
+            [
+              ...restackDecisionDetailLines(decisionDelivery),
+              ...('reason' in resolution.outcome ? [resolution.outcome.reason] : []),
+            ].join('\n') || undefined;
           await haltUnresolvedConflict(
-            options.worktree, options.slug, journal, range, { ...conflict, paths: ownership.paths.map(({ path }) => path) },
-            options.events, git, parent, 'replay-mismatch', undefined, resolution.candidates, resolution.tip, ownership.paths,
+            options.worktree,
+            options.slug,
+            journal,
+            range,
+            conflict,
+            options.events,
+            git,
+            parent,
+            'conflict',
+            detail,
+            resolution.candidates,
           );
           terminal = true;
           return haltedResult(options.worktree);
         }
-        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', resolution.tip, resolution.rewrites, {
-          git,
-          ...(decisionDelivery.deliveredDecision === undefined ? {} : { deliveredDecision: decisionDelivery.deliveredDecision }),
+        const ownership = await checkResolvedTipOwnership(range, parent, resolution.tip, git, {
+          normaliseInheritedRemBlocks: options.routed !== undefined,
         });
-        if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while resolving' : updated.detail);
+        if (ownership.kind === 'refused') {
+          await haltUnresolvedConflict(
+            options.worktree,
+            options.slug,
+            journal,
+            range,
+            { ...conflict, paths: ownership.paths.map(({ path }) => path) },
+            options.events,
+            git,
+            parent,
+            'replay-mismatch',
+            undefined,
+            resolution.candidates,
+            resolution.tip,
+            ownership.paths,
+          );
+          terminal = true;
+          return haltedResult(options.worktree);
+        }
+        const updated = await updateRestackChildStatus(
+          options.worktree,
+          options.slug,
+          journal,
+          range.child,
+          'resolved',
+          resolution.tip,
+          resolution.rewrites,
+          {
+            git,
+            ...(decisionDelivery.deliveredDecision === undefined
+              ? {}
+              : { deliveredDecision: decisionDelivery.deliveredDecision }),
+          },
+        );
+        if (updated.kind !== 'updated')
+          throw new Error(updated.kind === 'stale' ? 'restack journal changed while resolving' : updated.detail);
         journal = updated.journal;
         exactRewrites.set(range.child, resolution.rewrites);
         overlaps.set(range.child, await parentOverlapPaths(range, parent, git));
@@ -926,11 +2014,23 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         }
         continue;
       }
-      const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', replay.tip, replay.rewrites, { git });
-      if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while replaying' : updated.detail);
+      const updated = await updateRestackChildStatus(
+        options.worktree,
+        options.slug,
+        journal,
+        range.child,
+        'replayed',
+        replay.tip,
+        replay.rewrites,
+        { git },
+      );
+      if (updated.kind !== 'updated')
+        throw new Error(updated.kind === 'stale' ? 'restack journal changed while replaying' : updated.detail);
       journal = updated.journal;
       exactRewrites.set(range.child, replay.rewrites);
-      const ownership = await checkPathOwnership(range, parent, replay.tip, git, { normaliseInheritedRemBlocks: options.routed !== undefined });
+      const ownership = await checkPathOwnership(range, parent, replay.tip, git, {
+        normaliseInheritedRemBlocks: options.routed !== undefined,
+      });
       if (ownership.kind === 'refused') {
         await abortJournal(options.worktree, journal, git, moves);
         await haltRestack(options.worktree, 'replay-mismatch', options.events, {
@@ -948,24 +2048,44 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     }
 
     journal = await transitionState(options.worktree, journal, 'ready', git);
+    const deferredRemap = await journalDeferredRouteRemap(options.worktree, journal, git);
+    if (deferredRemap.kind === 'boundary-lost') {
+      await haltRestack(options.worktree, 'fold-boundary-lost', options.events, {
+        child: deferredRemap.host,
+        detail: `deferred placement exit boundary for host ${deferredRemap.host} was dropped by restack`,
+      });
+      terminal = true;
+      return haltedResult(options.worktree);
+    }
+    if (deferredRemap.kind === 'unavailable') throw new Error(deferredRemap.detail);
+    journal = deferredRemap.journal;
     const readyJournal = journal;
     moves = plan.ranges.flatMap((range) => {
       const branchRef = branchRefForRange(options.slug, range);
       const branchOld = readyJournal.journal.refs.find((entry) => entry.ref === branchRef)?.oldSha;
       if (!branchOld) throw new Error(`missing journaled branch ref for child ${range.child}`);
       const closureRef = ref(`refs/conductor/${options.slug}/closed/c${range.child}`);
-      const closureOld = range.kind === 'closed'
-        ? readyJournal.journal.refs.find((entry) => entry.ref === closureRef)?.oldSha
-        : undefined;
-      if (range.kind === 'closed' && !closureOld) throw new Error(`missing journaled closure ref for child ${range.child}`);
+      const closureOld =
+        range.kind === 'closed'
+          ? readyJournal.journal.refs.find((entry) => entry.ref === closureRef)?.oldSha
+          : undefined;
+      if (range.kind === 'closed' && !closureOld)
+        throw new Error(`missing journaled closure ref for child ${range.child}`);
       return [
         { ref: branchRef, oldSha: branchOld, newSha: range.oldTip, child: range.child },
-        ...(range.kind === 'closed' ? [{ ref: closureRef, oldSha: closureOld!, newSha: range.oldTip, child: range.child }] : []),
+        ...(range.kind === 'closed'
+          ? [{ ref: closureRef, oldSha: closureOld!, newSha: range.oldTip, child: range.child }]
+          : []),
       ];
     });
     // Each staged ref is the source of truth for its move; resolve it after all
     // replays so the transaction never relies on an in-memory replay result.
-    moves = await Promise.all(moves.map(async (move) => ({ ...move, newSha: await requiredSha(git, stagingRefFor(options.slug, move.child!), `staging ref for child ${move.child}`) })));
+    moves = await Promise.all(
+      moves.map(async (move) => ({
+        ...move,
+        newSha: await requiredSha(git, stagingRefFor(options.slug, move.child!), `staging ref for child ${move.child}`),
+      })),
+    );
     const checkedOut = await checkedOutRef(git);
     const preMove = await checkRestackPreMove(options.worktree, moves, checkedOut, { git });
     if (preMove.kind === 'refused') {
@@ -992,7 +2112,9 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     // plan keeps it last for translation, while move verification needs the
     // ancestry order H′ -> owner's rewritten tip.
     const verificationRanges = plan.ranges.flatMap((range) => [
-      ...plan.ranges.filter((candidate) => candidate.kind === 'leaf-unentered' && unenteredLeafOwners.get(candidate.child) === range.child),
+      ...plan.ranges.filter(
+        (candidate) => candidate.kind === 'leaf-unentered' && unenteredLeafOwners.get(candidate.child) === range.child,
+      ),
       ...(range.kind === 'leaf-unentered' ? [] : [range]),
     ]);
     const verificationJournal = { ...journal, journal: { ...journal.journal, ranges: verificationRanges } };
@@ -1018,7 +2140,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       // The journaled range records the old side of a base refresh; a repair
       // keeps both sides at its unchanged default.
       oldDefault: options.cause === 'feature-repair' ? stackDefault : journal.journal.ranges[0]!.oldParent,
-      newDefault: options.cause === 'feature-repair' ? stackDefault : journal.journal.newDefault ?? planningDefault,
+      newDefault: options.cause === 'feature-repair' ? stackDefault : (journal.journal.newDefault ?? planningDefault),
       activeChild: active.child,
       ranges: plan.ranges,
       moves,
@@ -1037,8 +2159,19 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       throw error;
     }
     const applied = await restackTransactionBuilder.appliedTransactionLines(options.worktree, journal, git);
-    const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(applied.lines));
-    if (appliedWrite.exitCode !== 0) {
+    const appliedWrite = await writeRoutingTransaction(
+      options.worktree,
+      options.slug,
+      [
+        {
+          kind: 'restack-applied',
+          ownerOpId: journal.journal.opId,
+          lines: applied.lines,
+        },
+      ],
+      { git },
+    );
+    if (appliedWrite.kind !== 'updated') {
       const changed = await changedRoutedAppliedRef(journal, git);
       if (changed !== undefined) {
         await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: changed });
@@ -1055,12 +2188,22 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       const newParent = replayParents.get(range.child);
       if (!newParent) throw new Error(`missing replay parent for child ${range.child}`);
       await options.events?.emit({
-        type: 'restack_applied', opId: draft.opId, cause: draft.cause, child: range.child,
-        oldTip: range.oldTip, newTip: move.newSha, wouldInvalidate: [...(transition.wouldInvalidate.get(range.child) ?? [])], parentOverlapPaths: overlaps.get(range.child) ?? [],
+        type: 'restack_applied',
+        opId: draft.opId,
+        cause: draft.cause,
+        child: range.child,
+        oldTip: range.oldTip,
+        newTip: move.newSha,
+        wouldInvalidate: [...(transition.wouldInvalidate.get(range.child) ?? [])],
+        parentOverlapPaths: overlaps.get(range.child) ?? [],
         adaptedPaths: await adaptedPathsFor(range, newParent, move.newSha, git),
       });
     }
-    if (mergeAudit.flattenedMerges.length > 0 || mergeAudit.ancestryOnlyMerges.length > 0 || mergeAudit.sideLineageCount > 0) {
+    if (
+      mergeAudit.flattenedMerges.length > 0 ||
+      mergeAudit.ancestryOnlyMerges.length > 0 ||
+      mergeAudit.sideLineageCount > 0
+    ) {
       await options.events?.emit({ type: 'rebase_merge_audit', ...mergeAudit });
     }
     terminal = true;
@@ -1068,6 +2211,8 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
   } catch (error) {
     return { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
   } finally {
-    if (!terminal && journal !== undefined) await abortJournal(options.worktree, journal, git, moves);
+    lifecycle.journal = journal;
+    lifecycle.moves = moves;
+    lifecycle.terminal = terminal;
   }
 }

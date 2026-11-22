@@ -15,6 +15,8 @@ export interface DispatchMeteringObservation {
   model?: string;
   effort?: string;
   tier?: string;
+  /** Closed attribution bucket; operation and round identifiers never enter metrics. */
+  restackCause?: 'feature-repair' | 'base-refresh' | 'fold';
   tokenUsage?: TokenUsage;
   unmetered?: boolean;
 }
@@ -44,10 +46,7 @@ export class DispatchMeteringTracker {
       const step = identity?.metricLabel ?? rawStep;
       if (record.outcome === 'success' && rawStep && provider && identity) {
         const key = DispatchMeteringTracker.keyFor(record, rawStep, provider, identity.correlationKey);
-        this.unmatchedSuccessfulAttempts.set(
-          key,
-          (this.unmatchedSuccessfulAttempts.get(key) ?? 0) + 1,
-        );
+        this.unmatchedSuccessfulAttempts.set(key, (this.unmatchedSuccessfulAttempts.get(key) ?? 0) + 1);
       }
 
       return DispatchMeteringTracker.toObservation(record, step, provider, true);
@@ -55,9 +54,7 @@ export class DispatchMeteringTracker {
 
     if (record.type === 'step_completed') {
       const rawStep = typeof record.step === 'string' ? record.step : undefined;
-      const provider = typeof record.actualProvider === 'string'
-        ? record.actualProvider
-        : undefined;
+      const provider = typeof record.actualProvider === 'string' ? record.actualProvider : undefined;
       const identity = DispatchMeteringTracker.identity(record, rawStep);
       if (record.executionContext !== undefined && identity === undefined) return undefined;
       const step = identity?.metricLabel ?? rawStep;
@@ -92,10 +89,7 @@ export class DispatchMeteringTracker {
       : DispatchMeteringTracker.key(correlationKey, provider);
   }
 
-  private static identity(
-    record: Record<string, unknown>,
-    legacyStep: string | undefined,
-  ) {
+  private static identity(record: Record<string, unknown>, legacyStep: string | undefined) {
     return legacyStep === undefined
       ? undefined
       : resolveExecutionIdentity({
@@ -106,10 +100,12 @@ export class DispatchMeteringTracker {
   }
 
   private static hasProviderEvidence(record: Record<string, unknown>): boolean {
-    return DispatchMeteringTracker.isTokenUsage(record.tokenUsage)
-      || (typeof record.actualProvider === 'string' && record.actualProvider.length > 0)
-      || (typeof record.preferredProvider === 'string' && record.preferredProvider.length > 0)
-      || (typeof record.model === 'string' && record.model.length > 0);
+    return (
+      DispatchMeteringTracker.isTokenUsage(record.tokenUsage) ||
+      (typeof record.actualProvider === 'string' && record.actualProvider.length > 0) ||
+      (typeof record.preferredProvider === 'string' && record.preferredProvider.length > 0) ||
+      (typeof record.model === 'string' && record.model.length > 0)
+    );
   }
 
   private static isTokenUsage(value: unknown): value is TokenUsage {
@@ -124,25 +120,29 @@ export class DispatchMeteringTracker {
     provider?: string,
     includeAttemptFallbackDetails = false,
   ): DispatchMeteringObservation {
-    const tokenUsage = typeof record.tokenUsage === 'object' && record.tokenUsage !== null
-      ? record.tokenUsage as TokenUsage
-      : undefined;
+    const tokenUsage =
+      typeof record.tokenUsage === 'object' && record.tokenUsage !== null
+        ? (record.tokenUsage as TokenUsage)
+        : undefined;
     return {
       ...(step ? { step } : {}),
       ...(provider ? { provider } : {}),
-      ...(includeAttemptFallbackDetails
-        && typeof record.preferredProvider === 'string'
-        && record.preferredProvider.length > 0
+      ...(includeAttemptFallbackDetails &&
+      typeof record.preferredProvider === 'string' &&
+      record.preferredProvider.length > 0
         ? { preferredProvider: record.preferredProvider }
         : {}),
-      ...(includeAttemptFallbackDetails
-        && typeof record.fallbackReason === 'string'
-        && record.fallbackReason.length > 0
+      ...(includeAttemptFallbackDetails && typeof record.fallbackReason === 'string' && record.fallbackReason.length > 0
         ? { fallbackReason: record.fallbackReason }
         : {}),
       ...(typeof record.model === 'string' ? { model: record.model } : {}),
       ...(typeof record.effort === 'string' ? { effort: record.effort } : {}),
       ...(typeof record.tier === 'string' ? { tier: record.tier } : {}),
+      ...(typeof record.restack === 'object' &&
+      record.restack !== null &&
+      (record.restack as Record<string, unknown>).cause !== undefined
+        ? { restackCause: (record.restack as { cause: 'feature-repair' | 'base-refresh' | 'fold' }).cause }
+        : {}),
       ...(tokenUsage ? { tokenUsage } : {}),
       ...(record.unmetered === true ? { unmetered: true } : {}),
     };

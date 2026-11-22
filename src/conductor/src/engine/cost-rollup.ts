@@ -14,10 +14,7 @@ import type { TokenUsage } from '../execution/llm-provider.js';
 import type { ConductorEvent } from '../types/events.js';
 import type { ComplexityTier } from '../types/steps.js';
 import { classifyMetering } from './metering.js';
-import {
-  DispatchMeteringTracker,
-  type DispatchMeteringObservation,
-} from './dispatch-metering.js';
+import { DispatchMeteringTracker, type DispatchMeteringObservation } from './dispatch-metering.js';
 
 export interface CostRollup {
   tokens: { input: number; output: number; cacheRead: number; cacheCreation: number };
@@ -26,6 +23,7 @@ export interface CostRollup {
     step: string;
     model?: string;
     provider?: string;
+    restackCause?: 'feature-repair' | 'base-refresh' | 'fold';
     source?: 'provider' | 'rate-card';
     costUsd: number;
   }>;
@@ -33,6 +31,7 @@ export interface CostRollup {
     step: string;
     model?: string;
     provider?: string;
+    restackCause?: 'feature-repair' | 'base-refresh' | 'fold';
     tokens: { input?: number; output?: number; cacheRead?: number; cacheCreation?: number };
   }>;
   dispatches: number;
@@ -87,11 +86,12 @@ function addDimensionRollup(
 
   const step = event.step ?? 'unknown';
   const source = tokenUsage.costSource;
-  const key = dimensionKey(step, event.model, event.provider, source);
+  const key = dimensionKey(step, event.model, event.provider, source, event.restackCause);
   const bucket = buckets.get(key) ?? {
     step,
     ...(event.model === undefined ? {} : { model: event.model }),
     ...(event.provider === undefined ? {} : { provider: event.provider }),
+    ...(event.restackCause === undefined ? {} : { restackCause: event.restackCause }),
     ...(source === undefined ? {} : { source }),
     costUsd: 0,
   };
@@ -110,16 +110,18 @@ function addTokenDimensionRollup(
   const tokenUsage = event.tokenUsage;
   if (!tokenUsage) return;
 
-  const finiteTokens = (['input', 'output', 'cacheRead', 'cacheCreation'] as const)
-    .filter((kind) => Number.isFinite(tokenUsage[kind]));
+  const finiteTokens = (['input', 'output', 'cacheRead', 'cacheCreation'] as const).filter((kind) =>
+    Number.isFinite(tokenUsage[kind]),
+  );
   if (finiteTokens.length === 0) return;
 
   const step = event.step ?? 'unknown';
-  const key = dimensionKey(step, event.model, event.provider);
+  const key = dimensionKey(step, event.model, event.provider, event.restackCause);
   const bucket = buckets.get(key) ?? {
     step,
     ...(event.model === undefined ? {} : { model: event.model }),
     ...(event.provider === undefined ? {} : { provider: event.provider }),
+    ...(event.restackCause === undefined ? {} : { restackCause: event.restackCause }),
     tokens: {},
   };
   for (const kind of finiteTokens) {
@@ -131,10 +133,7 @@ function addTokenDimensionRollup(
   }
 }
 
-function addDispatch(
-  target: ProviderCostRollup,
-  event: DispatchMeteringObservation,
-): void {
+function addDispatch(target: ProviderCostRollup, event: DispatchMeteringObservation): void {
   target.dispatches += 1;
   const tokenUsage = event.tokenUsage as TokenUsage | undefined;
   const metering = classifyMetering(tokenUsage);
@@ -239,7 +238,7 @@ export async function computeCostRollup(worktreeDir: string): Promise<CostRollup
         addDimensionRollup(rollup, dimensions, dispatch);
         addTokenDimensionRollup(rollup, tokenDimensions, dispatch);
         if (dispatch.provider) {
-          const providerRollup = providers[dispatch.provider] ??= zeroUsageRollup();
+          const providerRollup = (providers[dispatch.provider] ??= zeroUsageRollup());
           addDispatch(providerRollup, dispatch);
         }
       }

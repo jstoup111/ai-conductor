@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:rem-prd-audit-rem-S7.3, task:rem-as-built-rem-asb-8
 /**
  * Covers: task:1, task:2, task:3, task:4, task:10
  * metrics.test.ts — unit tests for MetricsRecorder through MetricsListener.
@@ -46,7 +46,9 @@ function makeVisualizer(
   });
   const listener = new MetricsListener(
     new MetricsRecorder(provider.getMeter('metrics-listener-test'), {
-      project: 'test-project', worker: 'unknown', feature: 'test-feature',
+      project: 'test-project',
+      worker: 'unknown',
+      feature: 'test-feature',
     }),
     () => Date.now(),
     'test-feature',
@@ -73,10 +75,7 @@ function findMetric(exporter: InMemoryMetricExporter, name: string) {
     .find((m) => m.descriptor.name === name);
 }
 
-async function captureFeatureShippedAttributes(
-  meterName: string,
-  customAttrs?: Record<string, string>,
-) {
+async function captureFeatureShippedAttributes(meterName: string, customAttrs?: Record<string, string>) {
   const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   const provider = new MeterProvider({
     readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
@@ -113,10 +112,11 @@ describe('Task 3: dispatch dimensions', () => {
     const provider = new MeterProvider({
       readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
     });
-    const recorder = new MetricsRecorder(
-      provider.getMeter('task-3'),
-      { project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
-    );
+    const recorder = new MetricsRecorder(provider.getMeter('task-3'), {
+      project: 'test-project',
+      worker: 'test-worker',
+      feature: 'test-feature',
+    });
 
     try {
       const dimensions = { model: 'opus', effort: 'high', provider: 'claude', tier: 'M', fallback: true };
@@ -126,13 +126,33 @@ describe('Task 3: dispatch dimensions', () => {
       recorder.onStepClose('model-only', 10, 0, undefined, undefined, false, { model: 'opus' });
       await provider.forceFlush();
 
-      const attributes = (name: string, step: string) => findMetric(exporter, name)?.dataPoints
-        .find((point) => point.attributes.step === step)?.attributes;
-      const full = { step: 'full', model: 'opus', effort: 'high', provider: 'claude', tier: 'M', project: 'test-project', worker: 'test-worker', feature: 'test-feature' };
+      const attributes = (name: string, step: string) =>
+        findMetric(exporter, name)?.dataPoints.find((point) => point.attributes.step === step)?.attributes;
+      const full = {
+        step: 'full',
+        model: 'opus',
+        effort: 'high',
+        provider: 'claude',
+        tier: 'M',
+        project: 'test-project',
+        worker: 'test-worker',
+        feature: 'test-feature',
+      };
       const allowedKeys = {
         'conductor.step.duration': ['step', 'model', 'effort', 'provider', 'tier', 'project', 'worker', 'feature'],
         'conductor.step.retries': ['step', 'model', 'effort', 'provider', 'tier', 'project', 'worker', 'feature'],
-        'conductor.step.dispatches': ['step', 'metering', 'model', 'effort', 'provider', 'tier', 'fallback', 'project', 'worker', 'feature'],
+        'conductor.step.dispatches': [
+          'step',
+          'metering',
+          'model',
+          'effort',
+          'provider',
+          'tier',
+          'fallback',
+          'project',
+          'worker',
+          'feature',
+        ],
       } as const;
 
       expect({
@@ -140,16 +160,23 @@ describe('Task 3: dispatch dimensions', () => {
         retries: attributes('conductor.step.retries', 'full'),
         dispatches: attributes('conductor.step.dispatches', 'full'),
         modelOnly: attributes('conductor.step.duration', 'model-only'),
-        allowedKeys: Object.entries(allowedKeys).every(([name, keys]) => (
-          findMetric(exporter, name)?.dataPoints.every((point) => (
-            Object.keys(point.attributes).every((key) => (keys as readonly string[]).includes(key))
-          )) ?? true
-        )),
+        allowedKeys: Object.entries(allowedKeys).every(
+          ([name, keys]) =>
+            findMetric(exporter, name)?.dataPoints.every((point) =>
+              Object.keys(point.attributes).every((key) => (keys as readonly string[]).includes(key)),
+            ) ?? true,
+        ),
       }).toEqual({
         duration: full,
         retries: full,
         dispatches: { ...full, metering: 'unmetered', fallback: true },
-        modelOnly: { step: 'model-only', model: 'opus', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        modelOnly: {
+          step: 'model-only',
+          model: 'opus',
+          project: 'test-project',
+          worker: 'test-worker',
+          feature: 'test-feature',
+        },
         allowedKeys: true,
       });
     } finally {
@@ -180,18 +207,14 @@ describe('Task 8: TokenUsage detail remains span-only', () => {
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const forbidden = [
-      'fallback.reason',
-      'usage.reasoning_output',
-      'usage.turns',
-      'usage.duration_ms',
-      'cost.source',
-    ];
-    const metricAttributeKeys = metricExporter.getMetrics().flatMap((resource) => (
-      resource.scopeMetrics.flatMap((scope) => (
-        scope.metrics.flatMap((metric) => metric.dataPoints.flatMap((point) => Object.keys(point.attributes)))
-      ))
-    ));
+    const forbidden = ['fallback.reason', 'usage.reasoning_output', 'usage.turns', 'usage.duration_ms', 'cost.source'];
+    const metricAttributeKeys = metricExporter
+      .getMetrics()
+      .flatMap((resource) =>
+        resource.scopeMetrics.flatMap((scope) =>
+          scope.metrics.flatMap((metric) => metric.dataPoints.flatMap((point) => Object.keys(point.attributes))),
+        ),
+      );
 
     expect(metricAttributeKeys.some((key) => forbidden.some((suffix) => key.endsWith(suffix)))).toBe(false);
   });
@@ -218,15 +241,23 @@ describe('Task 5: operator attributes at the metrics identity seam', () => {
       featureRecorder.onStepClose('build', 10, 1, undefined, false);
       featureRecorder.onDispatch('build');
       featureRecorder.onFeatureUsageTotal({
-        type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0,
-        costUsd: 1, inputTokens: 1, outputTokens: 1,
+        type: 'feature_usage_total',
+        dispatches: 1,
+        meteredDispatches: 1,
+        unmeteredDispatches: 0,
+        costUsd: 1,
+        inputTokens: 1,
+        outputTokens: 1,
       });
       featureRecorder.onGateVerdict('build', 'pass');
       recorder.onDaemonBacklog({
         type: 'daemon_backlog_snapshot',
         counts: { eligible: 1, waiting: 0, blocked: 0, gated: 0, parked: 0 },
-        oldestAgeSeconds: {}, slots: { busy: 1, free: 0 }, inFlight: [],
-        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false }, pollDurationMs: 1,
+        oldestAgeSeconds: {},
+        slots: { busy: 1, free: 0 },
+        inFlight: [],
+        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
+        pollDurationMs: 1,
       });
       await provider.forceFlush();
 
@@ -242,12 +273,49 @@ describe('Task 5: operator attributes at the metrics identity seam', () => {
         sameMapSecond: await captureFeatureShippedAttributes('task-5-same-map-second', custom),
         noMap: await captureFeatureShippedAttributes('task-5-no-map'),
       }).toEqual({
-        duration: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build' },
-        retries: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build' },
-        dispatches: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build', metering: 'unmetered' },
-        featureCost: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', cost_complete: true },
-        gateVerdict: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build', outcome: 'pass' },
-        daemonBacklog: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', state: 'eligible' },
+        duration: {
+          environment: 'staging',
+          project: 'conductor-project',
+          worker: 'conductor-worker',
+          feature: 'bound-feature',
+          step: 'build',
+        },
+        retries: {
+          environment: 'staging',
+          project: 'conductor-project',
+          worker: 'conductor-worker',
+          feature: 'bound-feature',
+          step: 'build',
+        },
+        dispatches: {
+          environment: 'staging',
+          project: 'conductor-project',
+          worker: 'conductor-worker',
+          feature: 'bound-feature',
+          step: 'build',
+          metering: 'unmetered',
+        },
+        featureCost: {
+          environment: 'staging',
+          project: 'conductor-project',
+          worker: 'conductor-worker',
+          feature: 'bound-feature',
+          cost_complete: true,
+        },
+        gateVerdict: {
+          environment: 'staging',
+          project: 'conductor-project',
+          worker: 'conductor-worker',
+          feature: 'bound-feature',
+          step: 'build',
+          outcome: 'pass',
+        },
+        daemonBacklog: {
+          environment: 'staging',
+          project: 'conductor-project',
+          worker: 'conductor-worker',
+          state: 'eligible',
+        },
         sameMapFirst: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker' },
         sameMapSecond: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker' },
         noMap: { project: 'conductor-project', worker: 'conductor-worker' },
@@ -265,9 +333,15 @@ describe('Task 8: tier remains feature-scoped', () => {
     const provider = new MeterProvider({
       readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
     });
-    const recorder = new MetricsRecorder(provider.getMeter('task-8-containment'), {
-      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
-    }, { tier: 'X' });
+    const recorder = new MetricsRecorder(
+      provider.getMeter('task-8-containment'),
+      {
+        project: 'test-project',
+        worker: 'test-worker',
+        feature: 'test-feature',
+      },
+      { tier: 'X' },
+    );
 
     try {
       recorder.onFeatureShipped('M');
@@ -277,38 +351,46 @@ describe('Task 8: tier remains feature-scoped', () => {
       recorder.onDaemonBacklog({
         type: 'daemon_backlog_snapshot',
         counts: { eligible: 1, waiting: 0, blocked: 0, gated: 0, parked: 0 },
-        oldestAgeSeconds: {}, slots: { busy: 1, free: 0 }, inFlight: [],
-        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false }, pollDurationMs: 1,
+        oldestAgeSeconds: {},
+        slots: { busy: 1, free: 0 },
+        inFlight: [],
+        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
+        pollDurationMs: 1,
       });
       recorder.onFeatureShipped();
       recorder.onFeatureShipped('S');
       await provider.forceFlush();
 
-      const points = (name: string): Array<{ attributes: Record<string, unknown> }> => exporter.getMetrics()
-        .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
-        .filter((metric) => metric.descriptor.name === name)
-        .flatMap((metric) => [...metric.dataPoints] as Array<{ attributes: Record<string, unknown> }>);
-      const attributes = (name: string, project: string) => points(name)
-        .find((point) => point.attributes.project === project)?.attributes;
+      const points = (name: string): Array<{ attributes: Record<string, unknown> }> =>
+        exporter
+          .getMetrics()
+          .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+          .filter((metric) => metric.descriptor.name === name)
+          .flatMap((metric) => [...metric.dataPoints] as Array<{ attributes: Record<string, unknown> }>);
+      const attributes = (name: string, project: string) =>
+        points(name).find((point) => point.attributes.project === project)?.attributes;
       const customShipped = points('conductor.feature.shipped').map((point) => point.attributes);
-      const nonFeatureNames = [
-        'conductor.memory.setup', 'conductor.gate.verdicts', 'conductor.gate.kickbacks',
-      ];
+      const nonFeatureNames = ['conductor.memory.setup', 'conductor.gate.verdicts', 'conductor.gate.kickbacks'];
       const customUntiered = customShipped.find((attrs) => !Object.hasOwn(attrs, 'tier'));
       const customTiered = customShipped.find((attrs) => attrs.tier === 'S');
 
       expect({
         featureShipped: attributes('conductor.feature.shipped', 'test-project'),
-        nonFeaturePointsAreUntiered: nonFeatureNames.every((name) => points(name)
-          .every((point) => !Object.hasOwn(point.attributes, 'tier'))),
-        daemonPointsAreUntiered: exporter.getMetrics()
+        nonFeaturePointsAreUntiered: nonFeatureNames.every((name) =>
+          points(name).every((point) => !Object.hasOwn(point.attributes, 'tier')),
+        ),
+        daemonPointsAreUntiered: exporter
+          .getMetrics()
           .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
           .filter((metric) => metric.descriptor.name.startsWith('conductor.daemon.'))
           .every((metric) => metric.dataPoints.every((point) => !Object.hasOwn(point.attributes, 'tier'))),
         customUntiered,
         customTiered,
-        tierAddsExactlyOneKey: customUntiered !== undefined && customTiered !== undefined
-          && JSON.stringify(Object.keys(customTiered).sort()) === JSON.stringify([...Object.keys(customUntiered), 'tier'].sort()),
+        tierAddsExactlyOneKey:
+          customUntiered !== undefined &&
+          customTiered !== undefined &&
+          JSON.stringify(Object.keys(customTiered).sort()) ===
+            JSON.stringify([...Object.keys(customUntiered), 'tier'].sort()),
       }).toEqual({
         featureShipped: { tier: 'M', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
         nonFeaturePointsAreUntiered: true,
@@ -331,7 +413,9 @@ describe('Task 5: feature activity and outcome tier attributes', () => {
       readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
     });
     const recorder = new MetricsRecorder(provider.getMeter('task-5-tiered'), {
-      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+      project: 'test-project',
+      worker: 'test-worker',
+      feature: 'test-feature',
     });
 
     try {
@@ -351,9 +435,28 @@ describe('Task 5: feature activity and outcome tier attributes', () => {
         wall: attributes('conductor.feature.duration.wall'),
         active: attributes('conductor.feature.duration.active'),
       }).toEqual({
-        dispatches: { kind: 'fresh', tier: 'M', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
-        halts: { haltClass: 'mechanical', step: 'build', tier: 'L', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
-        outcomes: { outcome: 'halted', tier: 'L', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        dispatches: {
+          kind: 'fresh',
+          tier: 'M',
+          project: 'test-project',
+          worker: 'test-worker',
+          feature: 'test-feature',
+        },
+        halts: {
+          haltClass: 'mechanical',
+          step: 'build',
+          tier: 'L',
+          project: 'test-project',
+          worker: 'test-worker',
+          feature: 'test-feature',
+        },
+        outcomes: {
+          outcome: 'halted',
+          tier: 'L',
+          project: 'test-project',
+          worker: 'test-worker',
+          feature: 'test-feature',
+        },
         shipped: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
         wall: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
         active: { tier: 'S', state: 'exact', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
@@ -369,7 +472,9 @@ describe('Task 5: feature activity and outcome tier attributes', () => {
       readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
     });
     const recorder = new MetricsRecorder(provider.getMeter('task-5-untiered'), {
-      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+      project: 'test-project',
+      worker: 'test-worker',
+      feature: 'test-feature',
     });
 
     try {
@@ -382,9 +487,14 @@ describe('Task 5: feature activity and outcome tier attributes', () => {
 
       const attributes = (name: string) => findMetric(exporter, name)?.dataPoints[0]?.attributes;
       for (const name of [
-        'conductor.feature.dispatches', 'conductor.feature.halts', 'conductor.run.outcomes',
-        'conductor.feature.shipped', 'conductor.feature.duration.wall', 'conductor.feature.duration.active',
-      ]) expect(attributes(name)).not.toHaveProperty('tier');
+        'conductor.feature.dispatches',
+        'conductor.feature.halts',
+        'conductor.run.outcomes',
+        'conductor.feature.shipped',
+        'conductor.feature.duration.wall',
+        'conductor.feature.duration.active',
+      ])
+        expect(attributes(name)).not.toHaveProperty('tier');
     } finally {
       await provider.shutdown();
     }
@@ -396,7 +506,9 @@ describe('Task 5: feature activity and outcome tier attributes', () => {
       readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
     });
     const recorder = new MetricsRecorder(provider.getMeter('task-5-partial-duration'), {
-      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+      project: 'test-project',
+      worker: 'test-worker',
+      feature: 'test-feature',
     });
 
     try {
@@ -404,11 +516,21 @@ describe('Task 5: feature activity and outcome tier attributes', () => {
       await provider.forceFlush();
 
       expect(findMetric(exporter, 'conductor.feature.duration.wall')?.dataPoints[0]?.attributes).toEqual({
-        tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+        tier: 'S',
+        project: 'test-project',
+        worker: 'test-worker',
+        feature: 'test-feature',
       });
       expect(findMetric(exporter, 'conductor.feature.duration.active')).toBeUndefined();
       expect(findMetric(exporter, 'conductor.feature.duration.active.missing')?.dataPoints[0]).toMatchObject({
-        attributes: { tier: 'S', state: 'partial', project: 'test-project', worker: 'test-worker', feature: 'test-feature' }, value: 1,
+        attributes: {
+          tier: 'S',
+          state: 'partial',
+          project: 'test-project',
+          worker: 'test-worker',
+          feature: 'test-feature',
+        },
+        value: 1,
       });
     } finally {
       await provider.shutdown();
@@ -438,9 +560,11 @@ afterEach(async () => {
 
 describe('Task 1: duration bucket boundaries', () => {
   it('are strictly increasing and span 10 ms through 8 hours', () => {
-    expect(DURATION_BUCKET_BOUNDARIES_MS.every(
-      (boundary, index) => index === 0 || boundary > DURATION_BUCKET_BOUNDARIES_MS[index - 1],
-    )).toBe(true);
+    expect(
+      DURATION_BUCKET_BOUNDARIES_MS.every(
+        (boundary, index) => index === 0 || boundary > DURATION_BUCKET_BOUNDARIES_MS[index - 1],
+      ),
+    ).toBe(true);
     expect(DURATION_BUCKET_BOUNDARIES_MS[0]).toBeLessThanOrEqual(10);
     expect(DURATION_BUCKET_BOUNDARIES_MS.at(-1)).toBeGreaterThanOrEqual(28_800_000);
     expect(DURATION_BUCKET_BOUNDARIES_MS.some((boundary) => boundary >= 252_464)).toBe(true);
@@ -469,15 +593,11 @@ describe('Task 2: step-duration histogram advice', () => {
 
     new MetricsRecorder(meter);
 
-    const stepDurationCall = createHistogram.mock.calls.find(
-      ([name]) => name === 'conductor.step.duration',
-    );
-    expect(stepDurationCall?.[1]?.advice?.explicitBucketBoundaries)
-      .toEqual([
-        10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000,
-        30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
-        3_600_000, 7_200_000, 14_400_000, 28_800_000,
-      ]);
+    const stepDurationCall = createHistogram.mock.calls.find(([name]) => name === 'conductor.step.duration');
+    expect(stepDurationCall?.[1]?.advice?.explicitBucketBoundaries).toEqual([
+      10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000,
+      1_800_000, 3_600_000, 7_200_000, 14_400_000, 28_800_000,
+    ]);
   });
 });
 
@@ -524,7 +644,10 @@ describe('T15: step duration histogram and retries counter', () => {
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
     await emitter.emit({ type: 'gate_verdict', step: 'build', satisfied: true });
     await emitter.emit({
-      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+      type: 'build_review_outer_verdict',
+      lapId: 'lap-1',
+      rawVerdict: 'PASS',
+      effectiveVerdict: 'PASS',
     });
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
@@ -577,9 +700,7 @@ describe('T15: step duration histogram and retries counter', () => {
     expect(names).toContain('conductor.step.retries');
 
     const retriesMetric = findMetric(metricExporter, 'conductor.step.retries')!;
-    const exploreRetries = retriesMetric.dataPoints.find(
-      (d) => d.attributes['step'] === 'explore',
-    );
+    const exploreRetries = retriesMetric.dataPoints.find((d) => d.attributes['step'] === 'explore');
     expect(exploreRetries).toBeDefined();
     // 1 retry → counter incremented by 1
     expect(exploreRetries?.value).toBe(1);
@@ -597,9 +718,7 @@ describe('T15: step duration histogram and retries counter', () => {
     // If the metric exists at all, bootstrap should NOT be in it (no retries)
     const retriesMetric = findMetric(metricExporter, 'conductor.step.retries');
     if (retriesMetric) {
-      const bootstrapData = retriesMetric.dataPoints.find(
-        (d) => d.attributes['step'] === 'bootstrap',
-      );
+      const bootstrapData = retriesMetric.dataPoints.find((d) => d.attributes['step'] === 'bootstrap');
       expect(bootstrapData).toBeUndefined();
     }
     // If the metric doesn't exist (no retries at all), that's also acceptable
@@ -617,9 +736,7 @@ describe('T15: step duration histogram and retries counter', () => {
     await vis.stop();
 
     const retriesMetric = findMetric(metricExporter, 'conductor.step.retries')!;
-    const exploreRetries = retriesMetric.dataPoints.find(
-      (d) => d.attributes['step'] === 'explore',
-    );
+    const exploreRetries = retriesMetric.dataPoints.find((d) => d.attributes['step'] === 'explore');
     expect(exploreRetries?.value).toBe(2);
   });
 });
@@ -697,9 +814,7 @@ describe.skip('T16: superseded per-dispatch token counters', () => {
     await vis.stop();
 
     const tokenMetric = findMetric(metricExporter, 'conductor.step.tokens')!;
-    const explorePoints = tokenMetric.dataPoints.filter(
-      (d) => d.attributes['step'] === 'explore',
-    );
+    const explorePoints = tokenMetric.dataPoints.filter((d) => d.attributes['step'] === 'explore');
     const kinds = explorePoints.map((d) => d.attributes['kind']);
     // Only 'input' and 'output' present — NOT 'cacheRead' or 'cacheCreation'
     expect(kinds).toContain('input');
@@ -723,9 +838,7 @@ describe.skip('T16: superseded per-dispatch token counters', () => {
     await vis.stop();
 
     const tokenMetric = findMetric(metricExporter, 'conductor.step.tokens')!;
-    const explorePoints = tokenMetric.dataPoints.filter(
-      (d) => d.attributes['step'] === 'explore',
-    );
+    const explorePoints = tokenMetric.dataPoints.filter((d) => d.attributes['step'] === 'explore');
     const kinds = explorePoints.map((d) => d.attributes['kind']);
     expect(kinds).toContain('input');
     expect(kinds).toContain('output');
@@ -940,9 +1053,17 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
     costComplete: true,
     byDimension: [
       { step: 'build', model: 'm1', provider: 'claude', source: 'provider' as const, costUsd: 1.5 },
-      { step: 'build_review', model: 'm2', source: 'rate-card' as const, costUsd: 2 },
+      { step: 'build_review', model: 'm2', source: 'rate-card' as const, restackCause: 'fold' as const, costUsd: 2 },
     ],
-    tokensByDimension: [{ step: 'build', model: 'm1', provider: 'claude', tokens: { input: 150, output: 15 } }],
+    tokensByDimension: [
+      {
+        step: 'build',
+        model: 'm1',
+        provider: 'claude',
+        restackCause: 'fold' as const,
+        tokens: { input: 150, output: 15 },
+      },
+    ],
   };
 
   async function makeRecorder() {
@@ -950,26 +1071,85 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
     const provider = new MeterProvider({
       readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
     });
-    return { exporter, provider, recorder: new MetricsRecorder(provider.getMeter('task-4'), { project: 'test-project', worker: 'test-worker', feature: 'test-feature' }) };
+    return {
+      exporter,
+      provider,
+      recorder: new MetricsRecorder(provider.getMeter('task-4'), {
+        project: 'test-project',
+        worker: 'test-worker',
+        feature: 'test-feature',
+      }),
+    };
   }
 
-  it('records cost and token dimensions with bounded feature identity', async () => {
+  it('records cost and token dimensions with bounded feature identity [late-gate regression]', async () => {
     const { exporter, provider, recorder } = await makeRecorder();
     try {
       recorder.onFeatureCostSnapshot(snapshot);
       await provider.forceFlush();
       expect(findMetric(exporter, 'conductor.feature.step.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 1.5, attributes: { step: 'build', model: 'm1', provider: 'claude', source: 'provider', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
-        expect.objectContaining({ value: 2, attributes: { step: 'build_review', model: 'm2', source: 'rate-card', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({
+          value: 1.5,
+          attributes: {
+            step: 'build',
+            model: 'm1',
+            provider: 'claude',
+            source: 'provider',
+            project: 'test-project',
+            worker: 'test-worker',
+            feature: 'test-feature',
+          },
+        }),
+        expect.objectContaining({
+          value: 2,
+          attributes: {
+            step: 'build_review',
+            model: 'm2',
+            source: 'rate-card',
+            restack_cause: 'fold',
+            project: 'test-project',
+            worker: 'test-worker',
+            feature: 'test-feature',
+          },
+        }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 3.5, attributes: { cost_complete: true, project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({
+          value: 3.5,
+          attributes: { cost_complete: true, project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.step.tokens')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 150, attributes: { step: 'build', model: 'm1', provider: 'claude', kind: 'input', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
-        expect.objectContaining({ value: 15, attributes: { step: 'build', model: 'm1', provider: 'claude', kind: 'output', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({
+          value: 150,
+          attributes: {
+            step: 'build',
+            model: 'm1',
+            provider: 'claude',
+            restack_cause: 'fold',
+            kind: 'input',
+            project: 'test-project',
+            worker: 'test-worker',
+            feature: 'test-feature',
+          },
+        }),
+        expect.objectContaining({
+          value: 15,
+          attributes: {
+            step: 'build',
+            model: 'm1',
+            provider: 'claude',
+            restack_cause: 'fold',
+            kind: 'output',
+            project: 'test-project',
+            worker: 'test-worker',
+            feature: 'test-feature',
+          },
+        }),
       ]);
-    } finally { await provider.shutdown(); }
+    } finally {
+      await provider.shutdown();
+    }
   });
 
   it('projects event tier onto every feature cost point and omits it when absent', async () => {
@@ -977,8 +1157,14 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
     try {
       recorder.onFeatureCostSnapshot({ ...snapshot, tier: 'M' });
       recorder.onFeatureUsageTotal({
-        type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0,
-        costUsd: 2, inputTokens: 1, outputTokens: 1, tier: 'S',
+        type: 'feature_usage_total',
+        dispatches: 1,
+        meteredDispatches: 1,
+        unmeteredDispatches: 0,
+        costUsd: 2,
+        inputTokens: 1,
+        outputTokens: 1,
+        tier: 'S',
       });
       recorder.onFeatureCostSnapshot({
         ...snapshot,
@@ -988,26 +1174,40 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
         tokensByDimension: [{ step: 'untiered', tokens: { input: 200 } }],
       });
       recorder.onFeatureUsageTotal({
-        type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0,
-        costUsd: 5, inputTokens: 1, outputTokens: 1,
+        type: 'feature_usage_total',
+        dispatches: 1,
+        meteredDispatches: 1,
+        unmeteredDispatches: 0,
+        costUsd: 5,
+        inputTokens: 1,
+        outputTokens: 1,
       });
       recorder.onFeatureCostSnapshot({ ...snapshot, costUsd: Number.NaN, tier: 'M' });
       await provider.forceFlush();
 
-      const points = (name: string) => findMetric(exporter, name)?.dataPoints.map(({ value, attributes }) => ({ value, attributes }));
+      const points = (name: string) =>
+        findMetric(exporter, name)?.dataPoints.map(({ value, attributes }) => ({ value, attributes }));
       expect({
         featureCost: points('conductor.feature.cost'),
         featureStepCost: points('conductor.feature.step.cost'),
         featureStepTokens: points('conductor.feature.step.tokens'),
       }).toEqual({
         featureCost: expect.arrayContaining([
-          expect.objectContaining({ value: 3.5, attributes: expect.objectContaining({ cost_complete: true, tier: 'M' }) }),
-          expect.objectContaining({ value: 2, attributes: expect.objectContaining({ cost_complete: true, tier: 'S' }) }),
+          expect.objectContaining({
+            value: 3.5,
+            attributes: expect.objectContaining({ cost_complete: true, tier: 'M' }),
+          }),
+          expect.objectContaining({
+            value: 2,
+            attributes: expect.objectContaining({ cost_complete: true, tier: 'S' }),
+          }),
           expect.objectContaining({
             value: 4,
             attributes: {
               cost_complete: false,
-              project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+              project: 'test-project',
+              worker: 'test-worker',
+              feature: 'test-feature',
             },
           }),
           expect.objectContaining({ value: 5, attributes: expect.not.objectContaining({ tier: expect.anything() }) }),
@@ -1023,23 +1223,38 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
           expect.objectContaining({ value: 200, attributes: expect.not.objectContaining({ tier: expect.anything() }) }),
         ]),
       });
-    } finally { await provider.shutdown(); }
+    } finally {
+      await provider.shutdown();
+    }
   });
 
   it('records incomplete totals, omits optional model, and retains an unchanged gauge value', async () => {
     const { exporter, provider, recorder } = await makeRecorder();
     try {
-      const incomplete = { ...snapshot, costComplete: false, byDimension: [{ step: 'build', costUsd: 1.5 }], tokensByDimension: [] };
+      const incomplete = {
+        ...snapshot,
+        costComplete: false,
+        byDimension: [{ step: 'build', costUsd: 1.5 }],
+        tokensByDimension: [],
+      };
       recorder.onFeatureCostSnapshot(incomplete);
       recorder.onFeatureCostSnapshot(incomplete);
       await provider.forceFlush();
       expect(findMetric(exporter, 'conductor.feature.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 3.5, attributes: { cost_complete: false, project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({
+          value: 3.5,
+          attributes: { cost_complete: false, project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.step.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 1.5, attributes: { step: 'build', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({
+          value: 1.5,
+          attributes: { step: 'build', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        }),
       ]);
-    } finally { await provider.shutdown(); }
+    } finally {
+      await provider.shutdown();
+    }
   });
 
   it('keeps only dispatch counting on usage-bearing dispatches and limits usd instruments to feature gauges', async () => {
@@ -1049,18 +1264,31 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
       recorder.onFeatureCostSnapshot(snapshot);
       await provider.forceFlush();
       const names = getMetricNames(exporter);
-      expect(names).toEqual(expect.arrayContaining(['conductor.step.dispatches', 'conductor.feature.cost', 'conductor.feature.step.cost']));
+      expect(names).toEqual(
+        expect.arrayContaining(['conductor.step.dispatches', 'conductor.feature.cost', 'conductor.feature.step.cost']),
+      );
       expect(names).not.toEqual(expect.arrayContaining(['conductor.step.cost', 'conductor.step.tokens']));
-      const usdNames = exporter.getMetrics().flatMap((rm) => rm.scopeMetrics.flatMap((sm) => sm.metrics))
-        .filter((metric) => metric.descriptor.unit === 'usd').map((metric) => metric.descriptor.name);
+      const usdNames = exporter
+        .getMetrics()
+        .flatMap((rm) => rm.scopeMetrics.flatMap((sm) => sm.metrics))
+        .filter((metric) => metric.descriptor.unit === 'usd')
+        .map((metric) => metric.descriptor.name);
       expect(usdNames).toEqual(['conductor.feature.cost', 'conductor.feature.step.cost']);
       for (const metric of ['conductor.feature.cost', 'conductor.feature.step.cost']) {
         for (const point of findMetric(exporter, metric)?.dataPoints ?? []) {
-          expect(point.attributes).toMatchObject({ project: 'test-project', worker: 'test-worker', feature: 'test-feature' });
-          expect(Object.keys(point.attributes)).not.toEqual(expect.arrayContaining(['run', 'run_id', 'conductor.run.id']));
+          expect(point.attributes).toMatchObject({
+            project: 'test-project',
+            worker: 'test-worker',
+            feature: 'test-feature',
+          });
+          expect(Object.keys(point.attributes)).not.toEqual(
+            expect.arrayContaining(['run', 'run_id', 'conductor.run.id']),
+          );
         }
       }
-    } finally { await provider.shutdown(); }
+    } finally {
+      await provider.shutdown();
+    }
   });
 
   it('does not record a non-finite snapshot total or any of its buckets', async () => {
@@ -1076,7 +1304,9 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
 
       expect(findMetric(exporter, 'conductor.feature.cost')).toBeUndefined();
       expect(findMetric(exporter, 'conductor.feature.step.cost')).toBeUndefined();
-    } finally { await provider.shutdown(); }
+    } finally {
+      await provider.shutdown();
+    }
   });
 
   it('skips a non-finite dimension bucket while preserving a finite incomplete total', async () => {
@@ -1092,10 +1322,15 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
       await provider.forceFlush();
 
       expect(findMetric(exporter, 'conductor.feature.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 0, attributes: { cost_complete: false, project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({
+          value: 0,
+          attributes: { cost_complete: false, project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.step.cost')).toBeUndefined();
-    } finally { await provider.shutdown(); }
+    } finally {
+      await provider.shutdown();
+    }
   });
 
   it('records only a finite present input kind for an unknown-model token bucket', async () => {
@@ -1104,14 +1339,16 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
       recorder.onFeatureCostSnapshot({
         ...snapshot,
         byDimension: [],
-        tokensByDimension: [{
-          step: 'unknown_model',
-          tokens: {
-            input: 10,
-            output: Number.NaN,
-            cacheRead: Number.POSITIVE_INFINITY,
+        tokensByDimension: [
+          {
+            step: 'unknown_model',
+            tokens: {
+              input: 10,
+              output: Number.NaN,
+              cacheRead: Number.POSITIVE_INFINITY,
+            },
           },
-        }],
+        ],
       });
       await provider.forceFlush();
 
@@ -1127,7 +1364,9 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
           },
         }),
       ]);
-    } finally { await provider.shutdown(); }
+    } finally {
+      await provider.shutdown();
+    }
   });
 });
 
@@ -1158,13 +1397,43 @@ describe('Task 3: dispatch metering classification', () => {
     await vis.stop();
 
     const dispatches = findMetric(metricExporter, 'conductor.step.dispatches')!;
-    expect(dispatches.dataPoints.map((dataPoint) => ({
-      value: dataPoint.value,
-      attributes: dataPoint.attributes,
-    }))).toEqual([
-      { value: 1, attributes: { step: 'explore', metering: 'fully-metered', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
-      { value: 1, attributes: { step: 'plan', metering: 'cost-unmetered', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
-      { value: 1, attributes: { step: 'build', metering: 'unmetered', provider: 'claude', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
+    expect(
+      dispatches.dataPoints.map((dataPoint) => ({
+        value: dataPoint.value,
+        attributes: dataPoint.attributes,
+      })),
+    ).toEqual([
+      {
+        value: 1,
+        attributes: {
+          step: 'explore',
+          metering: 'fully-metered',
+          project: 'test-project',
+          worker: 'unknown',
+          feature: 'test-feature',
+        },
+      },
+      {
+        value: 1,
+        attributes: {
+          step: 'plan',
+          metering: 'cost-unmetered',
+          project: 'test-project',
+          worker: 'unknown',
+          feature: 'test-feature',
+        },
+      },
+      {
+        value: 1,
+        attributes: {
+          step: 'build',
+          metering: 'unmetered',
+          provider: 'claude',
+          project: 'test-project',
+          worker: 'unknown',
+          feature: 'test-feature',
+        },
+      },
     ]);
   });
 });
@@ -1182,20 +1451,36 @@ describe('Task 4: unmetered close observability', () => {
     await vis.stop();
 
     const dispatches = findMetric(metricExporter, 'conductor.step.dispatches')!;
-    expect(dispatches.dataPoints
-      .filter((dataPoint) => dataPoint.attributes['step'] === 'build')
-      .map((dataPoint) => ({ value: dataPoint.value, attributes: dataPoint.attributes }))).toEqual([
-        { value: 1, attributes: { step: 'build', metering: 'unmetered', provider: 'claude', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
-      ]);
+    expect(
+      dispatches.dataPoints
+        .filter((dataPoint) => dataPoint.attributes['step'] === 'build')
+        .map((dataPoint) => ({ value: dataPoint.value, attributes: dataPoint.attributes })),
+    ).toEqual([
+      {
+        value: 1,
+        attributes: {
+          step: 'build',
+          metering: 'unmetered',
+          provider: 'claude',
+          project: 'test-project',
+          worker: 'unknown',
+          feature: 'test-feature',
+        },
+      },
+    ]);
     expect(findMetric(metricExporter, 'conductor.step.duration')?.dataPoints).toContainEqual(
       expect.objectContaining({ attributes: expect.objectContaining({ step: 'build' }) }),
     );
-    expect(findMetric(metricExporter, 'conductor.step.tokens')?.dataPoints.filter(
-      (dataPoint) => dataPoint.attributes['step'] === 'build',
-    ) ?? []).toHaveLength(0);
-    expect(findMetric(metricExporter, 'conductor.step.cost')?.dataPoints.filter(
-      (dataPoint) => dataPoint.attributes['step'] === 'build',
-    ) ?? []).toHaveLength(0);
+    expect(
+      findMetric(metricExporter, 'conductor.step.tokens')?.dataPoints.filter(
+        (dataPoint) => dataPoint.attributes['step'] === 'build',
+      ) ?? [],
+    ).toHaveLength(0);
+    expect(
+      findMetric(metricExporter, 'conductor.step.cost')?.dataPoints.filter(
+        (dataPoint) => dataPoint.attributes['step'] === 'build',
+      ) ?? [],
+    ).toHaveLength(0);
   });
 });
 
@@ -1246,12 +1531,16 @@ describe('Task 3: shipped-record / OTel dispatch parity', () => {
     }
 
     const rollup = await computeCostRollup(tempDir);
-    const otelDispatches = findMetric(metricExporter, 'conductor.step.dispatches')!.dataPoints
-      .reduce((sum, point) => sum + Number(point.value), 0);
-    const bootstrapDispatches = findMetric(metricExporter, 'conductor.step.dispatches')!.dataPoints
-      .filter((point) => point.attributes['step'] === 'bootstrap');
-    const bootstrapDurations = findMetric(metricExporter, 'conductor.step.duration')!.dataPoints
-      .filter((point) => point.attributes['step'] === 'bootstrap');
+    const otelDispatches = findMetric(metricExporter, 'conductor.step.dispatches')!.dataPoints.reduce(
+      (sum, point) => sum + Number(point.value),
+      0,
+    );
+    const bootstrapDispatches = findMetric(metricExporter, 'conductor.step.dispatches')!.dataPoints.filter(
+      (point) => point.attributes['step'] === 'bootstrap',
+    );
+    const bootstrapDurations = findMetric(metricExporter, 'conductor.step.duration')!.dataPoints.filter(
+      (point) => point.attributes['step'] === 'bootstrap',
+    );
 
     expect({ otelDispatches, rollupDispatches: rollup.dispatches }).toEqual({
       otelDispatches: 2,
@@ -1314,13 +1603,23 @@ describe('Task 3: metric identity attributes', () => {
     }).toEqual({
       duration: [{ step: 'build', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
       retries: [{ step: 'build', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
-      dispatches: [{ step: 'build', metering: 'cost-unmetered', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
+      dispatches: [
+        { step: 'build', metering: 'cost-unmetered', project: 'project-a', worker: 'worker-a', feature: 'feature-a' },
+      ],
     });
   });
 
   it('keeps project identity distinct between recorder instances', async () => {
-    const first = await recordMetricsWithIdentity({ project: 'project-a', worker: 'worker-a', feature: 'shared-feature' });
-    const second = await recordMetricsWithIdentity({ project: 'project-b', worker: 'worker-b', feature: 'shared-feature' });
+    const first = await recordMetricsWithIdentity({
+      project: 'project-a',
+      worker: 'worker-a',
+      feature: 'shared-feature',
+    });
+    const second = await recordMetricsWithIdentity({
+      project: 'project-b',
+      worker: 'worker-b',
+      feature: 'shared-feature',
+    });
 
     expect([
       findMetric(first, 'conductor.step.duration')!.dataPoints[0].attributes['project'],
@@ -1352,34 +1651,36 @@ describe('Task 4: bounded metric identity', () => {
       .flatMap((metric) => metric.dataPoints.map((dataPoint) => dataPoint.attributes));
 
     expect(dataPointAttributes).not.toHaveLength(0);
-    expect(dataPointAttributes.every((attributes) => (
-      !Object.keys(attributes).some((key) => /run[._-]?id/i.test(key))
-      && !Object.values(attributes).includes(runId)
-    ))).toBe(true);
+    expect(
+      dataPointAttributes.every(
+        (attributes) =>
+          !Object.keys(attributes).some((key) => /run[._-]?id/i.test(key)) &&
+          !Object.values(attributes).includes(runId),
+      ),
+    ).toBe(true);
   });
 
   it('pinning: counters aggregate across projects without changing instrument names', async () => {
-    const first = await recordMetricsWithIdentity({ project: 'project-a', worker: 'worker-a', feature: 'shared-feature' });
-    const second = await recordMetricsWithIdentity({ project: 'project-b', worker: 'worker-b', feature: 'shared-feature' });
-    const retries = (exporter: InMemoryMetricExporter) => (
-      findMetric(exporter, 'conductor.step.retries')!.dataPoints[0].value as number
-    );
+    const first = await recordMetricsWithIdentity({
+      project: 'project-a',
+      worker: 'worker-a',
+      feature: 'shared-feature',
+    });
+    const second = await recordMetricsWithIdentity({
+      project: 'project-b',
+      worker: 'worker-b',
+      feature: 'shared-feature',
+    });
+    const retries = (exporter: InMemoryMetricExporter) =>
+      findMetric(exporter, 'conductor.step.retries')!.dataPoints[0].value as number;
 
     expect({
       firstInstrumentNames: getMetricNames(first),
       secondInstrumentNames: getMetricNames(second),
       retriesTotal: retries(first) + retries(second),
     }).toEqual({
-      firstInstrumentNames: [
-        'conductor.step.duration',
-        'conductor.step.retries',
-        'conductor.step.dispatches',
-      ],
-      secondInstrumentNames: [
-        'conductor.step.duration',
-        'conductor.step.retries',
-        'conductor.step.dispatches',
-      ],
+      firstInstrumentNames: ['conductor.step.duration', 'conductor.step.retries', 'conductor.step.dispatches'],
+      secondInstrumentNames: ['conductor.step.duration', 'conductor.step.retries', 'conductor.step.dispatches'],
       retriesTotal: 2,
     });
   });
@@ -1428,7 +1729,9 @@ describe('run outcome counter', () => {
       readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })],
     });
     new MetricsRecorder(provider.getMeter('terminated-run'), {
-      project: 'test-project', worker: 'unknown', feature: 'test-feature',
+      project: 'test-project',
+      worker: 'unknown',
+      feature: 'test-feature',
     }).onRunClose('terminated');
     await provider.shutdown();
 
@@ -1458,14 +1761,15 @@ describe('run outcome counter', () => {
       }),
     ]);
   });
-
 });
 
 // Covers: task:2
 describe('Task 2: active duration instruments', () => {
   it('creates the missing counter and restricts active-duration labels to the approved vocabulary', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const recorder = new MetricsRecorder(
       provider.getMeter('task-2-instruments'),
       { project: 'project', worker: 'worker', feature: 'feature' },
@@ -1478,8 +1782,11 @@ describe('Task 2: active duration instruments', () => {
       const allowed = new Set(['project', 'worker', 'feature', 'tier', 'state', 'reason', 'deployment.environment']);
       const points = (name: string) => findMetric(exporter, name)?.dataPoints ?? [];
       expect(findMetric(exporter, 'conductor.feature.duration.active.missing')).toBeDefined();
-      expect([...points('conductor.feature.duration.active'), ...points('conductor.feature.duration.active.missing')]
-        .every((point) => Object.keys(point.attributes).every((key) => allowed.has(key)))).toBe(true);
+      expect(
+        [...points('conductor.feature.duration.active'), ...points('conductor.feature.duration.active.missing')].every(
+          (point) => Object.keys(point.attributes).every((key) => allowed.has(key)),
+        ),
+      ).toBe(true);
     } finally {
       await provider.shutdown();
     }
