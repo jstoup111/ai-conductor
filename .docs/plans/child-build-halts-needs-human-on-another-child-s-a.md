@@ -594,3 +594,19 @@ All engine paths below are under `src/conductor/src/engine/` unless they start a
 **Done when:**
 - [test] S6.1 is satisfied by this task.
 - The repair for task rem-prd-audit-18 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-d4-legacy-cleanup: In src/conductor/src/engine/conductor.ts BUILD dispatch (~12245), call adoptLegacyRemediationInputs() before every build step dispatch, independent of buildReviewAdjudicationEnabled(), and stop depending on durableBuildReviewRetryContext for it (keep that call idempotent). Add a conductor test with build-review adjudication disabled: a stacked child's BUILD adopts a flat work order that has an open owner into that owner's region, and removes flat remediation inputs that have no open owner (plan Tasks 12/13 behavior preserved).
+**Gate:** as-built
+**Rationale:** Verified: adoptLegacyRemediationInputs() is called only inside durableBuildReviewRetryContext (conductor.ts:6397), and its sole BUILD-dispatch caller is gated by buildReviewAdjudicationEnabled() at conductor.ts:12245. When adjudication is disabled, the legacy adoption and removal of flat inputs never runs before a child's BUILD. ADR D4 already makes that boundary unconditional, so no architecture decision is needed. This is conforming implementation drift admitted by plan Tasks 12 and 13 (legacy adoption and unowned removal before a child's BUILD). Route to BUILD.
+**Governing clause:** adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 4
+**Done when:**
+- adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-d4-legacy-cleanup is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-d3-terminal-stall-retire: In src/conductor/src/engine/conductor.ts terminal step-failure HALT path (~16987-17001), when the failed step is a build stall, retire the active region's captured stall question and stall-routed typed gap plan (best-effort, non-fatal) after the HALT marker is written. Leave existing retry, auto-park and HALT-class routing unchanged. Add conductor tests for a zero-work stall reaching the terminal HALT through each of these routes: remediation budget exhausted, planner halt, and dispatch exception. Each test asserts that the question and gap plan files for child 3 are gone and that the HALT class and reason are unchanged.
+**Gate:** as-built
+**Rationale:** Verified: the terminal retries-exhausted HALT path at conductor.ts ~16987-17001 writes the needs-human HALT, surfaces the PR, emits the loop halt and returns. It never retires the captured stall question or the remaining stall gap plan. The zero-work dispatch-exception, misroute, planner-halt, planner-fault and budget-exhausted branches all fall through to that path. ADR D3 already requires deleting the question and gap plan once their stall halts, and plan Tasks 10 and 11 admit the work, so this is conforming implementation drift. Route to BUILD.
+**Governing clause:** adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 3
+**Done when:**
+- adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-d3-terminal-stall-retire is committed and its targeted tests pass.
