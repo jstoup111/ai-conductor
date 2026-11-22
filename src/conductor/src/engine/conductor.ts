@@ -6394,9 +6394,6 @@ export class Conductor {
     | { readonly kind: 'absent' }
     | { readonly kind: 'invalid'; readonly reason: string }
   > {
-    // The BUILD boundary invokes this before every dispatch. Keep the helper
-    // idempotent for direct durable-recovery callers and restart compatibility.
-    await this.adoptLegacyRemediationInputs();
     const featureRead = await readRemediationCaseStoreFeature(this.projectRoot, undefined, this.activeRegionChild);
     if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
     if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
@@ -12244,12 +12241,6 @@ export class Conductor {
             }
           }
         }
-        if (step.name === 'build') {
-          // ADR D4: compatibility adoption is a region-boundary operation,
-          // not a build-review-adjudication feature.  A stacked child must
-          // never inherit flat inputs merely because adjudication is disabled.
-          await this.adoptLegacyRemediationInputs();
-        }
         if (step.name === 'build' && this.buildReviewAdjudicationEnabled()) {
           // Durable, not process-local: this is the clause an in-memory hint
           // alone can never satisfy (Task 18 Done-when 5).
@@ -12935,6 +12926,11 @@ export class Conductor {
                   }
                 }
                 if (step.name === 'build_review' && !missingWorktree) await this.settlePreservedSuiteProof(state);
+                // ADR D4: compatibility adoption is a per-dispatch boundary,
+                // independent of build-review adjudication. A retry can see a
+                // newly written legacy flat input, so it must reconcile it
+                // before every BUILD provider invocation.
+                if (step.name === 'build') await this.adoptLegacyRemediationInputs();
                 const dispatchRetryHint =
                   step.name === 'build' ? await this.buildTypedRemediationPlanInput(retryHint) : retryHint;
                 result =
