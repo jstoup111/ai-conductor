@@ -421,6 +421,25 @@ describe('Conductor typed remediation-plan admission', () => {
     );
   });
 
+  // Covers: task:2
+  it('omits prior as-built cases from both files in a PRD-audit-only dispatch', async () => {
+    const result = await fixture('codex');
+
+    expect(result.provider.invocationCount).toBe(1);
+    const history = await readdir(join(result.root, '.pipeline', 'remediation-history'));
+    const [activeName, resolvedName] = [
+      history.find((name) => name.endsWith('.active.json')),
+      history.find((name) => name.endsWith('.resolved.json')),
+    ];
+    expect(activeName).toBeDefined();
+    expect(resolvedName).toBeDefined();
+    const [active, resolved] = await Promise.all([activeName, resolvedName].map((name) =>
+      readFile(join(result.root, '.pipeline', 'remediation-history', name!), 'utf8').then(JSON.parse),
+    ));
+    expect(active).not.toHaveProperty('priorAsBuiltCases');
+    expect(resolved).not.toHaveProperty('priorAsBuiltCases');
+  });
+
   // Covers: task:1
   it('dispatches a validation-group gap plan with over 512 KiB of complete history', async () => {
     const refusals = Array.from({ length: 3 }, (_, index) => ({

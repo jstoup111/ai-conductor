@@ -359,6 +359,60 @@ describe('remediation projection', () => {
     );
   });
 
+  // Covers: task:2
+  it('splits active and resolved as-built cases without losing case history', async () => {
+    const root = await fixture();
+    const cases = [
+      ['open', 'open', 'as-built:prior:open'],
+      ['needs-human', 'needs-human', 'as-built:prior:human'],
+      ['resolved-archive', 'resolved', 'as-built:prior:archive'],
+      ['resolved-archive-2', 'resolved', 'as-built:prior:archive-2'],
+      ['resolved-active', 'resolved', 'as-built:pending:1'],
+    ].map(([id, status, findingId]) => ({
+      id, domain: 'as_built', status, recurrenceCount: 2, repairTaskIds: [`repair-${id}`],
+      sources: [{ findingId, attemptId: 'prior', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '7' }, summary: `Full summary for ${id}.`, relation: 'new', reason: 'Recorded by the prior as-built review.' }],
+    }));
+    await writeFile(join(root, '.docs', 'plans', 'active.md'), [
+      '# Plan', '### Task 7: Repair typed projection', '**Done when:**', '- repair',
+      ...cases.flatMap((entry) => [`### Task ${entry.repairTaskIds[0]}: Repair ${entry.id}`, '**Done when:**', '- repair']),
+    ].join('\n'));
+    await writeAsBuiltVerdict(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+      version: 'v4', feature: { version: 'v1', repository: 'acme/conductor', feature: 'remediation-projection' },
+      cases: [], prdWideningCases: [], asBuiltCases: cases, suppressions: [], outbox: [],
+    }));
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: cases.map((entry) => ({ id: entry.repairTaskIds[0], status: 'completed' })),
+    }));
+    const result = await buildRemediationProjection(root, { source: 'as-built', activePlanPath: '.docs/plans/active.md', attemptRunId: 'split' }, undefined, {
+      readPendingAsBuiltRemediationFindings: async () => ({ kind: 'ok', findings: [{
+        gate: 'architecture_review_as_built', finding: 'as-built:pending:1', class: 'REMEDIABLE', governingClause: 'Task 7',
+        reference: { kind: 'plan-task', taskId: '7' }, summary: 'Pending source.', outcome: 'remediated',
+      }] }),
+    });
+    if (!result.ok) throw new Error(result.fault.detail);
+    const directory = join(root, '.pipeline', 'remediation-history');
+    const active = JSON.parse(await readFile(join(directory, 'split.active.json'), 'utf8'));
+    const resolved = JSON.parse(await readFile(join(directory, 'split.resolved.json'), 'utf8'));
+    expect(active.priorAsBuiltCases.map((entry: { id: string }) => entry.id)).toEqual(['open', 'needs-human', 'resolved-active']);
+    expect(resolved.priorAsBuiltCases.map((entry: { id: string }) => entry.id)).toEqual(['resolved-archive', 'resolved-archive-2']);
+    expect([...active.priorAsBuiltCases, ...resolved.priorAsBuiltCases].sort((left: { id: string }, right: { id: string }) => left.id.localeCompare(right.id)))
+      .toEqual([...result.projection.priorAsBuiltCases!].sort((left, right) => left.id.localeCompare(right.id)));
+    expect(active.pendingAsBuiltFindings).toEqual(result.projection.pendingAsBuiltFindings);
+    expect(resolved).toMatchObject({ pendingAsBuiltFindings: [], priorLaps: [], refusals: [] });
+    expect(resolved.priorAsBuiltCases[0]).toMatchObject({
+      id: 'resolved-archive', status: 'resolved', recurrenceCount: 2,
+      sources: [{ findingId: 'as-built:prior:archive', summary: 'Full summary for resolved-archive.' }],
+      repairTasks: [{ id: 'repair-resolved-archive', resolution: 'completed' }],
+    });
+    expect(resolved.priorAsBuiltCases[1]).toMatchObject({
+      id: 'resolved-archive-2', status: 'resolved', recurrenceCount: 2,
+      sources: [{ findingId: 'as-built:prior:archive-2', summary: 'Full summary for resolved-archive-2.' }],
+      repairTasks: [{ id: 'repair-resolved-archive-2', resolution: 'completed' }],
+    });
+  });
+
   // Covers: task:3
   it('keeps prior as-built context scoped to as-built requests and faults instead of truncating it', async () => {
     const root = await fixture();

@@ -325,7 +325,7 @@ function structuredProjection(projection: RemediationProjection): Omit<Remediati
 type RemediationHistoryContents = Pick<
   RemediationProjection,
   'pendingAsBuiltFindings' | 'priorLaps' | 'refusals'
-> & { readonly priorAsBuiltCases: readonly RemediationProjectionPriorAsBuiltCase[] };
+> & { readonly priorAsBuiltCases?: readonly RemediationProjectionPriorAsBuiltCase[] };
 
 function historyDigest(contents: RemediationHistoryContents): string {
   return `sha256:${createHash('sha256').update(JSON.stringify(contents)).digest('hex')}`;
@@ -352,15 +352,23 @@ async function writeRemediationHistory(
   const directory = join(worktree, relativeDirectory);
   const activePath = join(directory, `${attemptId}.active.json`);
   const resolvedPath = join(directory, `${attemptId}.resolved.json`);
+  const priorCases = projection.priorAsBuiltCases;
+  const pendingFindingIds = new Set(projection.pendingAsBuiltFindings.map((finding) => finding.finding));
+  const activeCases = priorCases?.filter((entry) =>
+    entry.status !== 'resolved' || entry.sources.some((source) => pendingFindingIds.has(source.findingId)),
+  );
+  const resolvedCases = priorCases?.filter((entry) =>
+    entry.status === 'resolved' && !entry.sources.some((source) => pendingFindingIds.has(source.findingId)),
+  );
   const active: RemediationHistoryContents = {
     pendingAsBuiltFindings: projection.pendingAsBuiltFindings,
-    priorAsBuiltCases: projection.priorAsBuiltCases ?? [],
+    ...(priorCases === undefined ? {} : { priorAsBuiltCases: activeCases }),
     priorLaps: projection.priorLaps,
     refusals: projection.refusals,
   };
   const resolved: RemediationHistoryContents = {
     pendingAsBuiltFindings: [],
-    priorAsBuiltCases: [],
+    ...(priorCases === undefined ? {} : { priorAsBuiltCases: resolvedCases }),
     priorLaps: [],
     refusals: [],
   };
@@ -375,8 +383,8 @@ async function writeRemediationHistory(
       count: projection.pendingAsBuiltFindings.length,
     },
     priorAsBuiltCases: {
-      ids: active.priorAsBuiltCases.map((entry) => entry.id),
-      count: active.priorAsBuiltCases.length,
+      ids: priorCases?.map((entry) => entry.id) ?? [],
+      count: priorCases?.length ?? 0,
     },
     priorLaps: {
       ids: projection.priorLaps.map((lap) => lap.gate),
