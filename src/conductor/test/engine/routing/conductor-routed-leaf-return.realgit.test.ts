@@ -17,11 +17,7 @@ import {
   routeRecordRefFor,
 } from '../../../src/engine/routing/routing-refs.js';
 import { advanceRound, requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
-import {
-  checkRoundSupersession,
-  dispatchStackRoundsCommand,
-  supersedeRound,
-} from '../../../src/engine/stack-rounds-cli.js';
+import { checkRoundSupersession, supersedeRound } from '../../../src/engine/stack-rounds-cli.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { readState, writeState } from '../../../src/engine/state.js';
