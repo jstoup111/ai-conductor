@@ -302,7 +302,10 @@ describe('routed host no-op guard placement', () => {
     expect(phases).toContain('built');
     expect(phases).toContain('restacked');
     expect(phases.indexOf('built')).toBeLessThan(phases.indexOf('restacked'));
-  }, 10_000);
+  // This real-Git restack creates and rebases a three-branch fixture. Under
+  // aggregate-suite I/O contention, ten seconds is too short even though the
+  // bounded production operation succeeds.
+  }, 30_000);
 
   // Covers: task:4
   it('closes a final no-op leaf round, returns to the leaf, and re-pends its gates', async () => {

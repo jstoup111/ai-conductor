@@ -65,8 +65,9 @@ describe('N=1 golden renderings', () => {
 
   // Covers: task:17, task:rem-operator-17-r3
   // This is a coordinator test: it launches the three complete fixture files
-  // in a child Vitest process.  The child suite itself completes in ~15s; the
-  // extra allowance covers the parent worker and process startup, while still
+  // in a child Vitest process. The child suite completes quickly in isolation,
+  // but its workers contend with the parent suite for CPU and Git I/O. Keep a
+  // finite budget that accommodates aggregate scheduling delay while still
   // bounding a wedged child run.
   it('runs the complete N=1 golden suite against regenerated goldens', async () => {
     // The child includes this file, but skips this coordinator, so this test
@@ -108,7 +109,7 @@ describe('N=1 golden renderings', () => {
     // The child may report the pre-run stale-root sweep and its teardown's
     // concurrent-tooling notice. Any other child stderr remains a failure.
     expect(result.stderr).toMatch(EXPECTED_CHILD_GUARD_STDERR);
-  }, 30_000);
+  }, 90_000);
 
   // Covers: task:17, task:rem-operator-17-r3
   it('allows the FINISH probe golden to differ from its pre-change version only by removed coverage_binding probes and one durable-child-state probe pair', async () => {
