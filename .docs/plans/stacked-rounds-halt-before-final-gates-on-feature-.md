@@ -177,3 +177,12 @@ Verified against the source named above: root-only restoration loses child regio
 ## Validation responsibilities
 
 Each implementation task supplies its scoped behavioral RED/GREEN evidence. The managed aggregate and SHIP gates remain responsible for completed-feature validation. This specification changes no executable code; no implementation test result is claimed here.
+
+### Task rem-prd-audit-2: Strengthen the settled-leaf resume test in src/conductor/test/engine/routing/conductor-routed-leaf-return.realgit.test.ts. Assert that the first dispatched step is the pending whole-feature validation (manual_test), that `dispatched` contains no 'build' step, and that .pipeline/HALT is absent after run(). Keep the existing activeRegionChild/findResumeIndex checks.
+**Gate:** prd-audit
+**Rationale:** The implementation exists: conductor.ts binds the leaf through prepareSettledLeafHandoff before resume selection. The gap is test coverage only. The test 'resumes a settled leaf return through its child overlay before whole-feature validation' (src/conductor/test/engine/routing/conductor-routed-leaf-return.realgit.test.ts:527) collects `dispatched` without asserting it, never checks .pipeline/HALT, and its earlier expect(dispatched) assertion was removed. Task 2's first doneWhen criterion admits this repair. No architecture or product decision is needed.
+**Criterion:** S2.1
+**Parent task:** 2
+**Done when:**
+- [test] S2.1 is satisfied by this task.
+- The repair for task rem-prd-audit-2 is committed and its targeted tests pass.
