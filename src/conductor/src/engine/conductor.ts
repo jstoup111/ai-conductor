@@ -6394,6 +6394,8 @@ export class Conductor {
     | { readonly kind: 'absent' }
     | { readonly kind: 'invalid'; readonly reason: string }
   > {
+    // The BUILD boundary invokes this before every dispatch. Keep the helper
+    // idempotent for direct durable-recovery callers and restart compatibility.
     await this.adoptLegacyRemediationInputs();
     const featureRead = await readRemediationCaseStoreFeature(this.projectRoot, undefined, this.activeRegionChild);
     if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
@@ -12242,6 +12244,12 @@ export class Conductor {
             }
           }
         }
+        if (step.name === 'build') {
+          // ADR D4: compatibility adoption is a region-boundary operation,
+          // not a build-review-adjudication feature.  A stacked child must
+          // never inherit flat inputs merely because adjudication is disabled.
+          await this.adoptLegacyRemediationInputs();
+        }
         if (step.name === 'build' && this.buildReviewAdjudicationEnabled()) {
           // Durable, not process-local: this is the clause an in-memory hint
           // alone can never satisfy (Task 18 Done-when 5).
@@ -16985,6 +16993,14 @@ export class Conductor {
                   : `${reason}\n\nRemediation planner fault: ${finishRemediationPlannerFault}`;
               if (!existingHalt || existingHalt.trim().length === 0) {
                 await this.writeHaltMarker(terminalReason + '\n', 'needs-human');
+              }
+              // A zero-work stall reaches this common terminal path after its
+              // planner outcome falls through. The HALT now preserves the
+              // question, so retire the region-scoped live inputs afterwards.
+              // Best effort is intentional: a later BUILD boundary repeats
+              // compatible cleanup without changing the terminal outcome.
+              if (step.name === 'build' && lastBuildStallReason !== undefined) {
+                await this.retireTerminalBuildStallInputs();
               }
               // The HALT marker is written before escalation. All state transitions
               // have already crossed the state-store boundary.

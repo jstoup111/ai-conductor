@@ -21,6 +21,8 @@ import { remediationCaseJudgementPath } from '../../src/engine/remediation-case-
 import { remediationTypedPlanPath } from '../../src/engine/remediation-plan-store.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { writeState } from '../../src/engine/state.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 
 const FEATURE = { version: 'v1', repository: 'acme/conductor', feature: 'stacked-review' } as const;
 const temporaryDirectories: string[] = [];
@@ -302,6 +304,75 @@ describe('child-scoped build-review remediation cases', () => {
       expect(readFile(join(root, '.pipeline', 'build-stall-question.md'), 'utf8')).rejects.toMatchObject({
         code: 'ENOENT',
       }),
+    ]);
+  });
+
+  // Covers: rem-as-built-rem-asbuilt-d4-legacy-cleanup
+  it('adopts and retires flat remediation inputs at BUILD dispatch when adjudication is disabled', async () => {
+    const root = await projectRoot();
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    await new RemediationCaseStore(root, FEATURE, { child: child4 }).mutate(async () => ({
+      value: undefined,
+      nextState: appliedState('child-4-case'),
+    }));
+    await publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair adopted child 4'));
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(remediationCaseJudgementPath(root), '{"legacy":true}');
+    await writeFile(remediationTypedPlanPath(root), '{"legacy":true}');
+    await writeFile(join(root, '.pipeline', 'build-stall-question.md'), 'legacy question');
+    await writeState(join(root, '.pipeline', 'conduct-state.json'), {
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
+      conflict_check: 'done', plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', writing_system_tests: 'done', complexity_tier: 'M',
+    } as ConductState);
+
+    const dispatched: StepName[] = [];
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      stepRunner: { run: async (step) => { dispatched.push(step); return { success: true }; } },
+      events: new ConductorEventEmitter(),
+      config: { build_review: { adjudication: { enabled: false } } },
+      fromStep: 'build',
+      verifyArtifacts: false,
+    });
+    (conductor as unknown as { activeRegionChild: typeof child3 }).activeRegionChild = child3;
+
+    await conductor.run();
+
+    expect(dispatched).toContain('build');
+    await expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(buildReviewWorkOrderPath(root, child4), 'utf8')).resolves.toContain('Repair adopted child 4');
+    await Promise.all([
+      expect(readFile(remediationCaseJudgementPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
+      expect(readFile(remediationTypedPlanPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
+      expect(readFile(join(root, '.pipeline', 'build-stall-question.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
+    ]);
+  });
+
+  // Covers: rem-as-built-rem-asbuilt-d3-terminal-stall-retire
+  it('retires only child 3 stall inputs after its terminal HALT has been written', async () => {
+    const root = await projectRoot();
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    await mkdir(join(root, '.pipeline', 'children', String(child3)), { recursive: true });
+    await mkdir(join(root, '.pipeline', 'children', String(child4)), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', String(child3), 'build-stall-question.md'), 'child 3 question');
+    await writeFile(remediationTypedPlanPath(root, child3), '{"stalled":true}');
+    await writeFile(join(root, '.pipeline', 'children', String(child4), 'build-stall-question.md'), 'child 4 question');
+    await writeFile(remediationTypedPlanPath(root, child4), '{"stalled":true}');
+
+    const conductor = retryContext(root, child3) as unknown as {
+      retireTerminalBuildStallInputs(): Promise<void>;
+    };
+    await conductor.retireTerminalBuildStallInputs();
+
+    await Promise.all([
+      expect(readFile(join(root, '.pipeline', 'children', String(child3), 'build-stall-question.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
+      expect(readFile(remediationTypedPlanPath(root, child3), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
+      expect(readFile(join(root, '.pipeline', 'children', String(child4), 'build-stall-question.md'), 'utf8')).resolves.toBe('child 4 question'),
+      expect(readFile(remediationTypedPlanPath(root, child4), 'utf8')).resolves.toBe('{"stalled":true}'),
     ]);
   });
 
