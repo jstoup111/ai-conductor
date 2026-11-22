@@ -197,7 +197,9 @@ describe('serial validation residue wiring', () => {
     expect(events).toHaveLength(1);
     const event = events[0] as Extract<ConductorEvent, { type: 'validator_residue_quarantined' }>;
     expect(event).toMatchObject({ source: 'manual_test', paths: ['docs/reports/thrown.html'] });
-    await expect(readFile(join(dir, event.directory, 'docs/reports/thrown.html'), 'utf8')).resolves.toBe('thrown report\n');
+    await expect(readFile(join(dir, event.directory, 'docs/reports/thrown.html'), 'utf8')).resolves.toBe(
+      'thrown report\n',
+    );
   });
 
   async function assertMockedRefusal(reason: string): Promise<void> {
@@ -426,6 +428,8 @@ describe('grouped validation residue wiring', () => {
     expect(events).toHaveLength(1);
     const event = events[0] as Extract<ConductorEvent, { type: 'validator_residue_quarantined' }>;
     expect(event).toMatchObject({ source: 'validation', paths: ['docs/reports/thrown-group.html'] });
-    await expect(readFile(join(dir, event.directory, 'docs/reports/thrown-group.html'), 'utf8')).resolves.toBe('group report\n');
+    await expect(readFile(join(dir, event.directory, 'docs/reports/thrown-group.html'), 'utf8')).resolves.toBe(
+      'group report\n',
+    );
   });
 });

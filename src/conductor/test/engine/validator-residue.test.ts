@@ -93,10 +93,12 @@ describe('validator residue quarantine', () => {
       quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' }),
     ).resolves.toEqual({ kind: 'none' });
     await expect(readFile(join(repository, 'existing/notes.txt'), 'utf8')).resolves.toBe('already here\n');
-    await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject({
-      kind: 'refused',
-      reason: expect.stringMatching(/^worktree is dirty:.*existing/),
-    });
+    await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject(
+      {
+        kind: 'refused',
+        reason: expect.stringMatching(/^worktree is dirty:.*existing/),
+      },
+    );
   });
 
   it('ignores the old-path field of a staged rename while listing new residue', async () => {
@@ -235,10 +237,12 @@ describe('validator residue quarantine', () => {
       quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'prd_audit' }),
     ).resolves.toMatchObject({ kind: 'refused', reason: expect.any(String) });
     await expect(readFile(join(repository, '.pipeline/prd-audit.json'), 'utf8')).resolves.toBe('{"complete":true}\n');
-    await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject({
-      kind: 'refused',
-      reason: expect.stringMatching(/^worktree is dirty:.*\.pipeline\/prd-audit\.json/),
-    });
+    await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject(
+      {
+        kind: 'refused',
+        reason: expect.stringMatching(/^worktree is dirty:.*\.pipeline\/prd-audit\.json/),
+      },
+    );
   });
 
   it('reports an unavailable baseline inspection without throwing into the validation flow', async () => {
