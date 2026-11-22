@@ -92,7 +92,7 @@ export async function evaluateRebaseRecoveryHalt(opts: {
   feature: string;
   child?: number;
   git?: GitRunner;
-}): Promise<{ kind: 'verified' } | { kind: 'retained'; reason: string }> {
+}): Promise<{ kind: 'verified'; replay: import('./rebase-replay.js').ReplayIdentity; expectedTree: string } | { kind: 'retained'; reason: string }> {
   const attempt = await readRebaseRecoveryAttempt(opts.worktreePath);
   if (!attempt) return { kind: 'retained', reason: 'rebase recovery attempt evidence is missing or invalid' };
   if (attempt.feature !== opts.feature) return { kind: 'retained', reason: 'rebase recovery attempt feature does not match the halted feature' };
@@ -100,7 +100,7 @@ export async function evaluateRebaseRecoveryHalt(opts: {
 
   const verified = await verifyCompletedReplay(opts.git ?? makeGitRunner(opts.worktreePath), opts.worktreePath, attempt);
   return verified.kind === 'accepted'
-    ? { kind: 'verified' }
+    ? { kind: 'verified', replay: verified.identity, expectedTree: verified.comparison.expectedTree }
     : { kind: 'retained', reason: verified.reason };
 }
 

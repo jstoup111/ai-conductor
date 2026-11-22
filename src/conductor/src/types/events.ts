@@ -2249,7 +2249,7 @@ type ConductorEventBody =
       /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */
       type: 'halt_cleared';
       step?: StepName;
-      cause: 'operator' | 'rekick' | 'kickback-budget' | 'stall-remediation';
+      cause: 'operator' | 'rekick' | 'kickback-budget' | 'verified-rebase' | 'stall-remediation';
     }
   | {
       /** An interactive operator authorized clearing a halted feature. */

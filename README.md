@@ -132,6 +132,9 @@ are document reviews, not live steering:
 Between 2 and 4 the daemon does the cheap part: code, tests, review fixes, rebase, PR prose. Delegating
 that is what frees your head for the next design problem while this one builds.
 
+When a completed rebase is halted with durable recovery evidence, ordinary daemon maintenance verifies
+the exact replay and resumes it once; operators do not need to remove its halt marker manually.
+
 CI repair agents commit fixes from CI diagnostics; the daemon owns repair test execution and publishes
 only after the configured verifier passes. Missing test configuration blocks publication.
 If final validation itself crashes, the daemon retries that validator only within its configured attempt
