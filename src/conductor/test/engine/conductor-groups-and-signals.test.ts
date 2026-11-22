@@ -2087,7 +2087,7 @@ describe('engine/conductor', () => {
           ],
         },
         {
-          version: 2,
+          version: 3,
           source: 'as-built',
           requiredReferences: [
             {

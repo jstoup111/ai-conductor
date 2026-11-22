@@ -162,7 +162,10 @@ describe('remediate gap-plan native-schema dispatch', () => {
 
   // Covers: task:6
   it('retains empty history index dimensions with zero counts', () => {
-    expect(renderRemediationPromptProjection(projection, history).history).toMatchObject({
+    const rendered = renderRemediationPromptProjection(projection, history);
+    expect('history' in rendered).toBe(true);
+    if (!('history' in rendered)) throw new Error('history projection was omitted');
+    expect(rendered.history).toMatchObject({
       pendingAsBuiltFindings: { count: 0, ids: [] },
       priorAsBuiltCases: { count: 0, ids: [] },
       priorLaps: { count: 0, ids: [] },
