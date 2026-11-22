@@ -149,6 +149,7 @@ async function fixture(
     skipPlanRemediation?: boolean;
     asBuiltRound?: boolean;
     asBuiltCases?: readonly Record<string, unknown>[];
+    attemptRunId?: string;
     remediationProjectionLimitOverrides?: Partial<RemediationProjectionLimits>;
   } = {},
 ) {
@@ -189,7 +190,7 @@ async function fixture(
     },
     diagnostics: [],
     recordedDispositions: [],
-  }, { attemptId: 'fixture-prd-audit', codeStamp: null });
+  }, { attemptId: options.attemptRunId ?? 'fixture-prd-audit', codeStamp: null });
   if (options.asBuiltRound) {
     await persistAsBuiltVerdict(root, stampAsBuiltFindingIds({
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
@@ -244,6 +245,9 @@ async function fixture(
     config,
     remediationProjectionLimitOverrides: options.remediationProjectionLimitOverrides,
   });
+  if (options.attemptRunId !== undefined) {
+    (conductor as unknown as { currentRunId: string }).currentRunId = options.attemptRunId;
+  }
   const source = options.source ?? 'prd-audit';
   const evidenceFile = options.evidenceFile ?? '.pipeline/prd-audit.md';
   if (options.evidenceDirectory) {
@@ -543,6 +547,61 @@ describe('Conductor typed remediation-plan admission', () => {
     expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
     expect(result.provider.invocationCount).toBe(2);
     expect(result.rejectedDispositions).toEqual(['invented-disposition']);
+  });
+
+  // Covers: task:3
+  it('keeps the same history files byte-identical through a rejected-plan retry', async () => {
+    const rejected = {
+      version: 'v1', dispositions: [{
+        reference: { kind: 'prd-criterion', id: 'S1.1' }, disposition: 'invented-disposition', category: null,
+        rationale: 'Rejected fixture disposition.', tasks: [], boundTaskIds: [],
+      }],
+    };
+    const result = await fixture('codex', [
+      { kind: 'structured', finalStructuredResult: rejected },
+      { kind: 'structured', finalStructuredResult: output() },
+    ]);
+
+    expect(result.provider.invocationCount).toBe(2);
+    const directory = join(result.root, '.pipeline', 'remediation-history');
+    const files = (await readdir(directory)).filter((name) => name.endsWith('.json'));
+    expect(files).toHaveLength(2);
+    const contents = await Promise.all(files.map((name) => readFile(join(directory, name), 'utf8')));
+    expect(contents).toEqual(contents.map((content) => JSON.stringify(JSON.parse(content))));
+  });
+
+  // Covers: task:3
+  it('leaves an earlier attempt history intact when a new remediation attempt is prepared', async () => {
+    const result = await fixture('codex', [
+      { kind: 'structured', finalStructuredResult: output() },
+      { kind: 'structured', finalStructuredResult: output() },
+    ], 1, { attemptRunId: 'attempt-one' });
+    const directory = join(result.root, '.pipeline', 'remediation-history');
+    const firstFiles = (await readdir(directory)).sort();
+    const firstBytes = await Promise.all(firstFiles.map((name) => readFile(join(directory, name), 'utf8')));
+    await settlePendingRepair(result.root, [{
+      gate: 'prd_audit', lapCap: 2, growthCap: 2, authoredSource: 'plan',
+      growth: { authored: 8, added: 0, byGate: {}, remaining: 2 },
+    }]);
+    await persistPrdAuditVerdict(result.root, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: ['S1.1', 'S1.2'].map((criterion, index) => ({
+          criterion: { storyId: '1', ordinal: index + 1 }, criterionId: criterion, grade: 'FIXABLE' as const,
+          evidence: `${criterion} has a repairable gap.`, rationale: `${criterion} requires repair.`,
+          requirementAssociations: [], evidenceTaskIds: [String(index + 1)], ownerTaskId: String(index + 1),
+        })),
+        noOwnerObservations: [],
+      }, diagnostics: [], recordedDispositions: [],
+    }, { attemptId: 'attempt-two', codeStamp: null });
+    const next = new Conductor({ stateFilePath: join(result.root, '.pipeline', 'conduct-state.json'), stepRunner: result.runner, events: new ConductorEventEmitter(), projectRoot: result.root, mode: 'auto', daemon: true, verifyArtifacts: false, config: result.config });
+    (next as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...result.state };
+    (next as unknown as { currentRunId: string }).currentRunId = 'attempt-two';
+    await (next as unknown as { planRemediation(state: ConductState, steps: typeof ALL_STEPS, context: string, source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] }): Promise<unknown> }).planRemediation(result.state, ALL_STEPS, 'Retry after a new attempt.', { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] });
+    const allFiles = (await readdir(directory)).sort();
+    expect(allFiles).toHaveLength(4);
+    await expect(Promise.all(firstFiles.map((name) => readFile(join(directory, name), 'utf8')))).resolves.toEqual(firstBytes);
   });
 
   // Covers: task:20
