@@ -6171,11 +6171,13 @@ export class Conductor {
         .join('; ');
       // Single source for the actionable BUILD hint: the initial dispatch and
       // the persisted repair obligation derive from this same value (AB-3).
-      const repairInstruction = buildRemediationHint(
+      // Name the typed plan before the admission is persisted so restart
+      // recovery replays the exact instruction that BUILD receives.
+      const repairInstruction = await this.buildTypedRemediationPlanInput(buildRemediationHint(
         routedFixes,
         hintSource.source,
         remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
-      );
+      ));
       let buildPredicateDiagnostic = '';
       const disposition = await this.resolveDecideEntryDisposition({
         target,
@@ -6474,6 +6476,7 @@ export class Conductor {
       return retryHint;
     }
     const input = `Typed remediation gap plan you may read: ${relative(this.projectRoot, path)}`;
+    if (retryHint?.includes(input)) return retryHint;
     return retryHint ? `${retryHint}\n\n${input}` : input;
   }
 

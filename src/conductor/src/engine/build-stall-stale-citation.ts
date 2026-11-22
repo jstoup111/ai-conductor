@@ -70,6 +70,7 @@ export function buildStallStaleCitationOutcome(
   citation: Exclude<BuildStallStaleCitation, { kind: 'not-stale' }>,
   recorded: RecordBuildStallStaleCitationResult,
 ): BuildStallStaleCitationOutcome {
+  // ai-conductor:session-command-context=operator-only
   if (recorded.kind === 'persist-failed') {
     return {
       kind: 'halt',
@@ -84,6 +85,7 @@ export function buildStallStaleCitationOutcome(
       detail: `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? `settled by child ${citation.ownerChild}` : `owned by child ${citation.ownerChild}`}; use ai-conductor halt clear after reviewing the stale citation.`,
     };
   }
+  // /ai-conductor:session-command-context
   return {
     kind: 'retry',
     hint: `Case ${citation.caseId} is ${citation.state === 'resolved' ? `settled by child ${citation.ownerChild}` : `owned by child ${citation.ownerChild}`} and is not this session's work.`,

@@ -294,6 +294,13 @@ describe('Conductor typed remediation-plan admission', () => {
     ).buildTypedRemediationPlanInput('Repair the admitted gap.');
     expect(typedInput).toContain('.pipeline/children/3/remediation-plan.json');
     expect(typedInput).toContain('you may read');
+    await expect(
+      (
+        result.conductor as unknown as {
+          buildTypedRemediationPlanInput(retryHint: string | undefined): Promise<string | undefined>;
+        }
+      ).buildTypedRemediationPlanInput(typedInput),
+    ).resolves.toBe(typedInput);
 
     await rm(typedPlanPath);
     await expect(
