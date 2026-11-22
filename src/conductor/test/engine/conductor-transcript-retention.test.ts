@@ -781,7 +781,9 @@ describe('conductor transcript retention wiring', () => {
         featureSlug: 'retry-flow', events, stepRunner: runner, providerExecution,
         selfHostGuardrails: guardrails, daemon: true, selfHost: true, fromStep: 'build',
         mode: 'auto', verifyArtifacts: false, maxRetries: 2, sleepFn: async () => {},
-        config: { llm_provider: 'codex', harness_self_host: { sandbox_build_env: true, build_auth: { mode: 'api-key' } } } as never,
+        // Transcript identity is the boundary under test. Avoid the unrelated
+        // real bwrap containment probe for each retry.
+        config: { llm_provider: 'codex', harness_self_host: { sandbox_build_env: true, live_containment: false, build_auth: { mode: 'api-key' } } } as never,
       });
       await conductor.run();
 
