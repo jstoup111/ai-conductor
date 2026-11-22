@@ -1123,7 +1123,8 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     },
   );
 
-  it('Covers: task:1 retains rebase-recovery across base advance, episode-end, progress and dispatch retry, and kickback authorization', async () => {
+  // Covers: task:1
+  it('retains rebase-recovery across base advance, episode-end, progress and dispatch retry, and kickback authorization', async () => {
     const { deps, trace } = fakeDeps({
       halted: ['rebase'],
       readHaltClass: async () => 'rebase-recovery',
