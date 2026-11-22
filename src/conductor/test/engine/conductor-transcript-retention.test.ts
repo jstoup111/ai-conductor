@@ -1058,14 +1058,12 @@ describe('conductor transcript retention wiring', () => {
         // Stop at the next dispatch boundary only after the successful retry's
         // terminal retention outcome is observable. Provider invocation count
         // alone can become two before its teardown and build settlement finish.
-        preemptionRequested: () => lifecycle.some(
-          (event) => event.type === 'provider_transcripts_pruned' && event.path === join(
-            '.pipeline',
-            'transcripts',
-            'build',
-            'retry-flow-a2-codex',
+        preemptionRequested: () =>
+          lifecycle.some(
+            (event) =>
+              event.type === 'provider_transcripts_pruned' &&
+              event.path === join('.pipeline', 'transcripts', 'build', 'retry-flow-a2-codex'),
           ),
-        ),
         config: {
           llm_provider: 'codex',
           harness_self_host: { sandbox_build_env: true, build_auth: { mode: 'api-key' } },
