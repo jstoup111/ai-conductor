@@ -55,6 +55,7 @@ function monitorHostingBlock(provider: string): string[] {
 const HALT_DISPOSITIONS: Readonly<Record<HaltDisposition, true>> = {
   'needs-human': true,
   mechanical: true,
+  'rebase-recovery': true,
   'protected-artifact': true,
   'plan-gap': true,
   'stack-tip-diverged': true,
@@ -82,6 +83,8 @@ export function recoveryProcedure(haltClass: HaltDisposition): string {
       return 'Follow the needs-human halt recovery in docs/runbooks/stalled-or-stuck-feature.md.';
     case 'mechanical':
       return 'Follow the mechanical halt recovery in docs/runbooks/stalled-or-stuck-feature.md.';
+    case 'rebase-recovery':
+      return 'The daemon may resume this rebase only after it verifies the bound replay attempt.';
     case 'protected-artifact':
       return 'Follow the protected-artifact halt recovery in docs/runbooks/stalled-or-stuck-feature.md.';
     case 'plan-gap':

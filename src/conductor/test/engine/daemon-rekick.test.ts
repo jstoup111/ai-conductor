@@ -1095,7 +1095,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(last.get('x')).toBe(SHA_C);
   });
 
-  it.each(['needs-human', 'plan-gap', 'protected-artifact', 'unclassified'] as const)(
+  it.each(['needs-human', 'rebase-recovery', 'plan-gap', 'protected-artifact', 'unclassified'] as const)(
     'a %s halt has no retry side effects across base advances',
     async (disposition) => {
       const last = new Map<string, string>();

@@ -72,6 +72,7 @@ export interface HaltRetentionDecision {
  */
 export const RETAINED_HALT_CLASSES: ReadonlySet<string> = new Set([
   'needs-human',
+  'rebase-recovery',
   PLAN_GAP_HALT_CLASS,
   STACK_TIP_DIVERGED_HALT_CLASS,
   OVER_SCOPE_HALT_CLASS,

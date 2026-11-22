@@ -34,6 +34,11 @@ import {
   type ReplayIdentity,
   type ReplayIdentitySeed,
 } from './rebase-replay.js';
+import {
+  matchesRebaseRecoveryAttempt,
+  persistRebaseRecoveryAttempt,
+  readRebaseRecoveryAttempt,
+} from './rebase-recovery-attempt.js';
 import type { ReplayEvidence } from './gate-verdicts.js';
 import {
   currentPreservedJudgeIdentity,
@@ -694,6 +699,18 @@ export async function writeHalt(
   events?: ConductorEventEmitter,
   resumeShape: RebaseResumeShape = 'paused-rebase',
 ): Promise<HaltMarkerWriteResult> {
+  return writeRebaseHalt(projectRoot, conflicts, extraReason, events, resumeShape, 'needs-human');
+}
+
+/** Only the rebase writer may select its evidence-bound recovery class. */
+async function writeRebaseHalt(
+  projectRoot: string,
+  conflicts: string[],
+  extraReason: string | undefined,
+  events: ConductorEventEmitter | undefined,
+  resumeShape: RebaseResumeShape,
+  haltClass: 'needs-human' | 'rebase-recovery',
+): Promise<HaltMarkerWriteResult> {
   const note =
     resumeShape === 'completed-rebase'
       ? `rebase completed — parked for human review\n` +
@@ -711,7 +728,7 @@ export async function writeHalt(
         `  2. git rebase --continue\n` +
         `  3. rm .pipeline/HALT\n` +
         `  4. Re-queue the feature for the daemon.\n`;
-  return writeHaltMarker(projectRoot, note, 'needs-human', events);
+  return writeHaltMarker(projectRoot, note, haltClass, events);
 }
 
 /** Park a seal refusal that happened before git started a rebase. */
@@ -1324,7 +1341,11 @@ export async function writeRebaseOutcomeHalt(
     );
   }
   if (!outcome.startFailure) {
-    return writeHalt(projectRoot, outcome.conflicts, outcome.reason, events, outcome.resumeShape);
+    const attempt = await readRebaseRecoveryAttempt(projectRoot);
+    const haltClass = matchesRebaseRecoveryAttempt(attempt, outcome.replaySeed)
+      ? 'rebase-recovery'
+      : 'needs-human';
+    return writeRebaseHalt(projectRoot, outcome.conflicts, outcome.reason, events, outcome.resumeShape ?? 'paused-rebase', haltClass);
   }
   const quarantine = outcome.quarantine
     ? `\nQuarantined files: ${outcome.quarantine.paths.join(', ')}\nQuarantine directory: ${outcome.quarantine.directory}\n`
@@ -1544,6 +1565,8 @@ function reviewDelta(outcome: Extract<RebaseOutcome, { kind: 'changed' }>): stri
 }
 
 export interface PerformRebaseOpts {
+  /** Execution child that owns this replay; absent for an ordinary flat feature. */
+  executionChild?: ChildId;
   /**
    * Enables the normal-finish-only prospective-merge policy. Omitted callers
    * retain the mandatory rebase required by recovery/re-kick paths.
@@ -1658,6 +1681,16 @@ export async function performRebase(
     mergeBase: (await git(['merge-base', 'HEAD', base.ref])).stdout.trim(),
     target: (await git(['rev-parse', base.ref])).stdout.trim(),
   };
+  const recoveryAttempt = await persistRebaseRecoveryAttempt(projectRoot, replaySeed, opts?.executionChild);
+  if (recoveryAttempt.kind === 'failed') {
+    return {
+      kind: 'conflict_halt',
+      conflicts: [],
+      reason: `could not persist rebase recovery attempt: ${recoveryAttempt.reason}`,
+      startFailure: true,
+      replaySeed,
+    };
+  }
   const { preRebaseHead: preTree, mergeBase, target } = replaySeed;
   const attachReplayIdentity = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
     if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;

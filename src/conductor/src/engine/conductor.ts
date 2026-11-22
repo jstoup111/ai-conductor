@@ -19176,6 +19176,7 @@ export class Conductor {
     let sealRejectionReason: string | null = null;
     try {
       outcome = await this.performRebase(git, this.projectRoot, localBase, {
+        ...(this.activeRegionChild === undefined ? {} : { executionChild: this.activeRegionChild }),
         finishMergeabilityCheck: true,
         translateAfterRebase,
       });

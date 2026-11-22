@@ -45,6 +45,7 @@ export const STACK_TIP_DIVERGED_HALT_CLASS = 'stack-tip-diverged';
  */
 export type HaltClass =
   | 'needs-human'
+  | 'rebase-recovery'
   | 'mechanical'
   | typeof PROTECTED_ARTIFACT_HALT_CLASS
   | typeof PLAN_GAP_HALT_CLASS
@@ -56,12 +57,14 @@ export function isOperatorActionHalt(
   haltClass: HaltDisposition,
 ): haltClass is
   | 'needs-human'
+  | 'rebase-recovery'
   | typeof PROTECTED_ARTIFACT_HALT_CLASS
   | typeof PLAN_GAP_HALT_CLASS
   | typeof STACK_TIP_DIVERGED_HALT_CLASS
   | 'unclassified' {
   return (
     haltClass === 'needs-human' ||
+    haltClass === 'rebase-recovery' ||
     haltClass === PROTECTED_ARTIFACT_HALT_CLASS ||
     haltClass === PLAN_GAP_HALT_CLASS ||
     haltClass === STACK_TIP_DIVERGED_HALT_CLASS ||
@@ -297,6 +300,7 @@ export async function readHaltClass(worktreePath: string): Promise<HaltDispositi
     const contents = (await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8')).trim();
     if (
       contents === 'needs-human' ||
+      contents === 'rebase-recovery' ||
       contents === 'mechanical' ||
       contents === 'legacy' ||
       contents === PROTECTED_ARTIFACT_HALT_CLASS ||
@@ -326,6 +330,7 @@ export async function readHaltSidecarClassification(worktreePath: string): Promi
     const contents = (await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8')).trim();
     if (
       contents === 'needs-human' ||
+      contents === 'rebase-recovery' ||
       contents === 'mechanical' ||
       contents === 'kickback-cap' ||
       contents === 'over-scope' ||

@@ -34,6 +34,7 @@ import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { REBASE_RECOVERY_ATTEMPT_PATH } from '../../src/engine/rebase-recovery-attempt.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { Conductor } from '../test-conductor.js';
 import type { ConductState } from '../../src/types/index.js';
@@ -769,6 +770,62 @@ describe('engine/rebase — HALT (FR-8)', () => {
     await writeHalt(dir, ['src/feature.ts']);
     const cls = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
     expect(cls).toBe('needs-human');
+  });
+
+  it('Covers: task:1 binds rebase-recovery to one durable replay generation and rejects partial or mismatched evidence', async () => {
+    const seed = { preRebaseHead: 'a'.repeat(40), mergeBase: 'b'.repeat(40), target: 'c'.repeat(40) };
+    const path = join(dir, REBASE_RECOVERY_ATTEMPT_PATH);
+    await writeFile(path, `${JSON.stringify({ version: 1, generation: 'attempt-1', feature: 'feature', ...seed })}\n`);
+
+    await writeRebaseOutcomeHalt(dir, {
+      kind: 'conflict_halt', conflicts: ['src/conflict.ts'], reason: 'rebase conflict requires human resolution', replaySeed: seed,
+    });
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('rebase-recovery');
+
+    await writeFile(path, '{"version":1,"generation":"partial"}\n');
+    await writeRebaseOutcomeHalt(dir, {
+      kind: 'conflict_halt', conflicts: ['src/conflict.ts'], reason: 'rebase conflict requires human resolution', replaySeed: seed,
+    });
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+
+    await writeFile(path, `${JSON.stringify({ version: 1, generation: 'attempt-2', feature: 'feature', ...seed, target: 'd'.repeat(40) })}\n`);
+    await writeRebaseOutcomeHalt(dir, {
+      kind: 'conflict_halt', conflicts: ['src/conflict.ts'], reason: 'rebase conflict requires human resolution', replaySeed: seed,
+    });
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  it('Covers: task:1 persists the feature-owned replay tuple before foreground Git replay and publishes only the matching halt', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-recovery-attempt-'));
+    const g = async (args: string[]) => execa('git', args, { cwd: repo });
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 'test@example.com']);
+      await g(['config', 'user.name', 'Test']);
+      await writeFile(join(repo, 'shared.txt'), 'initial\n');
+      await g(['add', '.']);
+      await g(['commit', '-qm', 'initial']);
+      await g(['checkout', '-qb', 'feature']);
+      await writeFile(join(repo, 'shared.txt'), 'feature\n');
+      await g(['commit', '-qam', 'feature']);
+      const preRebaseHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+      await g(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'shared.txt'), 'base\n');
+      await g(['commit', '-qam', 'base']);
+      await g(['checkout', '-q', 'feature']);
+      await mkdir(join(repo, '.pipeline'), { recursive: true });
+      await writeFile(join(repo, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'feature' }));
+
+      const outcome = await performRebase(makeGitRunner(repo), repo, 'main');
+      expect(outcome).toMatchObject({ kind: 'conflict_halt', replaySeed: { preRebaseHead } });
+      const attempt = JSON.parse(await readFile(join(repo, REBASE_RECOVERY_ATTEMPT_PATH), 'utf8'));
+      expect(attempt).toMatchObject({ version: 1, feature: 'feature', preRebaseHead, target: expect.any(String), generation: expect.any(String) });
+      if (outcome.kind !== 'conflict_halt') throw new Error('expected replay conflict');
+      await writeRebaseOutcomeHalt(repo, outcome);
+      await expect(readFile(join(repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('rebase-recovery');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
   });
 
   it('writes a completed-rebase recovery procedure without conflict-resolution steps', async () => {
