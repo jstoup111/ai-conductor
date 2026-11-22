@@ -72,6 +72,7 @@ As the operator, I want the judge to grade each task against what its plan block
 #### Happy Path
 - Given a completed remediation task with a `Task:` trailer commit and a `reported` Done-when evidence value naming another commit SHA that resolves, when the judgement input is built, then it contains the task's plan block (title, Rationale, Criterion, Governing clause and Done-when checks), each check's close-record source, and the diff of both commits.
 - Given candidates exist, when the judgement is dispatched, then it is one free-form dispatch covering every candidate, it carries the native output schema and the read-only review flag, its working directory is the feature worktree, and its provider, model and effort are those resolved from the `build_review` step's configuration while the dispatch is attributed to the running BUILD step.
+- Given a daemon-managed BUILD session whose preferred `build_review` provider is Codex, when the judgement is dispatched, then the per-dispatch managed observation destination is proven for that read-only candidate and Codex is invoked, rather than the candidate being skipped as setup-unavailable and the judgement falling back to another provider.
 
 #### Negative Paths
 - Given the cited commits' combined diff exceeds 48,000 bytes, when the judgement input is built, then the diff is cut to 48,000 bytes and the input states that it was truncated.
@@ -83,6 +84,7 @@ As the operator, I want the judge to grade each task against what its plan block
 ### Done When
 - [ ] An input-builder test asserts the plan block, the close-record sources, both cited diffs, and the truncation notice for an oversized diff.
 - [ ] A step-runner test asserts the dispatch resolves its provider from `steps.build_review` while its lifecycle events name the `build` step, passes `readOnlyReview` and the native schema, and returns unavailable with no invocation when no provider declares native schema support.
+- [ ] A step-runner test with a daemon-managed session context asserts the Codex judgement candidate receives managed-observation preparation and is invoked, with no fallback to Claude.
 
 ## Story 4: A failed judgement retries once, then hands off unjudged
 
