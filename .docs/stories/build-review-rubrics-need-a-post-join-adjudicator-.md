@@ -162,11 +162,13 @@ findings do not compete and budget reflects actual remediation attempts.
 
 - Given one or more new `act` cases in a valid adjudication, when effects settle, then the engine publishes one prioritized durable BUILD work order, consumes the existing `build_review` kickback once for its stable effect id, emits one BUILD route, and BUILD receives the same work after an ordinary process restart.
 - Given an adjudication contains only deferred, rejected, and merged outcomes, when their required effects settle, then no build_review kickback is consumed and no BUILD work order is dispatched.
+- Given a work order covering several cases whose primary case (the one owning its effect id) is resolved while another case it lists is still open, when BUILD recovers the order from disk, then the order is accepted as this feature's route and BUILD receives its work.
 
 #### Negative Paths
 
 - Given actionable work is present but the per-tree or cumulative build_review cap is exhausted, when routing is evaluated, then no BUILD navigation occurs and the existing `needs-human` cap halt names the cases and current counter evidence.
 - Given a build_review action is published, when all persistence is inspected, then the approved plan, task-status plan membership, and plan-growth ledger are unchanged; any attempted plan append is a failing acceptance result.
+- Given a work order whose effect id belongs to no action case this feature's case store recorded, open or resolved, when BUILD recovers it, then BUILD is not dispatched and the run halts with `work order foreign-effect`.
 
 ### Done When
 
@@ -176,6 +178,8 @@ findings do not compete and budget reflects actual remediation attempts.
 - [ ] Cap tests halt before navigation, and a plan/growth snapshot test proves byte-for-byte no plan
       append attributable to build_review.
 - [ ] BUILD reconstructs the work order by effect id without relying on an in-memory retry hint.
+- [ ] Recovery binds the order to every action effect the feature recorded, so a resolved primary case
+      with an open sibling still reaches BUILD, while an unrecorded effect halts as `foreign-effect`.
 
 ## Story 7: Resume interrupted actions but halt repeated attempted cases
 

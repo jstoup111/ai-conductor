@@ -316,9 +316,11 @@ export async function publishBuildReviewWorkOrder(
  * primary route's effect — whichever open action case was still *reserved*
  * when the order published — and a later process cannot re-derive which one
  * that was. What it can re-derive from the case store is the complete set of
- * stable effects recorded for the feature's open action cases; an `effectId`
- * outside that set was never this feature's route. An empty set therefore
- * binds nothing and fails closed.
+ * stable action effects recorded for the feature, open or resolved: an order
+ * covers several cases and its primary case may resolve before a sibling in
+ * the same order does. An `effectId` outside that set was never this
+ * feature's route. Whether the order still carries live work (an open case)
+ * is the caller's check. An empty set binds nothing and fails closed.
  */
 export async function readBuildReviewWorkOrder(
   projectRoot: string,

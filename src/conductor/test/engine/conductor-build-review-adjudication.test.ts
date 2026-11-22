@@ -3164,6 +3164,52 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     );
   });
 
+  it('dispatches BUILD when the order primary case is resolved but a sibling case in the same order is open', async () => {
+    const first = await fixture();
+    const order = (await first.readJson('.pipeline/build-review-work-order.json')) as {
+      effectId: string;
+      cases: { caseId: string }[];
+    };
+    const cases = (await first.readJson('.pipeline/remediation-cases.json')) as {
+      cases: { id: string; resolution: string; effect: { id: string } }[];
+    };
+    const primary = cases.cases.find((record) => record.effect.id === order.effectId)!;
+    const primaryRow = order.cases.find((row) => row.caseId === primary.id)!;
+    const siblingId = '0b6a1f5e-3c2d-4f7a-9e1b-5d8c7a6b4e21';
+    const siblingEffectId = '7c3e9a2b-1d4f-4b6e-8a5c-2f9d0e1b3c47';
+
+    // One order covers two cases; its effectId names only the primary route.
+    // The primary resolves first while the sibling stays open, as in the
+    // 2026-11-22 incident (#3740): the order is still this feature's route.
+    const restart = await fixture({
+      startFrom: 'build',
+      seedPipeline: async (root) => {
+        await writeFile(
+          join(root, '.pipeline/build-review-work-order.json'),
+          JSON.stringify({ ...order, cases: [...order.cases, { ...primaryRow, caseId: siblingId }] }),
+          'utf8',
+        );
+        await writeFile(
+          join(root, '.pipeline/remediation-cases.json'),
+          JSON.stringify({
+            ...cases,
+            cases: [
+              ...cases.cases.map((record) => (record === primary ? { ...record, resolution: 'resolved' } : record)),
+              { ...primary, id: siblingId, effect: { ...primary.effect, id: siblingEffectId } },
+            ],
+          }),
+          'utf8',
+        );
+      },
+    });
+
+    expect(await restart.haltMarker()).not.toContain('BUILD durable remediation recovery halted');
+    expect(restart.dispatched).toContain('build');
+    expect(restart.retryReasons.get('build')).toContain(
+      `Build-review remediation work order (effect: ${order.effectId})`,
+    );
+  });
+
   it('files a deferred case through the production tracker and intake dependencies', async () => {
     const run = await fixture({ judgement: deferralJudgement() });
 
