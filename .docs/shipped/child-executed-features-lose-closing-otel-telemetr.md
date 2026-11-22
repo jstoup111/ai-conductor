@@ -4,6 +4,25 @@ spec_hash: 1a7bdbb70cac1021ebef55e507c244b6348da9e91d39b560a9a3c171e32c9daa
 pr: https://github.com/jstoup111/ai-conductor/pull/3690
 shipped: 2026-11-22
 engine_version: 20261122T004707Z-42ca887c19f7
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This compensates for the planned change that stops daemon-mode dispatch visualizers from installing their own SIGINT/SIGTERM listeners (`installProcessSignalHandlers: false`, needed for S1.1). It keeps the best-effort Ctrl-C trace flush that this change would otherwise drop, so it serves the plan's telemetry outcome. One uncertainty: before this change, a dispatch visualizer's SIGINT listener could stop Node's default SIGINT exit while dispatches were active. The daemon now always exits on SIGINT after the flush. My confidence that the earlier behavior differed in practice is about 60%."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "This hardens test isolation. It keeps aggregate-suite child processes inside the run-scoped temp root so they cannot slip past the global /tmp leak guard, and it only takes effect under Vitest. It looks like a repair that lets the test suite pass on this branch (about 70% confidence) rather than new product behavior. Production test_suite output and persisted state are unchanged."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-3
+    summary: "This is formatter churn only. It changes no operator-visible output, CLI result or persisted state. It does widen the diff in files outside the plan's surface."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
