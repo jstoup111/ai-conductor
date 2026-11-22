@@ -943,6 +943,22 @@ describe('build-review adjudication context', () => {
     ]);
   });
 
+  // Covers: task:10
+  it('keeps a build-review case context free of remediation history', () => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('history-boundary')),
+      priorCases: [],
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context).not.toHaveProperty('history');
+    expect(result.context).toEqual(expect.objectContaining({
+      domain: 'build_review', mode: 'case-v1',
+      currentFindings: [expect.objectContaining({ summary: finding('history-boundary').summary })],
+    }));
+  });
+
   it('states absent plan and task evidence explicitly rather than omitting the field', () => {
     const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [] });
 

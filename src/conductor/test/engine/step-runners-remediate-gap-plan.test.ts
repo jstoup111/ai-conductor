@@ -1,4 +1,7 @@
 // Covers: task:16, task:17
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
@@ -38,6 +41,7 @@ function runnerFor(
   invoke: LLMProvider['invoke'],
   nativeOutputSchema = true,
   remediationPlanStoreFilesystem: RemediationPlanStoreFilesystem = memoryFilesystem(),
+  projectRoot = '/tmp/remediation-gap-plan',
 ) {
   const policy = key === 'claude' ? CLAUDE_MODEL_POLICY : CODEX_MODEL_POLICY;
   const provider: LLMProvider = {
@@ -45,7 +49,7 @@ function runnerFor(
     ...(nativeOutputSchema ? { nativeSchemaCapability: { nativeOutputSchema: true as const } } : {}),
     invoke,
   };
-  return new DefaultStepRunner({ invoke: vi.fn() }, 'runner-session', '/tmp/remediation-gap-plan', {
+  return new DefaultStepRunner({ invoke: vi.fn() }, 'runner-session', projectRoot, {
     config: { llm_provider: key, steps: { remediate: { llm_provider: key } } },
     configuredProviders: [key],
     providerRuntimes: new ProviderRuntimeSet([{
@@ -86,6 +90,34 @@ function memoryFilesystem(files = new Map<string, string>()): RemediationPlanSto
 }
 
 describe('remediate gap-plan native-schema dispatch', () => {
+  // Covers: task:10
+  it('keeps PRD-widening reconciliation on its supplied projection without history', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'remediation-prd-widening-'));
+    const projectionText = '{"currentSources":[{"id":"current-1"}],"priorCases":[]}';
+    const terminal = { version: 'v1', results: [{ sourceId: 'current-1', kind: 'different', reason: 'Changed behavior.' }] };
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true, output: 'reconciled', exitCode: 0, finalStructuredResult: terminal,
+    }));
+    const runner = runnerFor('codex', invoke, true, memoryFilesystem(), projectRoot);
+
+    try {
+      const result = await runner.run('remediate', {}, {
+        remediationRequest: {
+          mode: 'prd-widening-reconciliation', projection: projectionText,
+          nativeSchema: { type: 'object', required: ['version', 'results'] },
+        },
+      });
+
+      expect(result.finalStructuredResult).toEqual(terminal);
+      const options = (invoke.mock.calls as unknown as [InvokeOptions][])[0]?.[0];
+      expect(options.prompt).toBe('$remediate\n\nPRD WIDENING RECONCILIATION INPUT (engine-owned):\n' + projectionText);
+      expect(options.prompt).not.toContain('"history"');
+      await expect(readdir(join(projectRoot, '.pipeline', 'remediation-history'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   // Covers: task:6
   it('renders every history index dimension with paths and digests', () => {
     const rendered = renderRemediationPromptProjection(projection, history);

@@ -447,8 +447,8 @@ describe('remediation projection', () => {
     });
   });
 
-  // Covers: task:3
-  it('keeps prior as-built context scoped to as-built requests and faults instead of truncating it', async () => {
+  // Covers: task:3, task:8
+  it('keeps prior as-built context scoped to as-built requests without history size faults', async () => {
     const root = await fixture();
     await writeFile(join(root, '.docs', 'plans', 'active.md'), [
       '# Plan', '',
@@ -460,11 +460,8 @@ describe('remediation projection', () => {
 
     const asBuilt = await buildRemediationProjection(root, {
       source: 'as-built', activePlanPath: '.docs/plans/active.md',
-    }, { priorAsBuiltCasesBytes: 1 });
-    await expectPreparationFault(asBuilt, {
-      source: 'as-built', dimension: 'prior-as-built-cases', actual: expect.any(Number), limit: 1,
     });
-    expect(asBuilt).not.toHaveProperty('projection');
+    expect(asBuilt).toMatchObject({ ok: true });
 
     const prdOnly = await buildRemediationProjection(root, {
       source: 'finish-verification', activePlanPath: '.docs/plans/active.md',
@@ -994,7 +991,7 @@ describe('remediation projection', () => {
     });
   });
 
-  // Covers: task:10, task:rem-prd-audit-rem-prd-audit-s1-1-1
+  // Covers: task:8, task:10, task:rem-prd-audit-rem-prd-audit-s1-1-1
   it('refuses an over-limit required structured dimension without shortening it', async () => {
     const root = await fixture();
     await writePrdVerdict(root);
