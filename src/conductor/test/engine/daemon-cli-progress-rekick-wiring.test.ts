@@ -47,6 +47,43 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 describe('T14 — daemon-cli wires the real progress-gated re-kick predicate into runDaemon deps', () => {
+  // Covers: task:4
+  it('keeps an evidenced-recovery halt when its durable replay attempt is absent', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'verified-rebase-recovery-wiring-'));
+    const worktreeBase = join(projectRoot, '.worktrees');
+    const slug = 'recovery';
+    const pipeline = join(worktreeBase, slug, '.pipeline');
+    try {
+      await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+      await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), '');
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT'), 'completed rebase requires verification\n');
+      await writeFile(join(pipeline, 'HALT.class'), 'rebase-recovery\n');
+      let captured: DaemonDeps | undefined;
+      await runDaemonMode({
+        projectRoot,
+        concurrency: 1,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+        runHaltClassMigration: async () => worktreeBase,
+        workSource: { discover: async () => [] },
+        watch: false,
+        runDaemon: async (deps) => {
+          captured = deps;
+          return { processed: [], stoppedReason: 'backlog_drained' };
+        },
+      });
+
+      await captured!.reconcileVerifiedRebaseRecoveries!();
+      await expect(readFile(join(pipeline, 'HALT'), 'utf8')).resolves.toContain('completed rebase requires verification');
+      await expect(readFile(join(pipeline, 'HALT.class'), 'utf8')).resolves.toBe('rebase-recovery\n');
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('runDaemon deps use the production halt classifier, even when progress re-kicks are disabled', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'retryable-halt-class-wiring-'));
     const worktreeBase = join(projectRoot, '.worktrees');
