@@ -650,6 +650,8 @@ To clear a halt safely, use the procedure in
 | `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`, `land_dependency_decided`, `feature_artifacts_registered`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
 | `transcripts/<step>/<runId>-a<attempt>[-<member>]-<provider>/` | Sanitized, allowlisted provider session transcripts captured before a self-host provider home is removed | Self-host only. Pruned after a step completes with progress; otherwise retained, capped at 20 captures / 1 GiB per worktree. Read with [`ai-conductor transcripts`](cli.md#ai-conductor-transcripts); see [provider transcripts](../guides/self-hosting.md#provider-transcripts) |
+| `validator-residue/<source>-<timestamp>/` | Untracked, non-ignored files that appeared in the product tree during a validation-group dispatch (`manual_test`, `prd_audit`, `architecture_review_as_built`), moved here with their relative paths preserved. `<source>` is the step name for a serial dispatch or `validation` for a grouped round | The engine lists untracked paths before the dispatch and moves only new ones afterwards, emitting `validator_residue_quarantined`. If the baseline or move cannot run (Git unavailable, destination not ignored, a path no longer confirmed untracked), it logs `WARNING: validator residue …` and leaves every file in place; the validator's own result is unchanged. Inspect or delete by hand; nothing reads it |
+| `manual-test-evidence/` | Screenshots, reports, and logs written by the [`manual-test`](../../skills/manual-test/SKILL.md) skill | Skill-owned; keeps evidence out of the product tree |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
 | `conduct.log` | Session narrative | Written only by the legacy bash CLI; `ai-conductor` never writes it. Read by `rate-limit-wait.sh` |
 | `progress.log` | Batch-boundary narrative | Appended by the `pipeline` skill |
@@ -892,7 +894,9 @@ publication adds `stack_member_published` and `stack_member_redrafted` (`child`,
 `eventId` and `occurredAt`; the persister writes an `eventId` once and stamps `ts` from `occurredAt`. None appears for a
 feature without children; `rebase_skipped_for_stack` remains in the union for older logs but is no
 longer emitted. Any feature may persist `push_lease_refused` (`ref`, `expected`, `actual`) when an
-engine force push finds the remote tip differs from the recorded pushed tip. `EventPersister` writes the event types marked
+engine force push finds the remote tip differs from the recorded pushed tip. Any feature may persist
+`validator_residue_quarantined` (`source`, `paths`, `directory`) when a validation dispatch's new
+untracked files are moved under `.pipeline/validator-residue/`. `EventPersister` writes the event types marked
 `persist: true` in `event-sinks.ts`; common persisted types include:
 
 `land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `self_host_boundary_fingerprint`, `containment_check_unresolved`,
