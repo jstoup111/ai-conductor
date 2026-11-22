@@ -14,19 +14,19 @@ As the remediation planner, I want every prior as-built case and its repair task
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a feature whose remediation case store holds two `as_built` cases, one `open` with an unresolved `rem-as-built-*` repair task and one `resolved` with a resolved repair task, when a BLOCKED as-built verdict contributes REMEDIABLE findings to a `gap-plan` dispatch, then the rendered projection lists both cases with their case id, status, recurrence count, every source's summary, typed reference, relation and reason, and each repair task id with its current resolution.
+- Given a feature whose remediation case store holds two `as_built` cases, one `open` with an unresolved `rem-as-built-*` repair task and one `resolved` with a resolved repair task, when a BLOCKED as-built verdict contributes REMEDIABLE findings to a `gap-plan` dispatch, then the planner's history files list both cases with their case id, status, recurrence count, every source's summary, typed reference, relation and reason, and each repair task id with its current resolution, the `open` case in the active history file and the `resolved` case in the resolved history file.
 - Given a prior `as_built` case whose repair task is an appended `rem-as-built-*` task cited by no current finding, when the `gap-plan` projection is built, then that repair task appears in the projected task context with its title and Done-when checks alongside the owner tasks.
 - Given a feature with no `as_built` cases in its store, when a BLOCKED as-built verdict contributes REMEDIABLE findings to a `gap-plan` dispatch, then the projection carries an empty prior-case list and the dispatch proceeds.
 
 #### Negative Paths
-- Given prior `as_built` cases whose rendered bytes exceed the projection's named limit, when the `gap-plan` projection is built, then no remediate dispatch runs, no case is dropped or truncated, and the feature halts `needs-human` with a preparation fault naming the prior-as-built-cases dimension, its actual size and its limit.
+- Given prior `as_built` cases of any total size, when the `gap-plan` projection is built, then the remediate dispatch runs, no case is dropped or truncated, and no preparation fault names the prior-as-built-cases dimension for its size.
 - Given a prior `as_built` case naming a repair task id that the active plan no longer declares, when the `gap-plan` projection is built, then no remediate dispatch runs and the feature halts `needs-human` with a preparation fault naming that task id.
 - Given a remediation case store that is present but unreadable or malformed, when the `gap-plan` projection is built for an as-built verdict, then no remediate dispatch runs and the preparation fault names the store as unreadable instead of projecting an empty prior-case list.
-- Given only a PRD-audit FIXABLE verdict and no as-built verdict in the round, when the `gap-plan` projection is built, then it carries no prior-as-built-cases section and, apart from its projection version, it is byte-identical to the same projection built without this feature.
+- Given only a PRD-audit FIXABLE verdict and no as-built verdict in the round, when the `gap-plan` projection is built, then neither the prompt index nor either history file carries a prior-as-built-cases section.
 
 ### Done When
 - [ ] A `gap-plan` projection test over a store with one `open` and one `resolved` `as_built` case asserts every listed field for both cases and both repair tasks in the task context
-- [ ] A projection test over an oversize case set asserts the preparation fault's dimension, actual and limit values, and that no dispatch was made
+- [ ] A projection test over a case set larger than 8 KiB asserts a successful result with every case present in the history files
 - [ ] A projection test asserts the missing-repair-task fault names the undeclared task id
 - [ ] A projection test over a PRD-audit-only round asserts no prior-as-built-cases section
 

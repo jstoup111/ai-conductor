@@ -107,6 +107,13 @@ inspection. Required input is never truncated. Missing, unreadable, or over-limi
 names the dimension, source, and actual/limit before dispatch. Optional absent history is empty;
 present corrupt history is a named fault.
 
+> **Amended 2026-11-15 by #3677:** Pending as-built findings, prior laps, refusals, and prior
+> as-built cases are no longer bounded dimensions. They are handed to the agent in full as
+> per-attempt files (an active snapshot and a resolved archive), with only an index in the
+> prompt, so they cannot be over-limit.
+> The named-constant rule still covers required references, tasks, and the total inlined
+> payload (adr-2026-09-07-durable-prd-widening-decision-reconciliation D7.4).
+
 ### 2. One static engine schema; the provider returns judgment only
 
 A module-constant JSON Schema defines the plan, and the dispatched shape is rendered from it. The

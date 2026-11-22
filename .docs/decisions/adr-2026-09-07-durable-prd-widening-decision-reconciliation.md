@@ -146,6 +146,21 @@ At most one successful semantic reconciliation is accepted per unchanged frozen 
 > no truncation and no repeated provider call. Mechanical output failures use the configured
 > remediate attempt allowance. Existing reconciliation limits and allowances are unchanged.
 
+> **Amended 2026-11-15 by #3677:** D7.4 removes the named-bound rule from the four history
+> dimensions of the remediation gap-plan projection: prior as-built cases, pending as-built
+> findings, prior laps, and refusals. The engine writes them in full to frozen per-attempt
+> files under `.pipeline/remediation-history/` before every gap-plan dispatch: an active
+> snapshot the agent always reads, and a resolved archive of resolved prior cases that the agent
+> reads only when a current finding may be a recurrence. A resolved case whose source carries a
+> current pending finding id stays in the active snapshot. The prompt carries only an index of
+> ids and counts with each file's path and digest. They
+> have no byte limit and cannot raise an over-limit fault. D7.3 still governs required
+> references, tasks, untyped evidence, and the total inlined payload. A snapshot write failure
+> is a named mechanical fault. A projection size overflow is never a needs-human halt; that
+> class is kept for a prior repair task missing from the active plan and an unreadable case
+> store. Plan validation keeps using the engine's in-memory projection, never the files. The
+> caps were sized from a past corpus and halted a feature on ordinary history.
+
 ### D8 — Commit relationships with optimistic freshness, classify mechanically
 
 Capture a digest of the report/source set, code/diff snapshot, feature identity, and decision-store revision before dispatch. Recheck all of them under the state transition boundary before publishing relationships. A newer decision or changed report invalidates the proposed result; leave the prior authority intact and request fresh reconciliation rather than committing stale output. Do not hold the store lease across a provider call.
