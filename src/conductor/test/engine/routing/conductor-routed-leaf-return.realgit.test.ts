@@ -535,11 +535,16 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       feature_desc: 'demo',
       complexity_tier: 'M',
       manual_test: 'pending',
+      post_region_check: 'done',
     });
     delete state.acceptance_specs;
     delete state.build;
     delete state.test_suite;
     delete state.build_review;
+    delete state.prd_audit;
+    delete state.architecture_review_as_built;
+    delete state.rebase;
+    delete state.finish;
     await writeState(statePath, state);
     const leaf = parseChildId(2)!;
     await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', leaf), {
@@ -548,6 +553,11 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       test_suite: 'done',
       build_review: 'done',
       last_step: 'build_review',
+    });
+    await writeVerdict(subject.repo, 'manual_test', {
+      satisfied: false,
+      reason: 'settled leaf return requires fresh whole-feature validation',
+      checkedAt: Date.now(),
     });
     // Recovery must use the durable leaf-return receipt, not an event log.
     await rm(join(subject.repo, '.pipeline', 'events.jsonl'), { force: true });
@@ -593,6 +603,100 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     };
     await resumed.run();
     expect(resumeIndexChecked).toBe(true);
+    expect(dispatched[0]).toBe('manual_test');
+    expect(dispatched).not.toContain('build');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:2
+  it('recovers a settled leaf return through real preflight and selects the uninterrupted validation', async () => {
+    async function prepareSettledLeafValidation(): Promise<{
+      readonly subject: SweepRepository;
+      readonly statePath: string;
+      readonly config: HarnessConfig;
+    }> {
+      const prepared = await fixture();
+      await settleFixtureLeafReturn(prepared.subject, 'durably settle leaf return before validation');
+      const root = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+      Object.assign(root, {
+        feature_desc: 'demo',
+        complexity_tier: 'M',
+        manual_test: 'pending',
+        post_region_check: 'done',
+      });
+      delete root.acceptance_specs;
+      delete root.build;
+      delete root.test_suite;
+      delete root.build_review;
+      delete root.prd_audit;
+      delete root.architecture_review_as_built;
+      delete root.rebase;
+      delete root.finish;
+      await writeState(prepared.statePath, root);
+      await writeState(pipelinePathFor(prepared.subject.repo, 'conduct-state.json', parseChildId(2)!), {
+        acceptance_specs: 'done',
+        build: 'done',
+        test_suite: 'done',
+        build_review: 'done',
+        last_step: 'build_review',
+      });
+      for (const gate of [
+        'prd_audit',
+        'architecture_review_as_built',
+        'manual_test',
+        'post_region_check',
+      ] as StepName[]) {
+        await writeVerdict(prepared.subject.repo, gate, {
+          satisfied: false,
+          reason: 'settled leaf return requires fresh whole-feature validation',
+          checkedAt: Date.now(),
+        });
+      }
+      return prepared;
+    }
+
+    async function firstValidationAfterRun(
+      prepared: Awaited<ReturnType<typeof prepareSettledLeafValidation>>,
+      resume: boolean,
+    ): Promise<readonly StepName[]> {
+      const dispatched: StepName[] = [];
+      let stop = false;
+      const conductor = new Conductor({
+        projectRoot: prepared.subject.repo,
+        stateFilePath: prepared.statePath,
+        featureSlug: 'demo',
+        resume,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: false,
+        config: prepared.config,
+        events: new ConductorEventEmitter(),
+        operatorParkBoundary: async () => stop,
+        stepRunner: {
+          run: async (step) => {
+            dispatched.push(step);
+            stop = true;
+            return { success: true };
+          },
+        },
+      });
+      await conductor.run();
+      await expect(readFile(join(prepared.subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      return dispatched;
+    }
+
+    const uninterrupted = await prepareSettledLeafValidation();
+    const uninterruptedDispatches = await firstValidationAfterRun(uninterrupted, false);
+    const restarted = await prepareSettledLeafValidation();
+    const restartedDispatches = await firstValidationAfterRun(restarted, true);
+
+    expect(restartedDispatches[0]).toBe(uninterruptedDispatches[0]);
+    expect(['manual_test', 'prd_audit', 'architecture_review_as_built', 'post_region_check']).toContain(
+      restartedDispatches[0],
+    );
+    expect(restartedDispatches).not.toContain('build');
   });
 
   // Covers: task:5
