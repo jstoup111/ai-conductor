@@ -627,3 +627,12 @@ All engine paths below are under `src/conductor/src/engine/` unless they start a
 **Done when:**
 - adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 4 is satisfied by this task.
 - The repair for task rem-as-built-rem-as-built-d4-adopt-before-durable-recovery is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-s6-3-clear-marker-on-stale-halt: In src/conductor/src/engine/conductor.ts stale-citation halt branch (~14909-14920), call clearHaltMarker(this.projectRoot) before returning. Match sibling stall-halt paths by persisting pending state changes (persistPendingStateChanges) and detaching the SIGINT/SIGTERM handlers (process.off) before the return. Keep the HALT class, the HALT body and retireTerminalBuildStallInputs unchanged. Add a conductor test: after a stale-citation mechanical HALT, `.pipeline/halt-user-input-required` is absent. After an `ai-conductor halt clear` and a re-run whose BUILD session makes progress without writing a new question, no stalled='halt_marker' re-detection occurs and no attempt-4 needs-human HALT is written.
+**Gate:** prd-audit
+**Rationale:** Verified at conductor.ts:14909-14920: the stale-citation `halt` branch writes the stall HALT, retires inputs, emits loop halt and returns without calling clearHaltMarker. The sibling non-halt branch (14922) and the general stall path (14930) do clear it. So `.pipeline/halt-user-input-required` survives `ai-conductor halt clear` and re-kicks. The next BUILD then re-detects stalled='halt_marker' on the stale question and keeps counting attempts 4, 5 and so on. This is implementation drift inside approved Task 18 (mechanical then needs-human halt semantics), and the approved architecture stays authoritative. No architecture or product decision is needed, so the route is BUILD bound to owner task 18. Preserved: the existing attempt-3 mechanical, attempt-4 needs-human and persist-failed halt tests and HALT-body wording (S6.1, S6.6-S6.8) stay unchanged.
+**Criterion:** S6.3
+**Parent task:** 18
+**Done when:**
+- [test] S6.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-s6-3-clear-marker-on-stale-halt is committed and its targeted tests pass.
