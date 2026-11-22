@@ -34,7 +34,7 @@ import type { RemediationCaseAsBuiltRecord } from './remediation-case-store.js';
 import { slugify } from './worktree.js';
 
 /** Incremented only when the deterministic remediation input contract changes. */
-export const REMEDIATION_PROJECTION_VERSION = 2;
+export const REMEDIATION_PROJECTION_VERSION = 3;
 
 export type RemediationProjectionSource =
   | 'validation-group'
@@ -146,6 +146,16 @@ export interface RemediationProjectionHistory {
   readonly priorAsBuiltCases: RemediationHistoryDimension;
   readonly priorLaps: RemediationHistoryDimension;
   readonly refusals: RemediationHistoryDimension;
+}
+
+/** The compact prompt form never embeds the durable history collections. */
+export function renderRemediationPromptProjection(
+  projection: RemediationProjection,
+  history?: RemediationProjectionHistory,
+): RemediationProjection | (Omit<RemediationProjection, 'pendingAsBuiltFindings' | 'priorAsBuiltCases' | 'priorLaps' | 'refusals'> & { readonly history: RemediationProjectionHistory }) {
+  if (history === undefined) return projection;
+  const { pendingAsBuiltFindings: _pending, priorAsBuiltCases: _cases, priorLaps: _laps, refusals: _refusals, ...prompt } = projection;
+  return { ...prompt, history };
 }
 
 type RemediationEvidenceLimits = Pick<AsBuiltProjectionLimits, 'perFileHunksBytes' | 'totalDiffBytes'>;

@@ -1,4 +1,5 @@
 import { writeFile, access, readFile, readdir, mkdir, rename, rm, symlink } from 'node:fs/promises';
+import { renderRemediationPromptProjection } from './remediation-projection.js';
 import { MISSING_PIPELINE_ROOT_WARNING } from './pr-body-region-store.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { execa } from 'execa';
@@ -1771,7 +1772,7 @@ export class DefaultStepRunner implements StepRunner {
             const gapPlanInput =
               gapPlan === undefined
                 ? undefined
-                : `REMEDIATION GAP-PLAN INPUT (engine-owned):\n${JSON.stringify(gapPlan.projection)}\n\nTerminal remediation-plan shape (engine-owned): ${renderRemediationPlanShape()}`;
+                : `REMEDIATION GAP-PLAN INPUT (engine-owned):\n${JSON.stringify(renderRemediationPromptProjection(gapPlan.projection, gapPlan.history))}\n\nTerminal remediation-plan shape (engine-owned): ${renderRemediationPlanShape()}`;
             const result = await this.executeProviderAwareSkillOneShot(
               step,
               {

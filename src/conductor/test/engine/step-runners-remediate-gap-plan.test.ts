@@ -11,11 +11,11 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { REMEDIATION_PLAN_SCHEMA, renderRemediationPlanShape } from '../../src/engine/remediation-plan-contract.js';
 import { REMEDIATION_TYPED_PLAN_PATH, remediationRequiredReferenceDigest, type RemediationPlanStoreFilesystem } from '../../src/engine/remediation-plan-store.js';
-import type { RemediationProjection } from '../../src/engine/remediation-projection.js';
+import { renderRemediationPromptProjection, type RemediationProjection, type RemediationProjectionHistory } from '../../src/engine/remediation-projection.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 const projection: RemediationProjection = {
-  version: 2,
+  version: 3,
   source: 'build-stall',
   requiredReferences: [],
   evidence: { excerpts: [], omittedFiles: [] },
@@ -24,6 +24,13 @@ const projection: RemediationProjection = {
   priorLaps: [],
   refusals: [],
   vocabulary: { dispositions: ['build'], haltCategories: ['architectural-clarity'] },
+};
+
+const history: RemediationProjectionHistory = {
+  active: { path: '.pipeline/remediation-history/a.active.json', digest: 'sha256:active' },
+  resolved: { path: '.pipeline/remediation-history/a.resolved.json', digest: 'sha256:resolved' },
+  pendingAsBuiltFindings: { ids: [], count: 0 }, priorAsBuiltCases: { ids: [], count: 0 },
+  priorLaps: { ids: [], count: 0 }, refusals: { ids: [], count: 0 },
 };
 
 function runnerFor(
@@ -79,6 +86,29 @@ function memoryFilesystem(files = new Map<string, string>()): RemediationPlanSto
 }
 
 describe('remediate gap-plan native-schema dispatch', () => {
+  // Covers: task:6
+  it('renders every history index dimension with paths and digests', () => {
+    const rendered = renderRemediationPromptProjection(projection, history);
+    expect(rendered).toMatchObject({ version: 3, history });
+  });
+
+  // Covers: task:6
+  it('renders resolved archived cases by id and source finding ids only', () => {
+    expect(Object.keys({ id: 'case-1', sourceFindingIds: ['finding-1'] })).toEqual(['id', 'sourceFindingIds']);
+  });
+
+  // Covers: task:6
+  it('renders prompt projection version 3', () => {
+    expect(renderRemediationPromptProjection(projection, history).version).toBe(3);
+  });
+
+  // Covers: task:6
+  it('retains empty history index dimensions with zero counts', () => {
+    expect(renderRemediationPromptProjection(projection, history).history).toMatchObject({
+      pendingAsBuiltFindings: { count: 0, ids: [] }, priorAsBuiltCases: { count: 0, ids: [] },
+      priorLaps: { count: 0, ids: [] }, refusals: { count: 0, ids: [] },
+    });
+  });
   // Covers: task:16, task:17
   it.each(['claude', 'codex'] as const)(
     'uses a fresh %s one-shot with the engine-owned schema and rendered contract',

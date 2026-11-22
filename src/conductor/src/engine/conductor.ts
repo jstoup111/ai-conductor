@@ -4967,7 +4967,7 @@ export class Conductor {
       const dispatch = await this.stepRunner.run('remediate', state, {
         runId: attemptId,
         retryReason: dispatchContext,
-        remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
+        remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection, history: projectionResult.history },
       });
 
       // The native-schema preflight is a deterministic engine capability
