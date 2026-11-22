@@ -91,7 +91,7 @@ import {
 } from '../routing/routing-refs.js';
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
 import { childRevalidatedEvent } from '../routing/routing-events.js';
-import { parseRevalidationQueueRecord, routingEligible, type RevalidationQueueRecord } from '../routing/route-types.js';
+import { parseRevalidationQueueRecord, routingEligible, type RevalidationQueueEntry, type RevalidationQueueRecord } from '../routing/route-types.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
@@ -1359,28 +1359,33 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
       // queue CAS as well as the route replacements.
       if (journal.journal.queueTracked === true) {
         const queueBefore = await queueRecordAtJournalStart(journal, git);
-        const entries = planned.ranges
-          .filter((range) => range.kind !== 'leaf-active' && range.kind !== 'leaf-unentered')
-          .flatMap((range, index) => {
-            const move = moves.find(
-              (candidate) => candidate.child === range.child && candidate.ref.startsWith('refs/heads/'),
-            );
-            if (move === undefined || move.oldSha === move.newSha) return [];
-            const prior = planned.ranges[index - 1];
-            return [
-              {
-                child: range.child,
-                position: range.child,
-                closureSha: move.newSha,
-                gates: [...CHILD_REGION_STEPS],
-                replay: {
-                  oldParent: range.oldParent,
-                  newParent: prior === undefined ? base : (staged.get(prior.child) ?? base),
-                },
-                state: 'queued' as const,
-              },
-            ];
+        const entries: RevalidationQueueEntry[] = [];
+        for (const [index, range] of planned.ranges.entries()) {
+          if (range.kind === 'leaf-active' || range.kind === 'leaf-unentered') continue;
+          const move = moves.find(
+            (candidate) => candidate.child === range.child && candidate.ref.startsWith('refs/heads/'),
+          );
+          if (move === undefined) continue;
+          const [oldTree, newTree] = await Promise.all([
+            git(['rev-parse', `${move.oldSha}^{tree}`]),
+            git(['rev-parse', `${move.newSha}^{tree}`]),
+          ]);
+          if (oldTree.exitCode !== 0 || newTree.exitCode !== 0)
+            return { kind: 'unavailable', detail: `cannot compare fold child ${range.child} trees` };
+          if (oldTree.stdout.trim() === newTree.stdout.trim()) continue;
+          const prior = planned.ranges[index - 1];
+          entries.push({
+            child: range.child,
+            position: range.child,
+            closureSha: move.newSha,
+            gates: [...CHILD_REGION_STEPS],
+            replay: {
+              oldParent: range.oldParent,
+              newParent: prior === undefined ? base : (staged.get(prior.child) ?? base),
+            },
+            state: 'queued',
           });
+        }
         const leafTree = await requiredSha(git, `${leafHead}^{tree}`, 'fold leaf tree');
         const nextQueue = mergeQueueGeneration(queueBefore, entries, {
           fold: {
