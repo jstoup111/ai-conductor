@@ -201,7 +201,6 @@ export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
 
 /** D7.2/D7.3 floor for the plan-task and criterion-bearing dimensions. */
 export const REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES = 256 * 1024;
-/** Non-empty allowance when a durable optional-history corpus is absent. */
 /** Covers the version, source, vocabulary, and JSON wrapper outside named dimensions. */
 export const REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
 
@@ -222,14 +221,6 @@ const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
     REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes,
   )),
-  // `.pipeline/kickback-ledger.json`: 9,989 B for 15 pending findings; D7.2 floor → 262,144 B.
-  // Each finding carries its governing clause, so the set is criterion-bearing and the
-  // optional-history floor would fault any as-built lap with roughly eight or more findings.
-  // `.pipeline/kickback-ledger.json`: 111 B prior-lap set; optional-history floor → 4,096 B.
-  // No `.docs/shipped` refusal record at BUILD (0 B); optional-history floor → 4,096 B.
-  // `.pipeline/remediation-cases.json` asBuiltCases: 8,929 B projected for 11 open
-  // cases (#3677). Each case carries its source summaries, so the optional-history
-  // floor faulted any as-built lap with roughly five or more open cases; D7.2 floor → 262,144 B.
 } as const;
 
 const REMEDIATION_PROJECTION_TOTAL_LIMIT_BYTES = roundUpPowerOfTwo(
