@@ -4,45 +4,28 @@ spec_hash: 1a7bdbb70cac1021ebef55e507c244b6348da9e91d39b560a9a3c171e32c9daa
 pr: https://github.com/jstoup111/ai-conductor/pull/3690
 shipped: 2026-11-22
 engine_version: 20261122T004707Z-42ca887c19f7
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "This compensates for the planned change that stops daemon-mode dispatch visualizers from installing their own SIGINT/SIGTERM listeners (`installProcessSignalHandlers: false`, needed for S1.1). It keeps the best-effort Ctrl-C trace flush that this change would otherwise drop, so it serves the plan's telemetry outcome. One uncertainty: before this change, a dispatch visualizer's SIGINT listener could stop Node's default SIGINT exit while dispatches were active. The daemon now always exits on SIGINT after the flush. My confidence that the earlier behavior differed in practice is about 60%."
-    accepted: false
-    authority: engine
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-2
-    summary: "This hardens test isolation. It keeps aggregate-suite child processes inside the run-scoped temp root so they cannot slip past the global /tmp leak guard, and it only takes effect under Vitest. It looks like a repair that lets the test suite pass on this branch (about 70% confidence) rather than new product behavior. Production test_suite output and persisted state are unchanged."
-    accepted: false
-    authority: engine
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-3
-    summary: "This is formatter churn only. It changes no operator-visible output, CLI result or persisted state. It does widen the diff in files outside the plan's surface."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
-input: 3356698
-output: 279330
-cache_read: 38225583
+input: 3377507
+output: 279501
+cache_read: 38262063
 cache_creation: 2282474
-cost_usd: 49.0884
-dispatches: 92
+cost_usd: 49.1119
+dispatches: 93
 retries: 12
 halts: 12
 unmetered: count: 0, duration_ms: 0
 cost_unmetered: count: 0
 providers:
-  codex: input: 3356400, output: 167111, cache_read: 31332608, cache_creation: 0, cost_usd: 27.2045, dispatches: 51, cost_unmetered: 0
+  codex: input: 3377209, output: 167282, cache_read: 31369088, cache_creation: 0, cost_usd: 27.228, dispatches: 52, cost_unmetered: 0
   claude: input: 298, output: 112219, cache_read: 6892975, cache_creation: 2282474, cost_usd: 21.884, dispatches: 41, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","6a73a66c-f976-43eb-99b8-5823579453b7","lifecycle-step","finish"]
+state: measured
+active_ms: 23954735
+provider_active_ms: 8099077
+no_provider_active_ms: 15855658
 
 ## Build Review
 laps_to_pass: 1
