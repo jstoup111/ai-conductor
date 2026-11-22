@@ -746,6 +746,7 @@ describe('executeProviderCandidates', () => {
         runId: 'R', attempt: 1,
         auxiliaryMember: 'security',
       },
+      undefined,
     );
   });
 
@@ -2048,6 +2049,7 @@ describe('executeProviderCandidates', () => {
     expect(prepare).toHaveBeenCalledWith(
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
+      undefined,
       undefined,
     );
     expect(claude.invoke).not.toHaveBeenCalled();
