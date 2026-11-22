@@ -4,39 +4,26 @@ spec_hash: 43b167fc798be9a304871b7fe2feb17773d2f067d35b033a8bc6be24fec6bab4
 pr: https://github.com/jstoup111/ai-conductor/pull/3710
 shipped: 2026-11-22
 engine_version: 20261122T020604Z-3379a47ff8d4
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "Layout-only churn beyond the planned files. It changes no operator-visible output, CLI result, or persisted state."
-    accepted: false
-    authority: engine
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-2
-    summary: "These are fail-closed hardening changes that let a shared dispatch snapshot abandon timed-out preparations and verify each live-checkout root against its own containment verdict. They serve Story 1 criterion 5 and Story 2 criteria 5 to 7."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
-input: 4079874
-output: 344629
-cache_read: 55302091
+input: 4093093
+output: 344784
+cache_read: 55338827
 cache_creation: 3104603
-cost_usd: 55.5152
-dispatches: 90
+cost_usd: 55.531
+dispatches: 91
 retries: 7
 halts: 8
 unmetered: count: 4, duration_ms: 0
 cost_unmetered: count: 0
 providers:
-  codex: input: 4079604, output: 228315, cache_read: 47890432, cache_creation: 0, cost_usd: 26.8687, dispatches: 56, cost_unmetered: 0
+  codex: input: 4092823, output: 228470, cache_read: 47927168, cache_creation: 0, cost_usd: 26.8845, dispatches: 57, cost_unmetered: 0
   claude: input: 270, output: 116314, cache_read: 7411659, cache_creation: 3104603, cost_usd: 28.6465, dispatches: 34, cost_unmetered: 0
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","8061d4f0-5144-4d70-9bf6-34af6b05248c","lifecycle-step","finish"]
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 1
