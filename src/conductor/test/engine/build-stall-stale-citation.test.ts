@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  buildStallStaleCitationOutcome,
   classifyBuildStallStaleCitation,
   recordBuildStallStaleCitation,
 } from '../../src/engine/build-stall-stale-citation.js';
@@ -185,6 +186,51 @@ describe('build-stall stale-citation recorder', () => {
         persister.stop();
       }
     }
+  });
+
+  // Covers: task:18
+  it('names the resolved case owner and halt-clear command in the attempt-three mechanical halt', () => {
+    expect(buildStallStaleCitationOutcome(resolvedCitation, { kind: 'recorded', attempt: 2 })).toEqual({
+      kind: 'retry',
+      hint: 'Case case-resolved is settled by child 4 and is not this session\'s work.',
+    });
+    expect(buildStallStaleCitationOutcome(resolvedCitation, { kind: 'recorded', attempt: 3 })).toEqual({
+      kind: 'halt',
+      haltClass: 'mechanical',
+      detail:
+        'Stale citation case-resolved is settled by child 4; use ai-conductor halt clear after reviewing the stale citation.',
+    });
+  });
+
+  // Covers: task:18
+  it('keeps the resolved case owner in the attempt-four needs-human halt after a re-kick', async () => {
+    const { root, events, persister } = await eventSpine();
+    try {
+      for (const attempt of [1, 2, 3]) {
+        await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2)).resolves.toEqual({
+          kind: 'recorded',
+          attempt,
+        });
+      }
+      const reKick = await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      expect(buildStallStaleCitationOutcome(resolvedCitation, reKick)).toEqual({
+        kind: 'halt',
+        haltClass: 'needs-human',
+        detail:
+          'Stale citation case-resolved is settled by child 4; use ai-conductor halt clear after reviewing the stale citation.',
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:18
+  it('names ai-conductor halt clear when stale-citation persistence fails', () => {
+    expect(buildStallStaleCitationOutcome(resolvedCitation, { kind: 'persist-failed' })).toEqual({
+      kind: 'halt',
+      haltClass: 'needs-human',
+      detail: 'Unable to record stale citation; use ai-conductor halt clear after checking the event spine.',
+    });
   });
 
   // Covers: task:19

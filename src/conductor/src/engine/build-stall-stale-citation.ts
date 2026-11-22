@@ -74,19 +74,19 @@ export function buildStallStaleCitationOutcome(
     return {
       kind: 'halt',
       haltClass: 'needs-human',
-      detail: 'Unable to record stale citation; clear this halt after checking the event spine.',
+      detail: 'Unable to record stale citation; use ai-conductor halt clear after checking the event spine.',
     };
   }
   if (recorded.attempt >= 3) {
     return {
       kind: 'halt',
       haltClass: recorded.attempt >= 4 ? 'needs-human' : 'mechanical',
-      detail: `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`}; clear this halt after reviewing the stale citation.`,
+      detail: `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? `settled by child ${citation.ownerChild}` : `owned by child ${citation.ownerChild}`}; use ai-conductor halt clear after reviewing the stale citation.`,
     };
   }
   return {
     kind: 'retry',
-    hint: `Case ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`} and is not this session's work.`,
+    hint: `Case ${citation.caseId} is ${citation.state === 'resolved' ? `settled by child ${citation.ownerChild}` : `owned by child ${citation.ownerChild}`} and is not this session's work.`,
   };
 }
 

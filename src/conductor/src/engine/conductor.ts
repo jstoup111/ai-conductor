@@ -103,7 +103,11 @@ import {
 } from './remediation-case-reconciler.js';
 import { formatBuildReviewResolveCaseCommand } from './build-review-adjudication.js';
 import { buildRemediationProjection, type RemediationProjectionLimits } from './remediation-projection.js';
-import { readTypedRemediationPlan, removeTypedRemediationPlan } from './remediation-plan-store.js';
+import {
+  readTypedRemediationPlan,
+  remediationTypedPlanPath,
+  removeTypedRemediationPlan,
+} from './remediation-plan-store.js';
 import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
@@ -6459,6 +6463,18 @@ export class Conductor {
           order.workOrder,
         ) + judgementContext,
     };
+  }
+
+  /** Name the admitted typed gap plan only while it remains readable in this BUILD region. */
+  private async buildTypedRemediationPlanInput(retryHint: string | undefined): Promise<string | undefined> {
+    const path = remediationTypedPlanPath(this.projectRoot, this.activeRegionChild);
+    try {
+      await accessFile(path);
+    } catch {
+      return retryHint;
+    }
+    const input = `Typed remediation gap plan you may read: ${relative(this.projectRoot, path)}`;
+    return retryHint ? `${retryHint}\n\n${input}` : input;
   }
 
   /** Move only a legacy flat order with a provable open child owner. */
@@ -12903,6 +12919,8 @@ export class Conductor {
                   }
                 }
                 if (step.name === 'build_review' && !missingWorktree) await this.settlePreservedSuiteProof(state);
+                const dispatchRetryHint =
+                  step.name === 'build' ? await this.buildTypedRemediationPlanInput(retryHint) : retryHint;
                 result =
                   missingWorktree ??
                   (step.name === 'complexity'
@@ -12927,7 +12945,7 @@ export class Conductor {
                                   step.name,
                                   state,
                                   attempt,
-                                  retryHint,
+                                  dispatchRetryHint,
                                   // D1 scope, self-host path: the verdict gate's
                                   // lifecycle `attempt.id` and its sidecar stamp
                                   // are the one value minted above.
@@ -12956,7 +12974,7 @@ export class Conductor {
                                         ? { prdWideningReviewContext: this.prdWideningReviewContext }
                                         : {}),
                                       ...this.buildReviewCapabilityOption(step.name),
-                                      retryReason: retryHint,
+                                      retryReason: dispatchRetryHint,
                                       attempt,
                                       escalate: resolved.escalate,
                                       modelOverride: esc.model,

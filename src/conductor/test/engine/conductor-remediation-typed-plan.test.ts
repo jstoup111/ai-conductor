@@ -279,6 +279,32 @@ async function fixture(
 }
 
 describe('Conductor typed remediation-plan admission', () => {
+  // Covers: task:6
+  it('names child 3’s readable typed gap plan in the BUILD handoff and omits an absent plan', async () => {
+    const result = await fixture('claude', undefined, 2, { activeChild: 3, skipPlanRemediation: true });
+    const child3 = parseChildId(3)!;
+    const typedPlanPath = remediationTypedPlanPath(result.root, child3);
+    await mkdir(dirname(typedPlanPath), { recursive: true });
+    await writeFile(typedPlanPath, '{"version":"v1"}\n', 'utf8');
+
+    const typedInput = await (
+      result.conductor as unknown as {
+        buildTypedRemediationPlanInput(retryHint: string | undefined): Promise<string | undefined>;
+      }
+    ).buildTypedRemediationPlanInput('Repair the admitted gap.');
+    expect(typedInput).toContain('.pipeline/children/3/remediation-plan.json');
+    expect(typedInput).toContain('you may read');
+
+    await rm(typedPlanPath);
+    await expect(
+      (
+        result.conductor as unknown as {
+          buildTypedRemediationPlanInput(retryHint: string | undefined): Promise<string | undefined>;
+        }
+      ).buildTypedRemediationPlanInput('Repair the admitted gap.'),
+    ).resolves.toBe('Repair the admitted gap.');
+  });
+
   async function refusalRound(outcomes: readonly RemediationPlanProviderOutcome[], maxRetries = 2) {
     const result = await fixture('claude', outcomes, maxRetries, { skipPlanRemediation: true });
     (
