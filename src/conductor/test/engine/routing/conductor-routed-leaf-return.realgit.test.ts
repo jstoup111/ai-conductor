@@ -576,10 +576,6 @@ describe('Conductor routed final leaf return (real local Git)', () => {
         },
       },
     });
-    // The preflight recovery consumed its transient route marker; emulate the
-    // durable leaf-return receipt that the resumed entry checks afterward.
-    (resumed as unknown as { hasSettledRoutedLeafReturn(slug: string): Promise<boolean> }).hasSettledRoutedLeafReturn =
-      async () => true;
     let resumeIndexChecked = false;
     const originalFindResumeIndex = (
       resumed as unknown as {
@@ -721,6 +717,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     }
 
     const dispatched: StepName[] = [];
+    const suiteDispatchChildren: Array<number | undefined> = [];
     let stop = false;
     const conductor = new Conductor({
       projectRoot: subject.repo,
@@ -738,6 +735,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
         inspect: async () => ({ status: 'CURRENT', evidence: { mode: 'aggregate' } }),
         ensure: async () => {
           dispatched.push('test_suite');
+          suiteDispatchChildren.push((conductor as unknown as { activeRegionChild?: number }).activeRegionChild);
           stop = true;
           return options.failExpectedGate
             ? { status: 'FAILED', reason: 'nonzero_exit', message: 'injected leaf validation failure' }
@@ -754,12 +752,10 @@ describe('Conductor routed final leaf return (real local Git)', () => {
         },
       },
     });
-    (
-      conductor as unknown as { hasSettledRoutedLeafReturn(slug: string): Promise<boolean> }
-    ).hasSettledRoutedLeafReturn = async () => true;
     await conductor.run();
 
     expect(dispatched).toEqual([expected]);
+    if (expected === 'test_suite') expect(suiteDispatchChildren).toEqual([leaf]);
     expect(dispatched).not.toContain('manual_test');
     expect(dispatched).not.toContain('build');
     return { dispatched, subject, statePath, leaf };
@@ -826,6 +822,47 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       });
     },
   );
+
+  // Covers: task:4
+  it.each([
+    ['live BUILD entry', false],
+    ['resume preflight', true],
+  ] as const)('refuses outstanding unlanded closed-child work before whole-feature validation on %s', async (_caseName, resume) => {
+    const { subject, statePath, config } = await fixture();
+    await settleFixtureLeafReturn(subject, 'leave a closed child repair outstanding');
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.commit('unlanded repair', 'unlanded-repair.txt', 'repair\n');
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+
+    const root = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+    Object.assign(root, { feature_desc: 'demo', complexity_tier: 'M', manual_test: 'pending' });
+    await writeState(statePath, root);
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', parseChildId(2)!), {
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', last_step: 'build_review',
+    });
+
+    const run = vi.fn();
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      resume,
+      ...(resume ? {} : { fromStep: 'test_suite' as StepName }),
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      config,
+      events: new ConductorEventEmitter(),
+      stepRunner: { run },
+    });
+
+    await conductor.run();
+
+    expect(run).not.toHaveBeenCalled();
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      resume ? 'unlanded-closed-child-commits' : 'child BUILD region refused',
+    );
+  });
 
   it('restacks a committed taskless host and returns the settled round to the leaf', async () => {
     const { subject, git, host: tasklessHost, repair } = await tasklessExitFixture(true);

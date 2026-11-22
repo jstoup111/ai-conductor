@@ -8278,7 +8278,6 @@ export class Conductor {
       const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
       let routedLeafBuildResume = false;
       let resumedAtWholeFeature = false;
-      let settledLeafHandoffIndex: number | undefined;
       let routedHostEntryStep: RegionGate | undefined;
       if (resumeSlug) {
         // Preflight owns durable routing reconciliation, including draining a
@@ -8316,13 +8315,23 @@ export class Conductor {
         const hasChildren = routingEnabled && (await hasDurableChildState(this.projectRoot, resumeSlug));
         const roundIsOpen = hasChildren ? await routedRoundOpen(this.projectRoot, resumeSlug) : false;
         if (hasChildren && !roundIsOpen && (await this.hasSettledRoutedLeafReturn(resumeSlug))) {
+          // An unlanded closed-child repair is not a settled leaf merely
+          // because an earlier round returned there. Leave it for the normal
+          // region-entry refusal, which is the authority for this BUILD work.
+          const cursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
+          if (isUnroutedRepairPending(cursor)) {
+            // `activateChildRegionStateForResume` below renders the existing
+            // refusal after stack preflight has had first claim on recovery.
+          } else {
           // Resume derives its entry index before the ordinary loop can bind
-          // a child. Use the same settled-leaf transition as the live exit
-          // and markerless reconciliation, including its selected target.
-          const handoff = await this.prepareSettledLeafHandoff(state, resumeSlug, indexOf);
-          if (handoff === 'halt') return;
-          settledLeafHandoffIndex = handoff.index;
-          resumedAtWholeFeature = true;
+            // a child. Bind the same settled-leaf transition as the live exit
+            // and markerless reconciliation before the ordinary resume
+            // selection, so its verdict and tree-attestation clamps choose
+            // the dispatch rather than a saved handoff index.
+            const handoff = await this.prepareSettledLeafHandoff(state, resumeSlug, indexOf);
+            if (handoff === 'halt') return;
+            resumedAtWholeFeature = true;
+          }
         }
         // Receipt recovery is meaningful only for a routed stack.  Resolve
         // its cursor after preflight has settled any recorded round so a
@@ -8556,7 +8565,6 @@ export class Conductor {
         }
       }
       startIndex = resolvedIndex;
-      if (settledLeafHandoffIndex !== undefined) startIndex = settledLeafHandoffIndex;
       // An operator round has already selected and restaged the host region
       // durably.  Its admission record, not the leaf's old resume state,
       // decides the first region gate after a restart.
