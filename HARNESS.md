@@ -129,6 +129,14 @@ mechanical exception: it copies the source acceptance specs under its governing 
 the lowest-sufficient-layer rule would not select them from scratch. This exception does not apply to
 ordinary semantic pattern reuse without that declaration.
 
+**Upfront approval in composer.** An operator who explicitly authorizes the whole change
+(for example, “proceed through the spec and ask only when you need a decision”) supplies
+the routine proceed and artifact-acceptance confirmations for that idea through PR handoff.
+Carry that instruction into each DECIDE skill. After its checks pass, accept the in-scope
+output and continue. A single-step “yes” covers only that step. Pause for unresolved human
+choices, changes in scope, unconfirmed load-bearing assumptions, or a requested review.
+Resume under the same approval once the operator answers, subject to any revised limits.
+
 **DECIDE scope:** The operator chooses the fix breadth before approach confirmation. Do not silently
 narrow or broaden the requested outcome.
 

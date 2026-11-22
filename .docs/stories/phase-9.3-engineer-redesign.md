@@ -80,7 +80,7 @@ and wait for my confirmation before any write, so that nothing is authored in th
 #### Happy Path
 - Given an idea and a registry with matching projects, when routing runs, then a target repo is
   proposed with a brief rationale, **reasoned in-chat with no spawned `claude -p`**, and the engineer
-  pauses for confirmation.
+  uses the target explicitly named in my upfront approval or pauses for confirmation.
 - Given a proposed repo, when I confirm, then authoring proceeds against that repo.
 
 #### Negative Paths
@@ -90,7 +90,7 @@ and wait for my confirmation before any write, so that nothing is authored in th
   is spawned for routing (regression guard).
 
 ### Done When
-- [ ] Routing returns a proposal + rationale + a confirmation gate (no auto-proceed).
+- [ ] Routing returns a proposal + rationale + operator confirmation, supplied upfront or in response to the proposal.
 - [ ] Redirect test asserts the first repo is byte-for-byte unchanged (no new refs/files).
 - [ ] Spawn-count assertion = 0 for the routing path.
 
@@ -164,6 +164,10 @@ respected — fixing the shipped divergence.
 - Given a confirmed target repo, when authoring runs, then brainstorm→stories→plan execute
   **human-gated in chat**, producing a PRD, stories, and a plan in the target repo's `.docs/` on a
   `spec/<slug>` branch.
+- Given my explicit upfront approval for the change, when a DECIDE output passes its checks
+  within scope, then composer accepts it and advances without asking me to proceed again.
+- Given that approval, when a material choice or load-bearing assumption needs my judgment,
+  then composer waits for my answer and resumes within the scope I authorized.
 - Given authoring completes, when the artifacts are inspected, then the stories file is real and
   carries `Status: Accepted` (no DRAFT) **and** the plan has a dependency tree, so the daemon's
   build-ready predicate passes.

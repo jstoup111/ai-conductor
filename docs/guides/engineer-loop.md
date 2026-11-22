@@ -126,7 +126,7 @@ ai-conductor compose projects
 ```
 
 Prints the registry as JSON. Pick the best-fit project, state the rationale, and confirm the target
-with the operator before going further. If nothing fits, scaffold a new project with
+with the operator before going further. An upfront instruction naming the target already confirms it. If nothing fits, scaffold a new project with
 `ai-conductor create` and continue with it.
 
 ## Step 3 — Create the per-idea worktree
@@ -161,6 +161,11 @@ diagnostic that names `--body`, and still creates the worktree. `--body` always 
 With `worktreePath` as the working directory, run the real DECIDE skills in canonical order. The
 engineer owns the whole DECIDE phase; the daemon only builds. Every artifact is written inside the
 worktree, never the primary checkout.
+
+To approve routine steps once, tell composer “Prepare the spec PR in this repo and ask me only
+when you need a decision.” Composer carries that approval through each completed artifact and
+the PR handoff. It pauses for choices such as stacked versus single-PR delivery, then resumes
+after your answer. You can narrow or withdraw approval at any point.
 
 As each step starts, mark it so a herdr or tmux pane shows `<slug> · <step>`
 ([pane labels](../reference/cli.md#composer-pane-labels)):
