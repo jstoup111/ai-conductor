@@ -49,7 +49,7 @@ import {
   type RebaseRegradeGate,
   type RebaseRegradeJudge,
 } from './rebase-regrade-judgement.js';
-import type { ConductorEvent } from '../types/events.js';
+import type { ConductorEvent, ExecutionContext } from '../types/events.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -1863,6 +1863,8 @@ export interface ResolutionContext {
     readonly cause: RestackCause;
     readonly roundId?: import('../types/routing.js').RoundId;
   };
+  /** Correlates resolver dispatches with the owning rebase execution. */
+  executionContext?: ExecutionContext;
 }
 export type RebaseResolver = (ctx: ResolutionContext) => Promise<ResolutionAttempt>;
 

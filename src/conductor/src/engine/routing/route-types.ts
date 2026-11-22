@@ -993,7 +993,10 @@ function parseHostPlacements(
     }
     if (rawPlacement.state !== 'deferred') return undefined;
     if (exitTip === undefined) {
-      if (hosts[child] !== 'repairing') return undefined;
+      // The leaf boundary is durable before frozen remediation blocks can
+      // mutate the leaf.  An admitted host is therefore a valid, resumable
+      // open placement until the entry completes its repairing transition.
+      if (hosts[child] !== 'admitted' && hosts[child] !== 'repairing') return undefined;
       placements[child] = { state: 'deferred', leafEntryTip };
       continue;
     }

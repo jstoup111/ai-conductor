@@ -63,6 +63,13 @@ export interface RestackJournalRouted {
   readonly queueNew?: CommitSha;
 }
 
+/** A deferred-placement route whose boundary tips must survive this replay. */
+export interface RestackJournalDeferredRoute {
+  readonly roundId: RoundId;
+  readonly routeOld: CommitSha;
+  readonly routeNew?: CommitSha;
+}
+
 export interface RestackJournalInvalidation {
   readonly child: ChildId;
   readonly gates: readonly string[];
@@ -92,6 +99,8 @@ export interface RestackJournalDraft {
   readonly originatingChildren?: readonly ChildId[];
   /** Routing refs and precomputed replacement blobs owned by this restack. */
   readonly routed?: RestackJournalRouted;
+  /** Every deferred-placement route fenced by this restack's applied CAS. */
+  readonly deferredRoutes?: readonly RestackJournalDeferredRoute[];
   /** Closed-child gates invalidated by the restack. */
   readonly invalidation?: readonly RestackJournalInvalidation[];
   /** Whether this operation owns a revalidation queue compare-and-swap. */
@@ -360,6 +369,20 @@ function parseRouted(value: unknown): RestackJournalRouted | undefined {
   };
 }
 
+function parseDeferredRoutes(value: unknown): readonly RestackJournalDeferredRoute[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const routes: RestackJournalDeferredRoute[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.roundId !== 'string' || typeof item.routeOld !== 'string') return undefined;
+    const roundId = parseRoundId(item.roundId);
+    const routeOld = parseCommitSha(item.routeOld);
+    const routeNew = item.routeNew === undefined ? undefined : typeof item.routeNew === 'string' ? parseCommitSha(item.routeNew) : undefined;
+    if (!roundId || !routeOld || (item.routeNew !== undefined && !routeNew)) return undefined;
+    routes.push({ roundId, routeOld, ...(routeNew === undefined ? {} : { routeNew }) });
+  }
+  return routes;
+}
+
 function parseInvalidation(value: unknown): readonly RestackJournalInvalidation[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const invalidation: RestackJournalInvalidation[] = [];
@@ -485,6 +508,7 @@ function parseJournal(value: unknown): RestackJournal | undefined {
         ? value.originatingChildren.map((child) => (typeof child === 'number' ? parseChildId(child) : undefined))
         : undefined;
   const routed = value.routed === undefined ? undefined : parseRouted(value.routed);
+  const deferredRoutes = value.deferredRoutes === undefined ? undefined : parseDeferredRoutes(value.deferredRoutes);
   const invalidation = value.invalidation === undefined ? undefined : parseInvalidation(value.invalidation);
   const queueOld =
     value.queueOld === undefined
@@ -520,6 +544,7 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     (value.originatingChildren !== undefined &&
       (!originatingChildren || originatingChildren.some((child) => !child))) ||
     (value.routed !== undefined && !routed) ||
+    (value.deferredRoutes !== undefined && !deferredRoutes) ||
     (value.invalidation !== undefined && !invalidation) ||
     (value.queueTracked !== undefined && value.queueTracked !== true) ||
     (value.queueOld !== undefined && !queueOld) ||
@@ -539,6 +564,7 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     ...(comparisonCommits === undefined ? {} : { comparisonCommits: comparisonCommits as CommitSha[] }),
     ...(originatingChildren === undefined ? {} : { originatingChildren: originatingChildren as ChildId[] }),
     ...(routed === undefined ? {} : { routed }),
+    ...(deferredRoutes === undefined ? {} : { deferredRoutes }),
     ...(invalidation === undefined ? {} : { invalidation }),
     ...(value.queueTracked === true ? { queueTracked: true as const } : {}),
     ...(queueOld === undefined ? {} : { queueOld }),

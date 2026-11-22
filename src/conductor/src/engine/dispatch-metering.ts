@@ -15,6 +15,8 @@ export interface DispatchMeteringObservation {
   model?: string;
   effort?: string;
   tier?: string;
+  /** Closed attribution bucket; operation and round identifiers never enter metrics. */
+  restackCause?: 'feature-repair' | 'base-refresh' | 'fold';
   tokenUsage?: TokenUsage;
   unmetered?: boolean;
 }
@@ -143,6 +145,10 @@ export class DispatchMeteringTracker {
       ...(typeof record.model === 'string' ? { model: record.model } : {}),
       ...(typeof record.effort === 'string' ? { effort: record.effort } : {}),
       ...(typeof record.tier === 'string' ? { tier: record.tier } : {}),
+      ...(typeof record.restack === 'object' && record.restack !== null &&
+      (record.restack as Record<string, unknown>).cause !== undefined
+        ? { restackCause: (record.restack as { cause: 'feature-repair' | 'base-refresh' | 'fold' }).cause }
+        : {}),
       ...(tokenUsage ? { tokenUsage } : {}),
       ...(record.unmetered === true ? { unmetered: true } : {}),
     };

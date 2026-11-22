@@ -1365,6 +1365,7 @@ type ConductorEventBody =
         step: string;
         model?: string;
         provider?: string;
+        restackCause?: 'feature-repair' | 'base-refresh' | 'fold';
         source?: 'provider' | 'rate-card';
         costUsd: number;
       }>;
@@ -1372,6 +1373,7 @@ type ConductorEventBody =
         step: string;
         model?: string;
         provider?: string;
+        restackCause?: 'feature-repair' | 'base-refresh' | 'fold';
         tokens: { input?: number; output?: number; cacheRead?: number; cacheCreation?: number };
       }>;
     }

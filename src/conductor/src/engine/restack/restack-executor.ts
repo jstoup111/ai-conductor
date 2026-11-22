@@ -22,6 +22,7 @@ import {
   journalStateUpdateLines,
   recordRoutedApplyPlan,
   type RestackJournalDraft,
+  type RestackJournalDeferredRoute,
   type RestackJournalRouted,
   type StoredRestackJournal,
 } from './restack-journal.js';
@@ -404,6 +405,10 @@ export async function appliedTransactionLines(
     if (routed === 'refused') throw new Error('cannot build routed applied transaction');
     lines.push(...routed);
   }
+  for (const route of (journal.journal.deferredRoutes ?? []).filter((entry) => entry.roundId !== journal.journal.routed?.roundId)) {
+    if (route.routeNew === undefined) throw new Error('cannot build deferred placement applied transaction');
+    lines.push(`update ${routeRecordRefFor(journal.slug, route.roundId)} ${route.routeNew} ${route.routeOld}`);
+  }
   if (journal.journal.queueTracked === true && journal.journal.queueNew !== undefined) {
     const queueRef = revalidationQueueRefFor(journal.slug);
     if (journal.journal.queueOld === undefined) lines.push(`create ${queueRef} ${journal.journal.queueNew}`);
@@ -476,6 +481,9 @@ export async function changedRoutedAppliedRef(
     ...(journal.journal.queueTracked === true
       ? [{ ref: revalidationQueueRefFor(journal.slug), old: journal.journal.queueOld }]
       : []),
+    ...(journal.journal.deferredRoutes ?? []).filter((entry) => entry.roundId !== routed?.roundId).map((route) => ({
+      ref: routeRecordRefFor(journal.slug, route.roundId), old: route.routeOld,
+    })),
   ];
   for (const entry of expected) {
     const result = await runGit(git, ['rev-parse', '-q', '--verify', entry.ref]);
@@ -493,6 +501,72 @@ export class RoutedApplyPlanRefChangedError extends Error {
     super(`routed applied ref changed: ${ref}`);
     this.name = 'RoutedApplyPlanRefChangedError';
   }
+}
+
+/** Capture every route record which owns an open deferred leaf placement. */
+async function deferredRouteSnapshots(
+  worktree: string,
+  slug: string,
+  git: GitRunner,
+): Promise<readonly RestackJournalDeferredRoute[]> {
+  const inventory = await deferredPlacementInventory(worktree, slug, { git });
+  if (inventory.kind !== 'inventory') throw new Error(inventory.detail);
+  const roundIds = [...new Set([...inventory.open, ...inventory.foldable].map((placement) => placement.roundId))];
+  const routes: RestackJournalDeferredRoute[] = [];
+  for (const roundId of roundIds) {
+    const stored = await readRouteRecord(worktree, slug, roundId, { git });
+    if (stored.kind !== 'record') throw new Error(`cannot read deferred placement route ${roundId}`);
+    routes.push({ roundId, routeOld: stored.blob });
+  }
+  return routes;
+}
+
+type DeferredRouteRemap =
+  | { readonly kind: 'updated'; readonly journal: StoredRestackJournal }
+  | { readonly kind: 'boundary-lost'; readonly host: ChildId }
+  | { readonly kind: 'unavailable'; readonly detail: string };
+
+/** Journal deferred placement translations before the branch-ref move. */
+async function journalDeferredRouteRemap(
+  worktree: string,
+  journal: StoredRestackJournal,
+  git: GitRunner,
+): Promise<DeferredRouteRemap> {
+  const routes = journal.journal.deferredRoutes;
+  if (routes === undefined || routes.length === 0) return { kind: 'updated', journal };
+  const rewrites = new Map<CommitSha, CommitSha>();
+  for (const child of journal.journal.children)
+    for (const rewrite of child.rewrites ?? []) rewrites.set(rewrite.from, rewrite.to);
+  const planned: RestackJournalDeferredRoute[] = [];
+  for (const route of routes) {
+    const stored = await readRouteRecord(worktree, journal.slug, route.roundId, { git });
+    if (stored.kind !== 'record' || stored.blob !== route.routeOld)
+      return { kind: 'unavailable', detail: `deferred placement route ${route.roundId} changed before remap` };
+    const placements = { ...(stored.record.placements ?? {}) };
+    for (const [rawHost, placement] of Object.entries(placements)) {
+      if (placement.state !== 'deferred') continue;
+      const host = Number(rawHost) as ChildId;
+      const leafEntryTip = rewrites.get(placement.leafEntryTip) ?? placement.leafEntryTip;
+      if (placement.exitTip === undefined) {
+        placements[host] = { state: 'deferred', leafEntryTip };
+        continue;
+      }
+      const exitTip = rewrites.get(placement.exitTip);
+      if (exitTip === undefined) return { kind: 'boundary-lost', host };
+      placements[host] = { state: 'deferred', leafEntryTip, exitTip };
+    }
+    const written = await git(['hash-object', '-w', '--stdin'], {
+      input: JSON.stringify({ ...stored.record, placements }),
+    });
+    const routeNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+    if (routeNew === undefined) return { kind: 'unavailable', detail: `cannot write deferred placement route ${route.roundId}` };
+    planned.push({ ...route, routeNew });
+  }
+  const next = { ...journal.journal, deferredRoutes: planned };
+  const blob = await writeRestackJournalBlob(worktree, next, { git });
+  const wrote = await runGit(git, ['update-ref', journalRefFor(journal.slug), blob, journal.blob]);
+  if (wrote.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot journal deferred placement remap' };
+  return { kind: 'updated', journal: { slug: journal.slug, blob, journal: next } };
 }
 
 /** Persist a routed route-record replacement before the applied transaction can use it. */
@@ -967,22 +1041,9 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
     });
     return haltedResult(options.worktree);
   }
-  for (const source of folded.commits) {
-    if (!source.parts.some((part) => part.child === source.owner)) {
-      await haltRestack(options.worktree, 'fold-misrouted', options.events, {
-        child: source.owner,
-        detail: `fold source ${source.sha} has no part on owner c${source.owner}`,
-      });
-      return haltedResult(options.worktree);
-    }
-    if (source.parts.some((part) => part.child === 'leaf')) {
-      await haltRestack(options.worktree, 'fold-misrouted', options.events, {
-        child: source.owner,
-        detail: `fold source ${source.sha} can only be placed on leaf`,
-      });
-      return haltedResult(options.worktree);
-    }
-  }
+  // Placement validity is per recorded host range, not per source commit.
+  // `placeFoldCommits` has already proved every host retains a material part
+  // on its owner; an individual source may legitimately land above that host.
   const foldTargets = [
     ...new Set(
       folded.commits.flatMap((source) => source.parts.flatMap((part) => (part.child === 'leaf' ? [] : [part.child]))),
@@ -1545,6 +1606,7 @@ async function runOrdinaryRestack(
       options.cause === 'feature-repair' && plan.ranges[0] !== undefined ? plan.ranges[0].oldParent : planningDefault;
     const comparison = await comparisonCommits(git, options.cause, plan.ranges, planningDefault);
     const queueTracking = await queueTrackingAtCreation(options.worktree, options.slug, git);
+    const deferredRoutes = await deferredRouteSnapshots(options.worktree, options.slug, git);
     const draft: RestackJournalDraft = {
       opId: randomUUID() as RestackOpId,
       cause: options.cause,
@@ -1554,6 +1616,7 @@ async function runOrdinaryRestack(
       comparisonCommits: comparison,
       ...(options.cause === 'feature-repair' ? { originatingChildren: originating } : {}),
       ...(options.routed === undefined ? {} : { routed: options.routed }),
+      ...(deferredRoutes.length === 0 ? {} : { deferredRoutes }),
       ...(queueTracking === undefined ? {} : queueTracking),
       dirtyPaths: [],
       refs: await journalRefs(git, options.slug, plan.ranges),
@@ -1969,6 +2032,17 @@ async function runOrdinaryRestack(
     }
 
     journal = await transitionState(options.worktree, journal, 'ready', git);
+    const deferredRemap = await journalDeferredRouteRemap(options.worktree, journal, git);
+    if (deferredRemap.kind === 'boundary-lost') {
+      await haltRestack(options.worktree, 'fold-boundary-lost', options.events, {
+        child: deferredRemap.host,
+        detail: `deferred placement exit boundary for host ${deferredRemap.host} was dropped by restack`,
+      });
+      terminal = true;
+      return haltedResult(options.worktree);
+    }
+    if (deferredRemap.kind === 'unavailable') throw new Error(deferredRemap.detail);
+    journal = deferredRemap.journal;
     const readyJournal = journal;
     moves = plan.ranges.flatMap((range) => {
       const branchRef = branchRefForRange(options.slug, range);

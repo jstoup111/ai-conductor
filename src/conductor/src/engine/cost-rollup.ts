@@ -26,6 +26,7 @@ export interface CostRollup {
     step: string;
     model?: string;
     provider?: string;
+    restackCause?: 'feature-repair' | 'base-refresh' | 'fold';
     source?: 'provider' | 'rate-card';
     costUsd: number;
   }>;
@@ -33,6 +34,7 @@ export interface CostRollup {
     step: string;
     model?: string;
     provider?: string;
+    restackCause?: 'feature-repair' | 'base-refresh' | 'fold';
     tokens: { input?: number; output?: number; cacheRead?: number; cacheCreation?: number };
   }>;
   dispatches: number;
@@ -87,11 +89,12 @@ function addDimensionRollup(
 
   const step = event.step ?? 'unknown';
   const source = tokenUsage.costSource;
-  const key = dimensionKey(step, event.model, event.provider, source);
+  const key = dimensionKey(step, event.model, event.provider, source, event.restackCause);
   const bucket = buckets.get(key) ?? {
     step,
     ...(event.model === undefined ? {} : { model: event.model }),
     ...(event.provider === undefined ? {} : { provider: event.provider }),
+    ...(event.restackCause === undefined ? {} : { restackCause: event.restackCause }),
     ...(source === undefined ? {} : { source }),
     costUsd: 0,
   };
@@ -115,11 +118,12 @@ function addTokenDimensionRollup(
   if (finiteTokens.length === 0) return;
 
   const step = event.step ?? 'unknown';
-  const key = dimensionKey(step, event.model, event.provider);
+  const key = dimensionKey(step, event.model, event.provider, event.restackCause);
   const bucket = buckets.get(key) ?? {
     step,
     ...(event.model === undefined ? {} : { model: event.model }),
     ...(event.provider === undefined ? {} : { provider: event.provider }),
+    ...(event.restackCause === undefined ? {} : { restackCause: event.restackCause }),
     tokens: {},
   };
   for (const kind of finiteTokens) {

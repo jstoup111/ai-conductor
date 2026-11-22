@@ -1324,6 +1324,30 @@ describe('context-free provider attempts within an explicit execution', () => {
     });
   });
 
+  it('records restack attributes for a resolver attempt without an open lifecycle span', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    await emitter.emit({ type: 'step_started', step: 'build', index: 1 });
+    await emitter.emit({
+      type: 'provider_attempt',
+      step: 'rebase',
+      executionContext: lifecycle('resolver-without-step', 'rebase'),
+      provider: 'claude',
+      outcome: 'success',
+      invoked: true,
+      restack: { opId: 'fold-op', cause: 'fold', roundId: 'r7' },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
+    expect(run.attributes).toMatchObject({
+      'conductor.restack.op_id': 'fold-op',
+      'conductor.restack.cause': 'fold',
+      'conductor.round': 'r7',
+    });
+  });
+
   it('attributes a context-free custom rubric attempt to the open build_review execution span', async () => {
     const warnings: string[] = [];
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (m) => warnings.push(m));

@@ -200,10 +200,30 @@ describe('appendRestackSection', () => {
     );
 
     expect(rendered).toContain(
-      '## Restack\nbase-refresh: runs: 1, cost_usd: $0.10\nfold: runs: 2, cost_usd: $1.50\nr5: runs: 1, cost_usd: $0.40\nunattributed: runs: 1, cost_usd: $0.25',
+      '## Restack\nbase-refresh:b1: runs: 1, cost_usd: $0.10\nfold:f1: runs: 2, cost_usd: $1.50\nr5: runs: 1, cost_usd: $0.40\nunattributed: runs: 1, cost_usd: $0.25',
     );
     expect(rendered.indexOf('## Time')).toBeLessThan(rendered.indexOf('## Restack'));
     expect(parseCostBlock(rendered)?.costUsd).toBe(2.25);
+  });
+
+  it('keeps distinct fold operations in distinct rows', () => {
+    const attempt = (opId: string, costUsd: number) => ({
+      ts: 0,
+      type: 'provider_attempt' as const,
+      step: 'rebase' as const,
+      provider: 'test',
+      outcome: 'success' as const,
+      invoked: true,
+      tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, costUsd },
+      restack: { opId, cause: 'fold' as const },
+    });
+    const rendered = appendRestackSection(renderShippedRecord({ slug: 'stack', specHash: 'abc' }), [
+      attempt('fold-one', 0.25),
+      attempt('fold-two', 0.75),
+    ], true);
+
+    expect(rendered).toContain('fold:fold-one: runs: 1, cost_usd: $0.25');
+    expect(rendered).toContain('fold:fold-two: runs: 1, cost_usd: $0.75');
   });
 
   it('always renders the zero case for stacks and never renders it for N=1', () => {

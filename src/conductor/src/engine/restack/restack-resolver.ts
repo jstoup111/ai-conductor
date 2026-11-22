@@ -441,6 +441,14 @@ export async function resolveRestackConflict(
           ...context,
           environment,
           ...(options.restack === undefined ? {} : { restack: options.restack }),
+          ...(options.restack === undefined
+            ? {}
+            : {
+                executionContext: {
+                  executionId: `restack:${options.restack.opId}:c${options.range.child}`,
+                  subject: { kind: 'lifecycle-step' as const, step: 'rebase' as const },
+                },
+              }),
           ...(options.operatorDecision === undefined ? {} : { operatorDecision: options.operatorDecision }),
         });
         if (result.resolved) {

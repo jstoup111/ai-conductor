@@ -288,11 +288,9 @@ export function appendRestackSection(
     const label =
       restack === undefined
         ? 'unattributed'
-        : restack.cause === 'fold'
-          ? 'fold'
-          : restack.cause === 'base-refresh'
-            ? 'base-refresh'
-            : (restack.roundId ?? 'feature-repair');
+        : restack.cause === 'fold' || restack.cause === 'base-refresh'
+          ? `${restack.cause}:${restack.opId}`
+          : (restack.roundId ?? `feature-repair:${restack.opId}`);
     add(label, costUsd);
   }
   const rendered = [...rows.entries()]

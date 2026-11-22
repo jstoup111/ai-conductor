@@ -853,6 +853,32 @@ describe('routed host region entry (real local Git)', () => {
     });
   });
 
+  it('persists a leaf boundary before a block-only entry can return derived-complete', async () => {
+    const subject = await fixture('audit', { execution: 'leaf' });
+    const entryTip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await expect(
+      enterHostRegion({
+        worktree: subject.repo,
+        slug: 'demo',
+        roundId,
+        host: child,
+        emitter: new ConductorEventEmitter(),
+        git: subject.git,
+        planPath,
+        checkCompletion: async () => ({ done: true }),
+      }),
+    ).resolves.toMatchObject({ kind: 'derived-already-complete' });
+
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record',
+      record: {
+        hosts: { 1: 'admitted' },
+        placements: { 1: { state: 'deferred', leafEntryTip: entryTip } },
+      },
+    });
+  });
+
   // Covers: task:56
   it('does not halt an audit host when its frozen task remains dispatchable', async () => {
     const subject = await fixture();

@@ -213,6 +213,7 @@ export class MetricsRecorder {
       const attributes: Record<string, string> = { step: bucket.step, ...tierAttrs };
       if (bucket.model !== undefined) attributes.model = bucket.model;
       if (bucket.provider !== undefined) attributes.provider = bucket.provider;
+      if (bucket.restackCause !== undefined) attributes.restack_cause = bucket.restackCause;
       if (bucket.source !== undefined) attributes.source = bucket.source;
       this.instruments.featureStepCostGauge.record(bucket.costUsd, this.withIdentity(attributes));
     }
@@ -223,6 +224,7 @@ export class MetricsRecorder {
           const attributes: Record<string, string> = { step: bucket.step, kind, ...tierAttrs };
           if (bucket.model !== undefined) attributes.model = bucket.model;
           if (bucket.provider !== undefined) attributes.provider = bucket.provider;
+          if (bucket.restackCause !== undefined) attributes.restack_cause = bucket.restackCause;
           this.instruments.featureStepTokensGauge.record(value, this.withIdentity(attributes));
         }
       }

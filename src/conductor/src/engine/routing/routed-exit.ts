@@ -51,7 +51,7 @@ export type AdvanceRoundResult =
   | { readonly kind: 'queue' }
   | { readonly kind: 'closed' }
   /** The final settled round switched back to the leaf and re-pended its gates. */
-  | { readonly kind: 'leaf-returned' }
+  | { readonly kind: 'leaf-returned'; readonly mode?: 'fold' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
 export type SettleDerivedNoOpHostResult =
@@ -365,7 +365,7 @@ export async function returnToLeaf(
     { git },
   );
   if (closedWrite.kind !== 'updated') return { kind: 'unavailable', detail: `round close ${closedWrite.kind}` };
-  return { kind: 'leaf-returned' };
+  return { kind: 'leaf-returned', ...(options.mode === 'fold' ? { mode: 'fold' as const } : {}) };
 }
 
 /** The immutable Git comparison facts used to choose a routed host's exit. */
@@ -501,11 +501,14 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     const placement = stored.record.placements?.[input.host];
     const head = await resolveGitRef(git, 'HEAD');
     if (typeof head !== 'string') return halted(`routed exit host ${input.host}: cannot resolve leaf exit tip`);
-    const unchanged = placement === undefined || placement.leafEntryTip === head;
+    if (placement === undefined) {
+      return halted(`routed exit host ${input.host}: leaf entry boundary is unavailable`);
+    }
+    const unchanged = placement.leafEntryTip === head;
     const done = transitionHost(stored, input.host, 'done', { credit: false });
     if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf-executed host done`);
     const record =
-      unchanged || placement === undefined
+      unchanged
         ? {
             ...done.record,
             placements: Object.fromEntries(

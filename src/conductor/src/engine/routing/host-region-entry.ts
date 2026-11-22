@@ -652,6 +652,30 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   if (typeof resolvedEntryHead !== 'string')
     return { kind: 'refused', detail: `cannot resolve host ${input.host} tip at region entry` };
   const entryHead = resolvedEntryHead;
+  // Persist the leaf range's lower boundary before a frozen block can commit.
+  // A crash after that commit must resume from a durable range, never infer it
+  // from a moved leaf tip.  The parser permits this one open admitted state.
+  if (stored.record.execution === 'leaf' && !pinned.isLeaf && stored.record.placements?.[input.host] === undefined) {
+    const withBoundary = {
+      ...stored.record,
+      placements: {
+        ...stored.record.placements,
+        [input.host]: { state: 'deferred' as const, leafEntryTip: entryHead },
+      },
+    };
+    const persisted = await writeRoutingTransaction(
+      input.worktree,
+      input.slug,
+      [{ kind: 'update-record', previous: stored, record: withBoundary }],
+      { git },
+    );
+    if (persisted.kind !== 'updated')
+      return { kind: 'refused', detail: `cannot persist leaf entry boundary: ${persisted.kind}` };
+    const reread = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+    if (reread.kind !== 'record')
+      return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable after boundary persistence` };
+    stored = reread;
+  }
   const allocation = stored.record.allocation[input.host];
   if (!allocation)
     return {
@@ -725,10 +749,9 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const repairing = transitionHost(recordWithBindings, input.host, 'repairing', { credit: true });
   if (repairing.kind !== 'updated')
     return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} cannot enter repairing` };
-  // `entryHead` was captured before frozen blocks moved the leaf.  Commit its
-  // open boundary only with the repairing transition: the route-record parser
-  // rejects an open placement for an admitted host, and a crash before this
-  // point safely replays the idempotent frozen-block write on the next entry.
+  // The boundary was persisted before frozen blocks could move the leaf.  Keep
+  // this fallback for ordinary non-leaf entries only; a leaf placement must
+  // never be created after a block commit.
   const record =
     repairing.record.execution === 'leaf' && !pinned.isLeaf && repairing.record.placements?.[input.host] === undefined
       ? {

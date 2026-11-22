@@ -3119,7 +3119,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(ctx.environment === undefined ? {} : { environmentOverlay: ctx.environment }),
       },
       undefined,
-      undefined,
+      ctx.executionContext === undefined ? undefined : { executionContext: ctx.executionContext },
       ctx.restack,
     );
     if (providerResult) {

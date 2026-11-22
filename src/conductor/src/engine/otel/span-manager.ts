@@ -280,7 +280,7 @@ export class SpanManager {
       (identity ? this.openSteps.get(identity.correlationKey) : undefined) ??
       (event.executionContext === undefined ? this.soleOpenLifecycleSpan(event.step) : undefined);
     if (!state) {
-      if (event.executionContext === undefined && this.recordOutOfBandAttempt(event, observation)) return;
+      if (this.recordOutOfBandAttempt(event, observation)) return;
       this.warn(`provider_attempt for '${event.step}' received but no open span exists — ignoring`);
       return;
     }
@@ -332,7 +332,7 @@ export class SpanManager {
     event: Extract<ConductorEvent, { type: 'provider_attempt' }>,
     observation: DispatchMeteringObservation,
   ): boolean {
-    if (!Object.hasOwn(OUT_OF_BAND_STEPS, event.step) || !this.runSpan) return false;
+    if ((!Object.hasOwn(OUT_OF_BAND_STEPS, event.step) && event.restack === undefined) || !this.runSpan) return false;
     const attrs: Record<string, string> = { step: event.step, outcome: event.outcome };
     if (observation.provider !== undefined) attrs.provider = observation.provider;
     if (observation.preferredProvider !== undefined) attrs.preferredProvider = observation.preferredProvider;
@@ -340,6 +340,14 @@ export class SpanManager {
     if (observation.effort !== undefined) attrs.effort = observation.effort;
     if (observation.tier !== undefined) attrs.tier = observation.tier;
     if (observation.fallbackReason !== undefined) attrs.fallbackReason = observation.fallbackReason;
+    if (event.restack !== undefined) {
+      attrs['conductor.restack.op_id'] = event.restack.opId;
+      attrs['conductor.restack.cause'] = event.restack.cause;
+      if (event.restack.roundId !== undefined) attrs['conductor.round'] = event.restack.roundId;
+      this.runSpan.setAttribute('conductor.restack.op_id', event.restack.opId);
+      this.runSpan.setAttribute('conductor.restack.cause', event.restack.cause);
+      if (event.restack.roundId !== undefined) this.runSpan.setAttribute('conductor.round', event.restack.roundId);
+    }
     this.runSpan.addEvent('provider_attempt', attrs);
     return true;
   }

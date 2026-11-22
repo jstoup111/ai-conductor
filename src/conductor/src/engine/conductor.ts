@@ -6936,6 +6936,11 @@ export class Conductor {
           // returnToLeaf re-pends whole-feature gates in the root state file.
           // Do not keep the former routed host's overlay or its CAS baseline.
           await this.restoreWholeFeatureState(state);
+          if (continued.next.kind === 'leaf-returned' && continued.next.mode === 'fold') {
+            state.rebase = 'pending';
+            await this.stateStore.save(state);
+            return { index: indexOf('rebase') };
+          }
           return { index: indexOf('manual_test') };
         }
         break;
@@ -7028,6 +7033,11 @@ export class Conductor {
       // guard selects a host. Restore the same root state that a live routed
       // exit uses, then let whole-feature validation resume normally.
       await this.restoreWholeFeatureState(state);
+      if (reconciled.mode === 'fold') {
+        state.rebase = 'pending';
+        await this.stateStore.save(state);
+        return { index: indexOf('rebase') };
+      }
       return { index: indexOf('manual_test') };
     }
     if (admission.kind === 'admitted' || admission.kind === 'continue' || admission.kind === 'busy') {
