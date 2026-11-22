@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-22T00:13:56.839Z
 Slug: child-executed-features-lose-closing-otel-telemetr
 Class: needs-human
 Halting step: rebase
