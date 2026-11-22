@@ -1,5 +1,5 @@
 // Covers: task:16, task:17
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -288,6 +288,62 @@ describe('remediate gap-plan native-schema dispatch', () => {
     expect(result.output).toContain('invented-disposition');
     expect(files.size).toBe(0);
     expect(files.has(`/tmp/remediation-gap-plan/${REMEDIATION_TYPED_PLAN_PATH}`)).toBe(false);
+  });
+
+  // Covers: task:11
+  it('returns the same structured rejection after history files are intact, altered, or deleted', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'remediation-history-validation-'));
+    const historyDirectory = join(projectRoot, '.pipeline', 'remediation-history');
+    const activePath = join(historyDirectory, 'attempt.active.json');
+    const resolvedPath = join(historyDirectory, 'attempt.resolved.json');
+    const pending: RemediationProjection = {
+      ...projection,
+      source: 'as-built',
+      requiredReferences: [{
+        kind: 'as-built-finding', id: 'as-built:lap-11:1', sourceGate: 'architecture_review_as_built',
+        reference: { kind: 'plan-task', taskId: '11' }, summary: 'The finding needs a disposition.',
+      }],
+      tasks: [{ id: '11', title: 'Owner', doneWhen: [] }],
+    };
+    const historyForAttempt: RemediationProjectionHistory = {
+      ...history,
+      active: { path: '.pipeline/remediation-history/attempt.active.json', digest: 'sha256:active' },
+      resolved: { path: '.pipeline/remediation-history/attempt.resolved.json', digest: 'sha256:resolved' },
+    };
+
+    try {
+      await mkdir(historyDirectory, { recursive: true });
+      await writeFile(activePath, '{"original":"active"}');
+      await writeFile(resolvedPath, '{"original":"resolved"}');
+      const modes = ['intact', 'altered', 'deleted'] as const;
+      const results = [];
+      for (const mode of modes) {
+        await mkdir(historyDirectory, { recursive: true });
+        await writeFile(activePath, '{"original":"active"}');
+        await writeFile(resolvedPath, '{"original":"resolved"}');
+        const invoke = vi.fn(async (): Promise<InvokeResult> => {
+          if (mode === 'altered') {
+            await writeFile(activePath, '{"altered":true}');
+            await writeFile(resolvedPath, '{"altered":true}');
+          }
+          if (mode === 'deleted') await rm(historyDirectory, { recursive: true, force: true });
+          return { success: true, output: 'incomplete plan', exitCode: 0, finalStructuredResult: { version: 'v1', dispositions: [] } };
+        });
+        const result = await runnerFor('claude', invoke, true, memoryFilesystem(), projectRoot).run('remediate', {}, {
+          remediationRequest: { mode: 'gap-plan', projection: pending, history: historyForAttempt },
+        });
+        expect(invoke).toHaveBeenCalledOnce();
+        results.push(result);
+      }
+
+      expect(results).toEqual(Array(3).fill(expect.objectContaining({
+        success: false,
+        output: 'structured-result-rejected: dispositions missing required reference as-built-finding:as-built:lap-11:1',
+        finalStructuredResult: undefined,
+      })));
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:17
