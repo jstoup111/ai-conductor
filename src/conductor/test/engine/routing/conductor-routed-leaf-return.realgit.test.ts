@@ -373,6 +373,25 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     const onDisk = await readState(statePath);
     if (!onDisk.ok) throw new Error('root state is unreadable');
     expect(onDisk.value).not.toHaveProperty('build');
+
+    const unresolved = await fixture();
+    const unresolvedGit = makeGitRunner(unresolved.subject.repo);
+    await unresolvedGit(['update-ref', '-d', routeRecordRefFor('demo', roundId)]);
+    await unresolvedGit(['update-ref', '-d', repairMarkerRefFor('demo')]);
+    await writeState(unresolved.statePath, root);
+    const unresolvedRun = vi.fn();
+    const unresolvedResume = new Conductor({
+      projectRoot: unresolved.subject.repo, stateFilePath: unresolved.statePath, featureSlug: 'demo', resume: true,
+      mode: 'auto', daemon: true, verifyArtifacts: false, config: unresolved.config, events: new ConductorEventEmitter(),
+      stackPreflight: async () => ({ kind: 'clear' }), stepRunner: { run: unresolvedRun },
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'topology-unavailable', cause: 'plan-missing' }) },
+    });
+    (unresolvedResume as unknown as { hasSettledRoutedLeafReturn(slug: string): Promise<boolean> }).hasSettledRoutedLeafReturn = async () => true;
+    await unresolvedResume.run();
+
+    expect(unresolvedRun).not.toHaveBeenCalled();
+    await expect(readFile(join(unresolved.subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('slice topology is unavailable');
+    await expect(readFile(join(unresolved.subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 
   // Covers: task:3
