@@ -1798,10 +1798,8 @@ describe('evaluateRebaseRecoveryHalt', () => {
 
     const missingRoot = await mkdtemp(join(tmpdir(), 'rebase-recovery-missing-'));
     try {
-      let dispatches = 0;
       const missing = await evaluateRebaseRecoveryHalt({ worktreePath: missingRoot, feature: 'feature' });
       expect(missing).toEqual({ kind: 'retained', reason: 'rebase recovery attempt evidence is missing or invalid' });
-      expect(dispatches).toBe(0);
     } finally {
       await rm(missingRoot, { recursive: true, force: true });
     }
