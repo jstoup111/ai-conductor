@@ -1919,6 +1919,31 @@ describe('admitVerifiedRebaseRecoveries', () => {
     expect(outcome).toEqual(['one']);
     expect(admitted).toEqual(['one']);
   });
+
+  // Covers: task:4
+  it('consumes one matching recovery exactly once across a restart-shaped second maintenance pass', async () => {
+    let haltClass = 'rebase-recovery';
+    const events: Array<{ type: 'halt_cleared'; cause: 'verified-rebase' }> = [];
+    const run = () => admitVerifiedRebaseRecoveries({
+      listHaltedWorktrees: async () => ['feature'],
+      worktreePath: () => '/feature',
+      readAttempt: async () => attempt,
+      verify: async () => ({ kind: 'verified' as const }),
+      readHead: async () => 'd'.repeat(40),
+      readExecutionChild: async () => 7,
+      isOperatorParked: async () => false,
+      readHaltClass: async () => haltClass,
+      acquireFeatureDispatchLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }),
+      recheckScheduler: async () => true,
+      admit: async () => {
+        haltClass = '';
+        events.push({ type: 'halt_cleared', cause: 'verified-rebase' });
+      },
+    });
+    await run();
+    await run();
+    expect(events).toEqual([{ type: 'halt_cleared', cause: 'verified-rebase' }]);
+  });
 });
 
 // ── FR-12: resumeRebaseFirst (isolated repo, daemon-equivalent real git) ───────

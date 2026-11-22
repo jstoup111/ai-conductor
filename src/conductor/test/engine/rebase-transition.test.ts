@@ -62,6 +62,7 @@ function selectorSteps(names: readonly StepName[]): StepDefinition[] {
 }
 
 describe('applyRebaseTransition', () => {
+  // Covers: task:4
   it('persists every preservation candidate in the applying descriptor before the state batch and retains it after apply', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
     dirs.push(dir);
@@ -139,6 +140,7 @@ describe('applyRebaseTransition', () => {
     });
   });
 
+  // Covers: task:4
   it('recognizes the same replay operation on a restart', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
     dirs.push(dir);
