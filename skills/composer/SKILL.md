@@ -44,8 +44,10 @@ for registry reads, guarded commits, PR opening, and daemon nudges, and runs DEC
 - **Route artifacts to the target repo, never the composer's cwd.** `AuthoringGuard` enforces this.
 - **Author in a per-idea worktree, never the primary checkout.** Authoring, `land`, and `handoff`
   use `<target>/.worktrees/engineer-<slug>`; never fall back to the shared checkout.
-- **One idea at a time, operator-gated at every fork.** Confirm routing, create-on-no-fit, and each
-  DECIDE output. Never assume.
+- **One idea at a time.** By default, confirm routing and each DECIDE output. Apply
+  `HARNESS.md`'s upfront approval rule when the operator grants it in their own instructions.
+  Carry the grant and its limits into each skill, including its artifact sign-off. Stop for
+  choices such as creating a repository, selecting a delivery strategy, or accepting a waiver.
 
 ## The Loop
 
@@ -76,7 +78,7 @@ before routing. When filing a new intake issue, author it with `/intake` rather 
 ### 2. Route to a target repo
 
 Read `ai-conductor compose projects` and reason in chat about the best registry match; present the
-target and rationale, then obtain explicit operator confirmation. Honor redirects. With no fit,
+target and rationale. An explicitly named target in an upfront grant already confirms it. Otherwise obtain operator confirmation. Honor redirects. With no fit,
 offer `ai-conductor create <path>`; decline leaves every repo untouched.
 
 ### 3. Create the per-idea worktree and run DECIDE
