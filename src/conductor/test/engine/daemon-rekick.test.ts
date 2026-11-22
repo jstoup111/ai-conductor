@@ -9,6 +9,8 @@ import { promisify } from 'node:util';
 import {
   clearHaltForResume,
   consumeResumeAuthorizations,
+  recoverEpisodeHalts,
+  resolveHaltRetention,
   rekickSweep,
   resumeRebaseFirst,
   hasRebaseInProgress,
@@ -22,7 +24,7 @@ import {
   HALT_CLEARED_MARKER,
   REKICK_SENTINEL,
 } from '../../src/engine/daemon-rekick.js';
-import type { HaltDisposition } from '../../src/engine/halt-marker.js';
+import { isOperatorActionHalt, type HaltDisposition } from '../../src/engine/halt-marker.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { join as pjoin } from 'node:path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -1120,6 +1122,58 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       expect(skipLogs).toHaveLength(2);
     },
   );
+
+  it('Covers: task:1 retains rebase-recovery across base advance, episode-end, progress and dispatch retry, and kickback authorization', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['rebase'],
+      readHaltClass: async () => 'rebase-recovery',
+    });
+    await expect(rekickSweep(deps, SHA_B)).resolves.toEqual({ cleared: [], skipped: ['rebase'] });
+
+    const episodeClears: string[] = [];
+    await expect(recoverEpisodeHalts({
+      stampedHalts: async () => ['rebase'],
+      readHaltClass: async () => 'rebase-recovery',
+      clearMarker: async (slug) => { episodeClears.push(slug); },
+    })).resolves.toEqual([]);
+
+    // Both daemon retry admission boundaries use this shared operator-action
+    // predicate before a progress retry or before clearing for dispatch.
+    expect(isOperatorActionHalt('rebase-recovery')).toBe(true);
+    await expect(resolveHaltRetention(async () => 'needs-human')).resolves.toMatchObject({ retained: true });
+    await expect(resolveHaltRetention(async () => 'unknown-future-class')).resolves.toMatchObject({ retained: true });
+    expect(episodeClears).toEqual([]);
+    expect(trace.cleared).toEqual(new Set());
+
+    const root = await mkdtemp(join(tmpdir(), 'rebase-recovery-auth-'));
+    const worktree = join(root, 'feature');
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+    await writeKickbackLedger(worktree, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 1, cumulative: 5, treeHash: null, lastReason: 'cap', priorVerdict: false, resolvedBefore: 0,
+          capEvidence: { gate: 'build_review', consumed: 5, limit: 5, latestReason: 'cap', haltGeneration: 'g1' },
+          resumeAuthorization: { adjustmentId: 'a1', haltGeneration: 'g1', consumed: false },
+        },
+      },
+    } as never);
+    try {
+      const clearHalt = vi.fn(async () => 'confirmed' as const);
+      await expect(consumeResumeAuthorizations({
+        listHaltedWorktrees: async () => ['feature'],
+        worktreePath: () => worktree,
+        isOperatorParked: async () => false,
+        readLiveHaltClass: async () => 'rebase-recovery',
+        readLiveHaltGeneration: async () => 'g1',
+        clearHalt,
+      } as never)).resolves.toEqual([]);
+      expect(clearHalt).not.toHaveBeenCalled();
+      expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it('a mechanical-classified halt clears normally and the log line names the halt class', async () => {
     const last = new Map<string, string>();
