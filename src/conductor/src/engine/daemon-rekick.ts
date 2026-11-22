@@ -133,6 +133,94 @@ export function validateRebaseRecoveryAdmission(input: {
 }
 
 /**
+ * Serialize verified-rebase admission with every writer that can change a
+ * feature's dispatch eligibility. Verification intentionally happens before
+ * the lease; the complete identity is then re-read while the lease is held,
+ * so an operator park, replacement halt, revision, or execution-child change
+ * wins without being overwritten by a stale verifier.
+ *
+ * `admit` is deliberately the only mutator. The transition/clear owner wires
+ * it later; this boundary owns the conditional admission, not dispatch.
+ */
+export interface VerifiedRebaseRecoveryAdmissionDeps {
+  listHaltedWorktrees: () => Promise<string[]>;
+  worktreePath: (slug: string) => string;
+  readAttempt: (slug: string) => Promise<RebaseRecoveryAttempt | undefined>;
+  verify: (slug: string, attempt: RebaseRecoveryAttempt) => Promise<{ kind: 'verified' } | { kind: 'retained'; reason: string }>;
+  readHead: (slug: string) => Promise<string>;
+  readExecutionChild: (slug: string) => Promise<number | undefined>;
+  isOperatorParked: (slug: string) => Promise<boolean>;
+  readHaltClass: (slug: string) => Promise<string>;
+  acquireFeatureDispatchLease: (slug: string) => Promise<FeatureDispatchLeaseAcquireResult>;
+  /** Test and integration seam for a race between verification and admission. */
+  beforeAdmission?: (slug: string) => Promise<void>;
+  /** Scheduler's final eligibility check; false leaves the verified halt intact. */
+  recheckScheduler: (slug: string) => Promise<boolean>;
+  /** Runs while the feature lease is held after every identity check passed. */
+  admit: (slug: string, attempt: RebaseRecoveryAttempt) => Promise<void>;
+  log?: (message: string) => void;
+}
+
+export async function admitVerifiedRebaseRecoveries(
+  deps: VerifiedRebaseRecoveryAdmissionDeps,
+): Promise<string[]> {
+  const admitted: string[] = [];
+  for (const slug of await deps.listHaltedWorktrees()) {
+    try {
+      if (await deps.isOperatorParked(slug)) continue;
+      if ((await deps.readHaltClass(slug)).trim() !== 'rebase-recovery') continue;
+
+      const expected = await deps.readAttempt(slug);
+      if (!expected) continue;
+      const expectedHead = await deps.readHead(slug);
+      const expectedChild = await deps.readExecutionChild(slug);
+      const verification = await deps.verify(slug, expected);
+      if (verification.kind !== 'verified') {
+        deps.log?.(`verified-rebase ${slug}: retained — ${verification.reason}`);
+        continue;
+      }
+
+      await deps.beforeAdmission?.(slug);
+      const acquired = await deps.acquireFeatureDispatchLease(slug);
+      if (acquired.kind !== 'acquired') {
+        deps.log?.(`verified-rebase ${slug}: retained — feature dispatch lease unavailable`);
+        continue;
+      }
+      try {
+        const liveHaltClass = (await deps.readHaltClass(slug)).trim();
+        const decision = validateRebaseRecoveryAdmission({
+          expected,
+          liveAttempt: await deps.readAttempt(slug),
+          expectedHead,
+          liveHead: await deps.readHead(slug),
+          expectedChild,
+          liveChild: await deps.readExecutionChild(slug),
+          operatorParked: await deps.isOperatorParked(slug),
+          independentBlocker: liveHaltClass !== 'rebase-recovery',
+          liveHaltClass,
+        });
+        if (decision.kind !== 'admitted') {
+          deps.log?.(`verified-rebase ${slug}: retained — ${decision.reason}`);
+          continue;
+        }
+        if (!(await deps.recheckScheduler(slug))) {
+          deps.log?.(`verified-rebase ${slug}: retained — scheduler ownership changed before admission`);
+          continue;
+        }
+        await deps.admit(slug, expected);
+        admitted.push(slug);
+      } finally {
+        const released = await acquired.lease.release();
+        if (!released.ok) deps.log?.(`verified-rebase ${slug}: feature dispatch lease release failed (${released.message})`);
+      }
+    } catch (error) {
+      deps.log?.(`verified-rebase ${slug}: retained (${errMsg(error)})`);
+    }
+  }
+  return admitted;
+}
+
+/**
  * The single retention decision every automatic path shares (sealed Story 3).
  *
  * `readHaltClass` yields the raw `.pipeline/HALT.class` text (or a

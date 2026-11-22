@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 
 import {
   clearHaltForResume,
+  admitVerifiedRebaseRecoveries,
   consumeResumeAuthorizations,
   evaluateRebaseRecoveryHalt,
   validateRebaseRecoveryAdmission,
@@ -1838,6 +1839,85 @@ describe('validateRebaseRecoveryAdmission', () => {
       { kind: 'retained', reason: 'rebase recovery attempt changed before admission' },
     );
     expect(validateRebaseRecoveryAdmission(base)).toEqual({ kind: 'admitted' });
+  });
+});
+
+describe('admitVerifiedRebaseRecoveries', () => {
+  const attempt = {
+    version: 1 as const, generation: 'g1', feature: 'feature', child: 7,
+    preRebaseHead: 'a'.repeat(40), mergeBase: 'b'.repeat(40), target: 'c'.repeat(40),
+  };
+
+  // Covers: task:3
+  it('keeps parks and replacement ownership that race verification from reaching admission', async () => {
+    let parked = false;
+    let liveAttempt = attempt;
+    let liveHead = 'd'.repeat(40);
+    let liveChild = 7;
+    let haltClass = 'rebase-recovery';
+    const admitted: string[] = [];
+    const acquire = vi.fn(async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }));
+
+    const run = async (duringVerification: () => void) => admitVerifiedRebaseRecoveries({
+      listHaltedWorktrees: async () => ['feature'],
+      worktreePath: () => '/feature',
+      readAttempt: async () => liveAttempt,
+      verify: async () => ({ kind: 'verified' as const }),
+      readHead: async () => liveHead,
+      readExecutionChild: async () => liveChild,
+      isOperatorParked: async () => parked,
+      readHaltClass: async () => haltClass,
+      acquireFeatureDispatchLease: acquire,
+      beforeAdmission: async () => duringVerification(),
+      recheckScheduler: async () => !parked,
+      admit: async (slug) => { admitted.push(slug); },
+    });
+
+    parked = true;
+    await run(() => {});
+    expect(admitted).toEqual([]);
+    expect(acquire).not.toHaveBeenCalled();
+
+    parked = false;
+    await run(() => { parked = true; });
+    expect(admitted).toEqual([]);
+
+    parked = false;
+    await run(() => { haltClass = 'needs-human'; });
+    expect(admitted).toEqual([]);
+
+    haltClass = 'rebase-recovery';
+    await run(() => { liveHead = 'e'.repeat(40); });
+    expect(admitted).toEqual([]);
+
+    liveHead = 'd'.repeat(40);
+    await run(() => { liveChild = 8; });
+    expect(admitted).toEqual([]);
+
+    liveChild = 7;
+    await run(() => { liveAttempt = { ...attempt, generation: 'g2' }; });
+    expect(admitted).toEqual([]);
+  });
+
+  // Covers: task:3
+  it('admits only the verified feature and leaves an independent halted feature untouched', async () => {
+    const admitted: string[] = [];
+    const attempts = new Map([['one', { ...attempt, feature: 'one', child: undefined }], ['two', { ...attempt, feature: 'two', child: undefined }]]);
+    const outcome = await admitVerifiedRebaseRecoveries({
+      listHaltedWorktrees: async () => ['one', 'two'],
+      worktreePath: (slug) => `/${slug}`,
+      readAttempt: async (slug) => attempts.get(slug),
+      verify: async (slug) => slug === 'one' ? { kind: 'verified' as const } : { kind: 'retained' as const, reason: 'independent blocker' },
+      readHead: async () => 'd'.repeat(40),
+      readExecutionChild: async () => undefined,
+      isOperatorParked: async () => false,
+      readHaltClass: async (slug) => slug === 'one' ? 'rebase-recovery' : 'needs-human',
+      acquireFeatureDispatchLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }),
+      recheckScheduler: async () => true,
+      admit: async (slug) => { admitted.push(slug); },
+    });
+    expect(outcome).toEqual(['one']);
+    expect(admitted).toEqual(['one']);
   });
 });
 
