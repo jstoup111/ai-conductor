@@ -327,6 +327,194 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect((conductor as unknown as { activeRegionChild?: number }).activeRegionChild).toBe(leaf);
   });
 
+  // Covers: task:2
+  it('retains ordinary flat resume dispatch and persistence without stacked evidence', async () => {
+    const { subject, statePath, config } = await fixture();
+    const git = makeGitRunner(subject.repo);
+    await rm(join(subject.repo, '.pipeline', 'children'), { recursive: true, force: true });
+    for (const ref of [
+      'refs/heads/feat/c1/demo',
+      'refs/heads/feat/c2/demo',
+      closureRefFor('demo', host),
+      routeRecordRefFor('demo', roundId),
+      repairMarkerRefFor('demo'),
+      revalidationQueueRefFor('demo'),
+      'refs/conductor/demo/positions',
+    ])
+      await git(['update-ref', '-d', ref]);
+    expect(await hasDurableChildState(subject.repo, 'demo')).toBe(false);
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      feature_desc: 'demo',
+      complexity_tier: 'M',
+      build: 'pending',
+    } as ConductState);
+
+    const dispatched: StepName[] = [];
+    let parkAfterDispatch = false;
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      resume: true,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      config,
+      events: new ConductorEventEmitter(),
+      stackPreflight: async () => ({ kind: 'clear' }),
+      operatorParkBoundary: async () => parkAfterDispatch,
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          parkAfterDispatch = true;
+          return { success: true };
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(dispatched).toEqual(['build']);
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('flat state is unreadable');
+    expect(persisted.value.build).toBe('done');
+    expect(persisted.value).not.toHaveProperty('routed_return_probe');
+  });
+
+  // Covers: task:4
+  it('keeps an outstanding repair host ahead of whole-feature validation despite root success', async () => {
+    const { subject, statePath, config } = await fixture();
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      feature_desc: 'demo',
+      complexity_tier: 'M',
+    } as ConductState);
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', host), {
+      acceptance_specs: 'done',
+      build: 'pending',
+      test_suite: 'done',
+      build_review: 'done',
+      last_step: 'acceptance_specs',
+    });
+
+    const dispatched: StepName[] = [];
+    let parkAfterDispatch = false;
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      config,
+      events: new ConductorEventEmitter(),
+      stackPreflight: async () => ({ kind: 'clear' }),
+      operatorParkBoundary: async () => parkAfterDispatch,
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          parkAfterDispatch = true;
+          return { success: true };
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(dispatched).toEqual([]);
+    await expect(
+      readRouteRecord(subject.repo, 'demo', roundId, { git: makeGitRunner(subject.repo) }),
+    ).resolves.toMatchObject({
+      kind: 'record',
+      record: { phase: 'open', hosts: { 1: 'repairing' } },
+    });
+  });
+
+  // Covers: task:4
+  it('keeps a newer open round ahead of an older leaf return on resume', async () => {
+    const { subject, statePath, config } = await fixture();
+    const git = makeGitRunner(subject.repo);
+    const initial = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+    if (initial.kind !== 'record') throw new Error('older routed round is unavailable');
+    await git([
+      'update-ref',
+      routeRecordRefFor('demo', roundId),
+      await writeBlob(git, { ...initial.record, hosts: { [host]: 'admitted' } }),
+    ]);
+    const checked = await checkRoundSupersession(subject.repo, 'demo', roundId, { git });
+    if (checked.kind !== 'leaf-return') throw new Error('older routed round was not eligible for a leaf return');
+    await supersedeRound({
+      worktree: subject.repo,
+      slug: 'demo',
+      checked,
+      reason: 'close older round before a newer repair opens',
+      operator: 'operator@example.test',
+      git,
+    });
+    const closed = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+    if (closed.kind !== 'record') throw new Error('closed older routed round is unavailable');
+    const { leafReturn: _leafReturn, ...newerBase } = closed.record;
+    const newerRound = parseRoundId('r2')!;
+    await git([
+      'update-ref',
+      routeRecordRefFor('demo', newerRound),
+      await writeBlob(git, {
+        ...newerBase,
+        roundId: newerRound,
+        phase: 'open',
+        hosts: { [host]: 'repairing' },
+        currentHostIndex: 0,
+        receipt: emptyUnsettledReceipt(),
+      }),
+    ]);
+    await git(['update-ref', repairMarkerRefFor('demo'), await writeBlob(git, { host, roundId: newerRound })]);
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      feature_desc: 'demo',
+      complexity_tier: 'M',
+    } as ConductState);
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', host), {
+      acceptance_specs: 'done',
+      build: 'pending',
+      test_suite: 'done',
+      build_review: 'done',
+      last_step: 'acceptance_specs',
+    });
+
+    const dispatched: StepName[] = [];
+    let parkAfterDispatch = false;
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      resume: true,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      config,
+      events: new ConductorEventEmitter(),
+      stackPreflight: async () => ({ kind: 'clear' }),
+      operatorParkBoundary: async () => parkAfterDispatch,
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          parkAfterDispatch = true;
+          return { success: true };
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(dispatched).toEqual([]);
+    await expect(readRouteRecord(subject.repo, 'demo', newerRound, { git })).resolves.toMatchObject({
+      kind: 'record',
+      record: { roundId: 'r2', phase: 'open', hosts: { 1: 'repairing' } },
+    });
+  });
+
   // Covers: task:2, task:13
   it('resumes a settled leaf return through its child overlay before whole-feature validation', async () => {
     const { subject, statePath, config } = await fixture();
