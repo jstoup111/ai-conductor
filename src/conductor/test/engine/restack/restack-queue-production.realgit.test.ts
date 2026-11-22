@@ -169,7 +169,7 @@ describe('restack queue production (real local Git)', () => {
   });
 
   // Covers: task:31
-  it('writes equivalent queue generations for base refresh, operator feature repair, and synced recovery', async () => {
+  it('writes a queue generation for base refresh', async () => {
     const baseRefresh = await fixture();
     await expect(runRestack({
       worktree: baseRefresh.repo,
@@ -180,7 +180,10 @@ describe('restack queue production (real local Git)', () => {
     })).resolves.toMatchObject({ kind: 'applied' });
     const baseQueue = await readRevalidationQueue(baseRefresh.repo, 'demo', { git: baseRefresh.git });
     expect(baseQueue).toMatchObject({ kind: 'queue' });
+    expect(baseQueue.kind === 'queue' && baseQueue.queue.entries.some((entry) => entry.child === 2)).toBe(true);
+  });
 
+  it('writes a queue generation for an operator feature repair', async () => {
     const repair = await fixture();
     await repair.git(['checkout', '-q', 'feat/c1/demo']);
     await mkdir(join(repair.repo, '.ai-conductor'), { recursive: true });
@@ -197,7 +200,9 @@ describe('restack queue production (real local Git)', () => {
       kind: 'queue',
       queue: { entries: expect.arrayContaining([expect.objectContaining({ child: 2 })]) },
     });
+  });
 
+  it('restores the journalled queue generation during synced recovery', async () => {
     const recovery = await fixture();
     let interrupted = false;
     const crashBeforeApplied: GitRunner = async (args, options) => {
@@ -226,7 +231,6 @@ describe('restack queue production (real local Git)', () => {
     await expect(recoverRestackJournal({ worktree: recovery.repo, slug: 'demo', git: recovery.git }))
       .resolves.toEqual({ kind: 'recovered', fromState: 'synced' });
     await expect(queueBlob(recovery)).resolves.toBe(queueNew);
-    expect(baseQueue.kind === 'queue' && baseQueue.queue.entries.some((entry) => entry.child === 2)).toBe(true);
   });
 
   // Covers: task:31
