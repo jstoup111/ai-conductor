@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   readRemediationCaseStoreFeature,
@@ -352,10 +352,22 @@ describe('child-scoped build-review remediation cases', () => {
   });
 
   // Covers: rem-as-built-rem-asbuilt-d3-terminal-stall-retire
-  it('retires only child 3 stall inputs after its terminal HALT has been written', async () => {
+  it.each([
+    ['remediation budget exhaustion', 5, 2, async () => ({ kind: 'route' as const, target: 'build', hint: 'try again' })],
+    ['planner halt', 2, 1, async () => ({ kind: 'halt' as const, detail: 'planner requires a decision' })],
+    ['planner dispatch exception', 2, 1, async () => { throw new Error('planner dispatch failed'); }],
+  ])('retires child 3 terminal stall inputs after %s without changing its HALT', async (_route, maxRetries, expectedPlannerCalls, remediation) => {
     const root = await projectRoot();
     const child3 = parseChildId(3)!;
     const child4 = parseChildId(4)!;
+    const statePath = join(root, '.pipeline', 'conduct-state.json');
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(root, '.docs', 'plans', 'stacked-review.md'), '# Plan\n\n### Task 1: Repair\n');
+    await writeState(statePath, {
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
+      conflict_check: 'done', plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', writing_system_tests: 'done', complexity_tier: 'M', feature_desc: 'stacked-review',
+    } as ConductState);
     await mkdir(join(root, '.pipeline', 'children', String(child3)), { recursive: true });
     await mkdir(join(root, '.pipeline', 'children', String(child4)), { recursive: true });
     await writeFile(join(root, '.pipeline', 'children', String(child3), 'build-stall-question.md'), 'child 3 question');
@@ -363,11 +375,48 @@ describe('child-scoped build-review remediation cases', () => {
     await writeFile(join(root, '.pipeline', 'children', String(child4), 'build-stall-question.md'), 'child 4 question');
     await writeFile(remediationTypedPlanPath(root, child4), '{"stalled":true}');
 
-    const conductor = retryContext(root, child3) as unknown as {
-      retireTerminalBuildStallInputs(): Promise<void>;
+    const runner = {
+      run: async (step: StepName) => {
+        if (step === 'build') {
+          await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }));
+        }
+        return { success: true };
+      },
     };
-    await conductor.retireTerminalBuildStallInputs();
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries,
+      log: () => undefined,
+      childRegionLifecycle: {
+        // This is a conductor dispatch test, not a topology-loader test.
+        // Supply the already-admitted child boundary so the fixture can stay
+        // filesystem-only while exercising the child-scoped terminal path.
+        resolveActiveChild: async () => ({ kind: 'active', child: child3, position: child3, isLeaf: true }) as never,
+        enterChildRegion: async () => ({ kind: 'completed' }) as never,
+        enterHostRegion: async () => ({ kind: 'resume', pinnedBase: 'a'.repeat(40) }) as never,
+      },
+    });
+    const privateConductor = conductor as unknown as {
+      activeRegionChild: typeof child3;
+      planRemediation: typeof remediation;
+    };
+    privateConductor.activeRegionChild = child3;
+    const planRemediation = vi.fn(remediation);
+    privateConductor.planRemediation = planRemediation;
 
+    await conductor.run();
+
+    const halt = await readFile(join(root, '.pipeline', 'HALT'), 'utf8');
+    expect(planRemediation).toHaveBeenCalledTimes(expectedPlannerCalls);
+    expect(halt).toContain('build stalled for child 3: no task progress');
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     await Promise.all([
       expect(readFile(join(root, '.pipeline', 'children', String(child3), 'build-stall-question.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
       expect(readFile(remediationTypedPlanPath(root, child3), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
