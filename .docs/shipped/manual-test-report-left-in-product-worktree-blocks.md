@@ -4,57 +4,26 @@ spec_hash: f66b84f8017e2ff9c7ccd16467b545ae7f0e0bb8523c0f7499043d5143d78e48
 pr: https://github.com/jstoup111/ai-conductor/pull/3713
 shipped: 2026-11-22
 engine_version: 20261122T020604Z-3379a47ff8d4
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "This is fail-closed hardening that keeps Story 1's refusals atomic (S1.6) and its path handling correct for unusual names. It serves the stories even though no plan task names it."
-    accepted: false
-    authority: engine
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-2
-    summary: "These are canonicalization churn. Operator-visible output, CLI results and persisted state are unchanged."
-    accepted: false
-    authority: engine
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-3
-    summary: "These repair flaky or failing tests under aggregate-suite load so test_suite can pass. Repairs to failing tests fall within intent. No production behavior changes."
-    accepted: false
-    authority: engine
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-4
-    summary: "This record was written by the engine's halt-record machinery during this feature's lifecycle. It is not feature implementation and does not change product behavior."
-    accepted: false
-    authority: engine
-  - gate: architecture_review_as_built
-    finding: "as-built:d51e428e-79a7-418a-907e-bb14cb0d7ae6:1"
-    class: REMEDIABLE
-    governing_clause: "adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 4"
-    outcome: remediated
-    summary: "Source-verified (95% confidence): validator-residue.ts:63 introduces a direct clock read through new Date(), and src/conductor/test/structural/boundary-allowlist.txt:449 adds its exception. D4 explicitly requires the boundary allowlist to shrink only. The older layer-ratchet review permits reviewed layer exceptions, but does not amend this later boundary decision."
 ---
 
 ## Cost
-input: 4240614
-output: 299324
-cache_read: 78360933
+input: 4252268
+output: 299434
+cache_read: 78395877
 cache_creation: 2591617
-cost_usd: 50.9614
-dispatches: 110
+cost_usd: 50.9754
+dispatches: 111
 retries: 7
 halts: 12
 unmetered: count: 5, duration_ms: 0
 cost_unmetered: count: 2
 providers:
-  codex: input: 4240316, output: 236498, cache_read: 70467328, cache_creation: 0, cost_usd: 27.3921, dispatches: 57, cost_unmetered: 2
+  codex: input: 4251970, output: 236608, cache_read: 70502272, cache_creation: 0, cost_usd: 27.406, dispatches: 58, cost_unmetered: 2
   claude: input: 298, output: 62826, cache_read: 7893605, cache_creation: 2591617, cost_usd: 23.5694, dispatches: 53, cost_unmetered: 0
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","3af89d78-2e73-4f2b-803d-300dde199078","lifecycle-step","build_review"],step:execution\u0000["timing-rollup","persisted-ledger","8015ea72-3ccf-49bc-814d-2d3e89ad88a3","lifecycle-step","finish"]
+reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","3af89d78-2e73-4f2b-803d-300dde199078","lifecycle-step","build_review"]
 
 ## Build Review
 laps_to_pass: 9
