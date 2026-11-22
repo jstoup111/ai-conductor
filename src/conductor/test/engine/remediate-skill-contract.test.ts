@@ -135,6 +135,25 @@ describe('remediate build_review case-mode contract', () => {
     expect(caseMode).toMatch(/absent `reRaise` is treated as a residual gap/i);
   });
 
+  // Covers: task:12
+  it('directs gap planning to read engine-written remediation history files', async () => {
+    const skill = await readFile(remediateSkillPath, 'utf8');
+    const asBuilt = section(skill, 'As-built gap-plan reconciliation');
+    const history = section(skill, 'Remediation history files');
+    const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
+    const widening = section(skill, 'Engine-selected PRD widening reconciliation mode');
+
+    expect(asBuilt).toContain('Read the active history file named by `history.active.path` in\nfull before judging any finding.');
+    expect(asBuilt).toContain('source without a `summary` is still pending: read its text from the pending finding\nwith the same `findingId` in the active history file');
+    expect(history).toMatch(/resolved history file.*`history\.resolved\.path`.*only when.*may be a recurrence.*before choosing.*reconciliation/is);
+    expect(history).toContain('When no\ncurrent finding may be a recurrence of a resolved case, do not read the resolved history file.');
+    expect(history).toMatch(/missing or unreadable.*return a `halt` disposition.*naming.*file.*never.*index alone/is);
+    expect(history).toContain('Gap planning reads no verdict file and writes\nno file.');
+    expect(history).toContain('`refusals` index identifies which refusal entries to load from the active history file');
+    expect(caseMode).not.toMatch(/remediation history file/i);
+    expect(widening).not.toMatch(/remediation history file/i);
+  });
+
   it('treats bounded prior-source finding digests as binding context rather than report text', async () => {
     const skill = await readFile(remediateSkillPath, 'utf8');
     const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');

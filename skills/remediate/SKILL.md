@@ -38,13 +38,15 @@ planning, skip this branch and follow the existing instructions unchanged.
 
 ## As-built gap-plan reconciliation
 
-When the engine supplies `priorAsBuiltCases` in an ordinary gap-plan projection, every
-as-built finding disposition must include its engine-owned `reconciliation`. Judge the
-supplied evidence, not wording alone: use `same` for the same unresolved case,
+In an ordinary gap-plan projection, every as-built finding disposition must include its
+engine-owned `reconciliation`. Read the active history file named by `history.active.path` in
+full before judging any finding. Judge that complete evidence, not wording alone: use `same` for
+the same unresolved case,
 `recurrence` when an earlier repair recurred, `materially-changed` when the prior case
 is relevant but the failure is materially different, and `new` when no prior case fits.
-A prior-case source without a `summary` is still pending: read its text from the
-`pendingAsBuiltFindings` entry whose `finding` equals that source's `findingId`.
+A prior-case source without a `summary` is still pending: read its text from the pending finding
+with the same `findingId` in the active history file (`pendingAsBuiltFindings` entry whose
+`finding` equals that source's `findingId`).
 
 `same` and `recurrence` name the supplied `priorCaseId`. They may only use
 `existing-task` (binding at least one repair task from that case, plus a cited owner
@@ -53,6 +55,20 @@ names its prior case but plans a new repair under normal admission. `new` has no
 case id and follows normal admission. Supply a specific non-empty reason for every
 relation. The engine validates and persists these fields; do not create case ids,
 event records, or a parallel reconciliation artifact.
+
+## Remediation history files
+
+The gap-plan prompt supplies a history index, not the history itself. Read the active history file
+named by `history.active.path` in full before judging any finding. Read the resolved history file
+named by `history.resolved.path` only when a current finding may be a recurrence of a resolved case
+listed in the index, and read it before choosing that finding's reconciliation relation. When no
+current finding may be a recurrence of a resolved case, do not read the resolved history file.
+
+If either history file named in the index is missing or unreadable, return a `halt` disposition
+naming that file; never judge from the index alone. Gap planning reads no verdict file and writes
+no file. The `refusals` index identifies which refusal entries to load from the active history file
+before applying the refusal-rework guidance. `build_review` case contexts and PRD-widening
+reconciliation use their existing supplied inputs and no remediation history file.
 
 ## Engine-selected refusal-rework mode
 
