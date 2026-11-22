@@ -132,6 +132,7 @@ pending_and_refused_citation_contract_holds() {
 }
 
 ship_verdict_artifacts_read_only_contract_holds() {
+  # Covers: task:7
   local pipeline_skill="$1"
   local tdd_skill="$2"
   local artifact pipeline_text tdd_text
@@ -144,8 +145,8 @@ ship_verdict_artifacts_read_only_contract_holds() {
     '.pipeline/architecture-review-as-built-code-stamp.json'
   )
 
-  pipeline_text="$(tr '\n' ' ' < "$pipeline_skill" | tr -s ' ' | tr '[:upper:]' '[:lower:]')"
-  tdd_text="$(tr '\n' ' ' < "$tdd_skill" | tr -s ' ' | tr '[:upper:]' '[:lower:]')"
+  pipeline_text="$(tr '\n' ' ' <"$pipeline_skill" | tr -s ' ' | tr '[:upper:]' '[:lower:]')"
+  tdd_text="$(tr '\n' ' ' <"$tdd_skill" | tr -s ' ' | tr '[:upper:]' '[:lower:]')"
 
   for artifact in "${artifacts[@]}"; do
     grep -qF "$artifact" <<<"$pipeline_text" || return 1
@@ -156,8 +157,8 @@ ship_verdict_artifacts_read_only_contract_holds() {
     && grep -qF 'never write, delete, rename, or recreate' <<<"$tdd_text" \
     && grep -qF "only the validator's own next dispatch produces a new verdict." <<<"$pipeline_text" \
     && grep -qF 'conduct task done <id> --done-when <n>=<evidence>' <<<"$pipeline_text" \
-    && grep -qF 'reading `.pipeline/remediation.json` and the cited verdict artifact remains allowed.' <<<"$pipeline_text" \
-    && grep -qF 'reading `.pipeline/remediation.json` and the cited verdict artifact remains allowed.' <<<"$tdd_text" \
+    && grep -qF 'read the remediation input paths named in the dispatch prompt and the cited verdict artifact.' <<<"$pipeline_text" \
+    && grep -qF 'read the remediation input paths named in the dispatch prompt and the cited verdict artifact.' <<<"$tdd_text" \
     && grep -qF 'every implementer dispatch prompt must carry this ship verdict read-only rule.' <<<"$pipeline_text"
 }
 
@@ -165,7 +166,7 @@ adr_structural_policy_contract_holds() {
   local skill_file="$1"
   local skill_text
 
-  skill_text="$(tr '\n' ' ' < "$skill_file" | tr -s ' ')"
+  skill_text="$(tr '\n' ' ' <"$skill_file" | tr -s ' ')"
 
   grep -qF 'Structural change is a necessary prerequisite: decision categories never independently require an ADR.' <<<"$skill_text" \
     && grep -qF 'Importance, breadth, workflow policy, prompt wording, and ordinary implementation detail are not sufficient ADR triggers.' <<<"$skill_text"
@@ -175,7 +176,7 @@ adr_small_structural_change_contract_holds() {
   local skill_file="$1"
   local skill_text
 
-  skill_text="$(tr '\n' ' ' < "$skill_file" | tr -s ' ')"
+  skill_text="$(tr '\n' ' ' <"$skill_file" | tr -s ' ')"
 
   grep -qF 'A small change may still warrant an ADR when it makes one of the structural decisions above;' <<<"$skill_text"
 }
@@ -184,7 +185,7 @@ adr_governing_reuse_contract_holds() {
   local skill_file="$1"
   local skill_text
 
-  skill_text="$(tr '\n' ' ' < "$skill_file" | tr -s ' ')"
+  skill_text="$(tr '\n' ' ' <"$skill_file" | tr -s ' ')"
 
   grep -qF 'Before drafting, read `.docs/decisions/` for an APPROVED ADR that already governs the structural decision.' <<<"$skill_text" \
     && grep -qF 'Reuse an existing governing ADR rather than duplicate it.' <<<"$skill_text" \
@@ -209,7 +210,7 @@ else
   fail "pipeline and tdd must name all SHIP verdict artifacts, preserve read-only access, and leave new verdicts to validators"
 fi
 
-if tr '\n' ' ' < "$COMPOSER_SKILL_FILE" | tr -s ' ' | grep -qF "Never change the originating GitHub issue's assignees during claim, land, handoff, verification, or cleanup."; then
+if tr '\n' ' ' <"$COMPOSER_SKILL_FILE" | tr -s ' ' | grep -qF "Never change the originating GitHub issue's assignees during claim, land, handoff, verification, or cleanup."; then
   pass "composer preserves originating GitHub issue assignees throughout its lifecycle"
 else
   fail "composer must preserve originating GitHub issue assignees throughout claim, land, handoff, verification, and cleanup without adding, removing, or changing them"
@@ -407,8 +408,8 @@ fi
 
 # Batch boundaries retain their affected-test, simplify, lint, and orphaned-caller
 # safeguards without dispatching an evaluator or writing closeout telemetry.
-pipeline_text="$(tr '\n' ' ' < "$SKILL_FILE" | tr -s ' ')"
-code_review_text="$(tr '\n' ' ' < "$CODE_REVIEW_SKILL" 2>/dev/null | tr -s ' ')"
+pipeline_text="$(tr '\n' ' ' <"$SKILL_FILE" | tr -s ' ')"
+code_review_text="$(tr '\n' ' ' <"$CODE_REVIEW_SKILL" 2>/dev/null | tr -s ' ')"
 if [ -f "$CODE_REVIEW_SKILL" ] \
   && grep -qF '`BATCH_AFFECTED_TESTS` union' <<<"$pipeline_text" \
   && grep -qF 'When `BATCH_AFFECTED_TESTS` cannot be determined with confidence, record that in the REPORT and defer aggregate proof' <<<"$pipeline_text" \

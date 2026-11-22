@@ -38,6 +38,7 @@ import type { ConductState } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS, STEP_GROUPS, VALIDATION_GROUP, getGroupForStep, tryGetStepIndex } from '../../src/engine/steps.js';
 import { buildRetryHint, appendRemediationTasks } from '../../src/engine/conductor.js';
@@ -58,7 +59,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { parseChildId } from '../../src/engine/child-context.js';
+import { parseChildId, type ChildId } from '../../src/engine/child-context.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 
@@ -2467,6 +2468,279 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     await writeFile(join(dir, '.docs/plans/stall-guard-test.md'), '# Plan\n\n### Task 1: Step 1\n');
   }
+
+  async function captureStallRemediation(
+    child: ChildId | undefined,
+    question: string,
+    beforeBuild?: () => Promise<void>,
+  ): Promise<{ planRemediation: ReturnType<typeof vi.fn>; capturedEvidence: () => string | undefined }> {
+    await seedToBuildStep();
+
+    let evidenceAtDispatch: string | undefined;
+    const expectedPath =
+      child === undefined ? '.pipeline/build-stall-question.md' : `.pipeline/children/${child}/build-stall-question.md`;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') {
+          await beforeBuild?.();
+          await writeFile(join(dir, '.pipeline/halt-user-input-required'), question);
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+    const planRemediation = vi.fn(async () => {
+      evidenceAtDispatch = await readFile(join(dir, expectedPath), 'utf8');
+      return { kind: 'halt' as const, detail: 'fixture stops after observing dispatch' };
+    });
+    const privateConductor = conductor as unknown as {
+      activeRegionChild: ChildId | undefined;
+      planRemediation: typeof planRemediation;
+    };
+    privateConductor.activeRegionChild = child;
+    privateConductor.planRemediation = planRemediation;
+
+    await conductor.run();
+    return { planRemediation, capturedEvidence: () => evidenceAtDispatch };
+  }
+
+  // Covers: task:4
+  it('captures child 3 stall evidence in its region and dispatches that path to remediation', async () => {
+    const child3 = parseChildId(3)!;
+    const result = await captureStallRemediation(child3, 'Which repair unblocks child 3?');
+
+    expect(result.capturedEvidence()).toBe('Which repair unblocks child 3?');
+    expect(result.planRemediation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('Which repair unblocks child 3?'),
+      expect.objectContaining({
+        source: 'build_stall',
+        evidence: [{ gate: 'build', evidenceFile: '.pipeline/children/3/build-stall-question.md' }],
+      }),
+    );
+  });
+
+  // Covers: task:4
+  it('keeps child 3 stall evidence isolated when child 4 dispatches a different question', async () => {
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    const result = await captureStallRemediation(child4, 'Which repair unblocks child 4?', async () => {
+      await mkdir(join(dir, '.pipeline', 'children', String(child3)), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'children', String(child3), 'build-stall-question.md'),
+        'Child 3 remains pending.',
+      );
+    });
+
+    expect(result.capturedEvidence()).toBe('Which repair unblocks child 4?');
+    expect(result.planRemediation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('Which repair unblocks child 4?'),
+      expect.objectContaining({
+        evidence: [{ gate: 'build', evidenceFile: '.pipeline/children/4/build-stall-question.md' }],
+      }),
+    );
+    await expect(
+      readFile(join(dir, '.pipeline', 'children', String(child3), 'build-stall-question.md'), 'utf8'),
+    ).resolves.toBe('Child 3 remains pending.');
+  });
+
+  // Covers: task:4
+  it('keeps a no-children stall question at the legacy feature-level path', async () => {
+    const result = await captureStallRemediation(undefined, 'Which repair unblocks this feature?');
+
+    expect(result.capturedEvidence()).toBe('Which repair unblocks this feature?');
+    expect(result.planRemediation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('Which repair unblocks this feature?'),
+      expect.objectContaining({
+        evidence: [{ gate: 'build', evidenceFile: '.pipeline/build-stall-question.md' }],
+      }),
+    );
+  });
+
+  // Covers: task:18
+  it('clears the stale-citation halt marker before a halt-clear re-kick', async () => {
+    await seedToBuildStep();
+    const seededResult = await readState(statePath);
+    if (!seededResult.ok) throw new Error(seededResult.error.message);
+    const seeded = seededResult.value as Record<string, unknown>;
+    let afterBuild = false;
+    for (const step of ALL_STEPS) {
+      if (afterBuild) seeded[step.name] = 'done';
+      if (step.name === 'build') afterBuild = true;
+    }
+    await writeState(statePath, seeded as ConductState);
+
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    const caseId = 'case-settled-by-child-4';
+    const feature = { version: 'v1', repository: 'acme/conductor', feature: 'stale-citation' };
+    const emptyStore = {
+      version: 'v4',
+      feature,
+      cases: [],
+      prdWideningCases: [],
+      asBuiltCases: [],
+      suppressions: [],
+      outbox: [],
+    };
+    const resolvedStore = {
+      ...emptyStore,
+      cases: [
+        {
+          id: caseId,
+          domain: 'build_review',
+          disposition: 'act',
+          priority: 'high',
+          rationale: 'Fixture case was already settled by the sibling.',
+          confidence: 'high',
+          resolution: 'resolved',
+          sources: [{ sourceId: 'testQuality:case', outcome: 'acted', recordedAt: '2026-11-20T00:00:00.000Z' }],
+          effect: { id: 'effect-case', kind: 'action', status: 'applied', workOrderId: 'order-case' },
+        },
+      ],
+    };
+    for (const [child, store] of [
+      [child3, emptyStore],
+      [child4, resolvedStore],
+    ] as const) {
+      await mkdir(join(dir, '.pipeline', 'children', String(child)), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'children', String(child), 'remediation-cases.json'),
+        JSON.stringify(store),
+      );
+    }
+    await writeFile(
+      join(dir, '.pipeline', 'events.jsonl'),
+      [1, 2]
+        .map((attempt) =>
+          JSON.stringify({
+            type: 'build_stall_stale_citation',
+            caseId,
+            stalledChild: child3,
+            ownerChild: child4,
+            state: 'resolved',
+            resolvedTasks: 0,
+            attempt,
+          }),
+        )
+        .join('\n') + '\n',
+    );
+
+    const firstEvents = new ConductorEventEmitter();
+    const firstPersister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), firstEvents);
+    firstPersister.start();
+    let first: Conductor;
+    first = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            (first as unknown as { activeRegionChild: ChildId }).activeRegionChild = child3;
+            await writeFile(join(dir, '.pipeline', 'halt-user-input-required'), `Do not repeat ${caseId}.`);
+            await writeFile(
+              join(dir, '.pipeline', 'children', String(child3), 'task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+            await writeFile(
+              join(dir, '.pipeline', 'task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true };
+        }),
+      },
+      events: firstEvents,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+    });
+    (first as unknown as { activeRegionChild: ChildId }).activeRegionChild = child3;
+    try {
+      await first.run();
+    } finally {
+      firstPersister.stop();
+    }
+
+    await expect(readFile(join(dir, '.pipeline', 'halt-user-input-required'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(await readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).toContain('Stale citation');
+    await rm(join(dir, '.pipeline', 'HALT'), { force: true });
+    await rm(join(dir, '.pipeline', 'HALT.class'), { force: true });
+
+    const reKickEvents = new ConductorEventEmitter();
+    const reKickStalls: string[] = [];
+    reKickEvents.on('build_stall', (event) => {
+      if (event.type === 'build_stall') reKickStalls.push(event.reason);
+    });
+    let reKick: Conductor;
+    reKick = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            (reKick as unknown as { activeRegionChild: ChildId }).activeRegionChild = child3;
+            await writeFile(
+              join(dir, '.pipeline', 'children', String(child3), 'task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'completed' }] }),
+            );
+            await writeFile(
+              join(dir, '.pipeline', 'task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'completed' }] }),
+            );
+            await writeFile(
+              join(dir, '.pipeline', 'task-evidence.json'),
+              JSON.stringify({
+                evidenceStamps: { '1': { sha: '0000000000000000000000000000000000000001', form: 'trailer' } },
+                noEvidenceAttempts: 0,
+                migrationGrandfather: [],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      },
+      events: reKickEvents,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+    });
+    (reKick as unknown as { activeRegionChild: ChildId }).activeRegionChild = child3;
+    await reKick.run();
+
+    expect(reKickStalls).not.toContain('halt_marker');
+    const staleCitationAttempts = (await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { type?: string; caseId?: string; attempt?: number })
+      .filter((event) => event.type === 'build_stall_stale_citation' && event.caseId === caseId)
+      .map((event) => event.attempt);
+    expect(staleCitationAttempts).toEqual([1, 2, 3]);
+  });
 
   it('interactive mode with halt marker → runInteractive called, remediate NOT dispatched', async () => {
     await seedToBuildStep();

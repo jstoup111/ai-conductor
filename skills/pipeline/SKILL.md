@@ -202,7 +202,7 @@ typed PRD verdict authority (ADR D2.2), and `.pipeline/prd-audit.md` is its deri
 `.pipeline/prd-audit-code-stamp.json`, and
 `.pipeline/architecture-review-as-built-code-stamp.json` are owned by their SHIP validators and
 the engine. BUILD sessions, including remediation retries that cite them, must never write, delete,
-rename, or recreate them. Reading `.pipeline/remediation.json` and the cited verdict artifact remains allowed.
+rename, or recreate them. When finding detail is needed, read the remediation input paths named in the dispatch prompt and the cited verdict artifact.
 Only the validator's own next dispatch produces a new verdict. A BUILD session that fixes a finding
 records its task-level proof through `conduct task done <id> --done-when <n>=<evidence>` instead of
 editing a verdict artifact.

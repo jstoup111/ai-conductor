@@ -667,9 +667,11 @@ describe('routed BUILD settlement cap halt', () => {
     expect(claimSeam.calls).toEqual([]);
     expect(stalls).toContainEqual(expect.objectContaining({ type: 'build_stall', reason: 'halt_marker' }));
     expect(cleared).toContainEqual(expect.objectContaining({ type: 'halt_cleared', step: 'build' }));
-    await expect(readFile(join(fixture.root, '.pipeline', 'build-stall-question.md'), 'utf8')).resolves.toBe(
-      markerContent,
-    );
+    await expect(
+      readFile(join(fixture.root, '.pipeline', 'children', String(child), 'build-stall-question.md'), 'utf8'),
+    ).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
     await expect(readFile(join(fixture.root, '.pipeline', 'halt-user-input-required'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });

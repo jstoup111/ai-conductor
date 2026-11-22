@@ -527,13 +527,18 @@ export async function applyBuildReviewActionEffects(input: {
           : record,
       );
     const failedCaseIds = pending.filter(isSettling).map((record) => record.id);
-    const published = await (input.publishWorkOrder ?? publishBuildReviewWorkOrder)(input.projectRoot, {
-      version: 'v1',
-      domain: 'build_review',
-      feature: input.feature,
-      effectId: primaryEffectId,
-      cases: orderBuildReviewActionCases(cases),
-    });
+    const published = await (input.publishWorkOrder ?? publishBuildReviewWorkOrder)(
+      input.projectRoot,
+      {
+        version: 'v1',
+        domain: 'build_review',
+        feature: input.feature,
+        effectId: primaryEffectId,
+        cases: orderBuildReviewActionCases(cases),
+      },
+      undefined,
+      input.child,
+    );
     if (!published.ok) {
       const diagnostic = `work-order ${published.reason}`;
       return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };

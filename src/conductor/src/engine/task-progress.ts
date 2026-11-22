@@ -1,5 +1,5 @@
 import { readFile, unlink, mkdir, writeFile, rename, rm } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { execa } from 'execa';
 import {
   listCommitsWithTrailers,
@@ -8,14 +8,11 @@ import {
   parsePlanTaskVerifyOnly,
 } from './autoheal.js';
 import { readEngineState } from './engine-state-store.js';
-import type { ChildId } from './child-context.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 import { resolveFeaturePlanPath } from './artifacts.js';
 import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
 import { loadSliceTopology } from './slice-topology.js';
-import {
-  readCommittedRemediationTaskChildren,
-  resolveRemediationTaskChild,
-} from './routing/owner-derivation.js';
+import { readCommittedRemediationTaskChildren, resolveRemediationTaskChild } from './routing/owner-derivation.js';
 import {
   createRepairObligationStore,
   repairPlanIdentity,
@@ -92,14 +89,15 @@ export async function countResolvedTasks(projectRoot: string, activeChild?: Chil
   return resolved.size;
 }
 
-export type ChildTaskScope =
-  | { kind: 'available'; taskIds: string[] }
-  | { kind: 'refused'; reason: string };
+export type ChildTaskScope = { kind: 'available'; taskIds: string[] } | { kind: 'refused'; reason: string };
 
 /** Resolve task scope from the feature branch, falling back to its active plan identity. */
 export async function resolveTaskScopeSlug(projectRoot: string): Promise<string | undefined> {
   try {
-    const head = await execa('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: projectRoot, reject: false });
+    const head = await execa('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+      cwd: projectRoot,
+      reject: false,
+    });
     const slug = head.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
     if (slug !== undefined) return slug;
   } catch {
@@ -116,10 +114,7 @@ export async function resolveTaskScopeSlug(projectRoot: string): Promise<string 
  * that attribution is unsafe to assign speculatively, so it refuses rather
  * than silently dropping it.
  */
-export async function resolveChildTaskScope(
-  projectRoot: string,
-  child: ChildId,
-): Promise<ChildTaskScope> {
+export async function resolveChildTaskScope(projectRoot: string, child: ChildId): Promise<ChildTaskScope> {
   const slug = await resolveTaskScopeSlug(projectRoot);
   if (slug === undefined) {
     return {
@@ -151,7 +146,7 @@ export async function resolveChildTaskScope(
   const rawChildren = state.ok ? state.value.appendedRemediationTaskChildren : undefined;
   const children =
     rawChildren !== null && typeof rawChildren === 'object' && !Array.isArray(rawChildren)
-      ? rawChildren as Record<string, unknown>
+      ? (rawChildren as Record<string, unknown>)
       : undefined;
   const committedChildren = await readCommittedRemediationTaskChildren(projectRoot, slug);
   // A `rem-` prefix alone does not prove engine ownership: older plans may
@@ -171,9 +166,10 @@ export async function resolveChildTaskScope(
     remediationOwners.set(id, resolved.child);
   }
 
-  const owned = Object.entries(topology.sliceMembership.taskSlices)
-    .flatMap(([id, owner]) => owner === child ? [id] : []);
-  const remediation = [...remediationOwners].flatMap(([id, owner]) => owner === child ? [id] : []);
+  const owned = Object.entries(topology.sliceMembership.taskSlices).flatMap(([id, owner]) =>
+    owner === child ? [id] : [],
+  );
+  const remediation = [...remediationOwners].flatMap(([id, owner]) => (owner === child ? [id] : []));
   return { kind: 'available', taskIds: [...new Set([...owned, ...remediation])] };
 }
 
@@ -195,10 +191,7 @@ export interface TaskResolution {
 }
 
 /** Resolves task completion while retaining strict-repair refusal diagnostics. */
-export async function resolveTaskIdsWithDiagnostics(
-  projectRoot: string,
-  planIds: string[],
-): Promise<TaskResolution> {
+export async function resolveTaskIdsWithDiagnostics(projectRoot: string, planIds: string[]): Promise<TaskResolution> {
   const statusPath = join(projectRoot, '.pipeline/task-status.json');
   let raw: string;
   try {
@@ -219,11 +212,7 @@ export async function resolveTaskIdsWithDiagnostics(
 
   const resolved = new Set<string>();
   for (const t of tasks) {
-    if (
-      (t.status === 'completed' || t.status === 'skipped') &&
-      t.id !== undefined &&
-      planIdSet.has(t.id)
-    ) {
+    if ((t.status === 'completed' || t.status === 'skipped') && t.id !== undefined && planIdSet.has(t.id)) {
       resolved.add(t.id);
     }
   }
@@ -231,9 +220,7 @@ export async function resolveTaskIdsWithDiagnostics(
   const trailerIds = await distinctTaskTrailerIds(projectRoot);
   for (const id of trailerIds) {
     const canonical = canonicalTaskId(id);
-    const match = planIdSet.has(id)
-      ? id
-      : [...planIdSet].find((p) => canonicalTaskId(p) === canonical);
+    const match = planIdSet.has(id) ? id : [...planIdSet].find((p) => canonicalTaskId(p) === canonical);
     if (match !== undefined) resolved.add(match);
   }
 
@@ -301,11 +288,11 @@ export async function resolveTaskIds(projectRoot: string, planIds: string[]): Pr
 type OpenRepairState =
   | { kind: 'none' }
   | {
-    kind: 'available';
-    obligations: RepairObligation[];
-    section: RepairObligationSection;
-    planIdentity: string;
-  }
+      kind: 'available';
+      obligations: RepairObligation[];
+      section: RepairObligationSection;
+      planIdentity: string;
+    }
   | { kind: 'unavailable'; reason: string };
 
 /**
@@ -344,9 +331,7 @@ async function readOpenRepairState(projectRoot: string): Promise<OpenRepairState
 }
 
 export type OpenRepairLookup =
-  | { kind: 'none' }
-  | { kind: 'open'; obligationId: string }
-  | { kind: 'unavailable'; reason: string };
+  { kind: 'none' } | { kind: 'open'; obligationId: string } | { kind: 'unavailable'; reason: string };
 
 /**
  * Whether `id` currently carries an open repair obligation in the active plan.
@@ -360,9 +345,10 @@ export async function openRepairForTask(projectRoot: string, id: string): Promis
   const standing = taskObligationStanding(state.section, state.planIdentity, id);
   if (standing.kind === 'current-less') return { kind: 'unavailable', reason: standing.reason };
   if (standing.kind === 'none') return { kind: 'none' };
-  const open = standing.current?.tasks[canonicalTaskId(id)]?.status === 'open'
-    ? standing.current
-    : standing.live.find((obligation) => obligation.tasks[canonicalTaskId(id)]?.status === 'open');
+  const open =
+    standing.current?.tasks[canonicalTaskId(id)]?.status === 'open'
+      ? standing.current
+      : standing.live.find((obligation) => obligation.tasks[canonicalTaskId(id)]?.status === 'open');
   return open ? { kind: 'open', obligationId: open.id } : { kind: 'none' };
 }
 
@@ -416,10 +402,7 @@ export interface DoneWhenEvidenceRecord {
   reason?: string;
 }
 
-export type TaskDoneWhenCloseResult =
-  | { kind: 'legacy' }
-  | { kind: 'completed' }
-  | { kind: 'refused'; message: string };
+export type TaskDoneWhenCloseResult = { kind: 'legacy' } | { kind: 'completed' } | { kind: 'refused'; message: string };
 
 interface TaskStatusRow extends Record<string, unknown> {
   id?: unknown;
@@ -450,8 +433,7 @@ export async function completeTaskDoneWhen(
     return { kind: 'refused', message: `[task-cli] cannot close task ${id}: ${engineState.message}` };
   }
   const recordedPlanPath = engineState.value.activePlanPath;
-  let activePlanPath =
-    typeof recordedPlanPath === 'string' && recordedPlanPath.trim() ? recordedPlanPath : undefined;
+  let activePlanPath = typeof recordedPlanPath === 'string' && recordedPlanPath.trim() ? recordedPlanPath : undefined;
   if (!activePlanPath) {
     // A daemon-dispatched feature never runs the plan step that records
     // activePlanPath (#1831/#2261), so the close must resolve the plan the
@@ -465,10 +447,7 @@ export async function completeTaskDoneWhen(
 
   let planText: string;
   try {
-    planText = await readFile(
-      isAbsolute(activePlanPath) ? activePlanPath : join(projectRoot, activePlanPath),
-      'utf-8',
-    );
+    planText = await readFile(isAbsolute(activePlanPath) ? activePlanPath : join(projectRoot, activePlanPath), 'utf-8');
   } catch {
     return {
       kind: 'refused',
@@ -533,9 +512,12 @@ export async function completeTaskDoneWhen(
     unverifiedByIndex.set(entry.index, entry.reason);
   }
 
-  const missingIndex = checks.findIndex((check, index) =>
-    (!verifyOnly || check.trimStart().startsWith(TEST_DONE_WHEN_TAG)) &&
-    !evidenceByIndex.has(index + 1) && !unverifiedByIndex.has(index + 1));
+  const missingIndex = checks.findIndex(
+    (check, index) =>
+      (!verifyOnly || check.trimStart().startsWith(TEST_DONE_WHEN_TAG)) &&
+      !evidenceByIndex.has(index + 1) &&
+      !unverifiedByIndex.has(index + 1),
+  );
   if (missingIndex !== -1) {
     const missingCheck = checks[missingIndex]!;
     const recovery = missingCheck.trimStart().startsWith(TEST_DONE_WHEN_TAG)
@@ -576,7 +558,7 @@ export async function completeTaskDoneWhen(
     const references = taggedChecks
       .filter(({ index }) => !unverifiedByIndex.has(index))
       .map(({ index }) => parseDoneWhenTestReference(evidenceByIndex.get(index)!));
-    const paths = references.flatMap((reference) => reference ? [reference.path] : []);
+    const paths = references.flatMap((reference) => (reference ? [reference.path] : []));
     let blobs: Map<string, Buffer>;
     try {
       blobs = await readGitBlobs(repositoryRoot, 'HEAD', paths);
@@ -587,13 +569,12 @@ export async function completeTaskDoneWhen(
       };
     }
 
-    const planRepoPath = relative(repositoryRoot, isAbsolute(activePlanPath)
-      ? activePlanPath
-      : join(projectRoot, activePlanPath)).replaceAll('\\', '/');
+    const planRepoPath = relative(
+      repositoryRoot,
+      isAbsolute(activePlanPath) ? activePlanPath : join(projectRoot, activePlanPath),
+    ).replaceAll('\\', '/');
     const storiesPath = await resolveFeatureStoriesRef(worktreeManifestSource(repositoryRoot), planRepoPath, planText);
-    const storiesText = storiesPath
-      ? await readFile(join(repositoryRoot, storiesPath), 'utf8').catch(() => '')
-      : '';
+    const storiesText = storiesPath ? await readFile(join(repositoryRoot, storiesPath), 'utf8').catch(() => '') : '';
     const taskText = parsePlanTaskBodies(planText).get(id) ?? '';
 
     for (const { check, index } of taggedChecks) {
@@ -606,13 +587,14 @@ export async function completeTaskDoneWhen(
         blobs,
       });
       if (verification.kind === 'verified') continue;
-      const detail = verification.part === 'missing-file'
-        ? `${verification.path} is absent at HEAD`
-        : verification.part === 'missing-title'
-          ? `missing title ${verification.title} in ${verification.path}`
-          : verification.part === 'missing-covers-marker'
-            ? `missing Covers: marker in ${verification.path}`
-            : 'not-a-test-reference: evidence is not a test:<path>::<title> reference';
+      const detail =
+        verification.part === 'missing-file'
+          ? `${verification.path} is absent at HEAD`
+          : verification.part === 'missing-title'
+            ? `missing title ${verification.title} in ${verification.path}`
+            : verification.part === 'missing-covers-marker'
+              ? `missing Covers: marker in ${verification.path}`
+              : 'not-a-test-reference: evidence is not a test:<path>::<title> reference';
       return {
         kind: 'refused',
         message:
@@ -642,8 +624,7 @@ export async function completeTaskDoneWhen(
   }
 
   const task = (status.tasks as unknown[]).find(
-    (row): row is TaskStatusRow =>
-      !!row && typeof row === 'object' && (row as TaskStatusRow).id === id,
+    (row): row is TaskStatusRow => !!row && typeof row === 'object' && (row as TaskStatusRow).id === id,
   );
   if (!task) {
     return {
@@ -674,15 +655,23 @@ export async function completeTaskDoneWhen(
     if (!startHead || !reference) continue;
     try {
       const ancestor = await execa('git', ['merge-base', '--is-ancestor', startHead, 'HEAD'], {
-        cwd: projectRoot, reject: false,
+        cwd: projectRoot,
+        reject: false,
       });
       if (ancestor.exitCode !== 0) continue;
       const diff = await execa('git', ['diff', startHead, 'HEAD', '--', reference.path], {
-        cwd: projectRoot, reject: false,
+        cwd: projectRoot,
+        reject: false,
       });
-      if (diff.exitCode === 0 && classifyCitationProvenance({
-        path: reference.path, title: reference.title, diffText: diff.stdout,
-      }) === 'task-added') taggedSources.set(index, 'verified');
+      if (
+        diff.exitCode === 0 &&
+        classifyCitationProvenance({
+          path: reference.path,
+          title: reference.title,
+          diffText: diff.stdout,
+        }) === 'task-added'
+      )
+        taggedSources.set(index, 'verified');
     } catch {
       // pending-judgement is the safe, non-blocking fallback.
     }
@@ -701,12 +690,15 @@ export async function completeTaskDoneWhen(
     }
     return {
       check,
-      evidence: verifyOnly && !check.trimStart().startsWith(TEST_DONE_WHEN_TAG)
-        ? 'prove-closed'
-        : evidenceByIndex.get(checkIndex)!,
+      evidence:
+        verifyOnly && !check.trimStart().startsWith(TEST_DONE_WHEN_TAG)
+          ? 'prove-closed'
+          : evidenceByIndex.get(checkIndex)!,
       source: check.trimStart().startsWith(TEST_DONE_WHEN_TAG)
-        ? taggedSources.get(checkIndex) ?? 'pending-judgement'
-        : verifyOnly ? 'verify-only' : 'reported',
+        ? (taggedSources.get(checkIndex) ?? 'pending-judgement')
+        : verifyOnly
+          ? 'verify-only'
+          : 'reported',
     };
   });
 
@@ -718,21 +710,21 @@ export async function completeTaskDoneWhen(
   const previouslyRefusedCitationChecks = new Set(
     Array.isArray(task.doneWhen)
       ? task.doneWhen.flatMap((rawClose, index) => {
-        if (!rawClose || typeof rawClose !== 'object' || Array.isArray(rawClose)) return [];
-        const close = rawClose as Record<string, unknown>;
-        const source = parseDoneWhenCloseSource(close.source);
-        if (source instanceof Error) return [];
-        return source === 'judged' && close.verdict === 'does-not-assert' ? [index + 1] : [];
-      })
+          if (!rawClose || typeof rawClose !== 'object' || Array.isArray(rawClose)) return [];
+          const close = rawClose as Record<string, unknown>;
+          const source = parseDoneWhenCloseSource(close.source);
+          if (source instanceof Error) return [];
+          return source === 'judged' && close.verdict === 'does-not-assert' ? [index + 1] : [];
+        })
       : [],
   );
-  const refusedCitationsReverified = previouslyRefusedCitationChecks.size > 0 &&
+  const refusedCitationsReverified =
+    previouslyRefusedCitationChecks.size > 0 &&
     [...previouslyRefusedCitationChecks].every((index) => doneWhenRecords[index - 1]?.source === 'verified');
 
   for (const obligationId of openObligationIds) {
-    const obligation = standing.kind === 'live'
-      ? standing.live.find(({ id: candidateId }) => candidateId === obligationId)
-      : undefined;
+    const obligation =
+      standing.kind === 'live' ? standing.live.find(({ id: candidateId }) => candidateId === obligationId) : undefined;
     if (obligation?.source.authority === 'done-when-citation' && !refusedCitationsReverified) continue;
     const closure = await repairs.close({
       planPath: activePlanPath,
@@ -747,10 +739,7 @@ export async function completeTaskDoneWhen(
   task.status = 'completed';
   task.doneWhen = doneWhenRecords;
 
-  const tempFile = join(
-    pipelineDir,
-    `.task-status.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
-  );
+  const tempFile = join(pipelineDir, `.task-status.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`);
   try {
     await writeFile(tempFile, JSON.stringify(status, null, 2));
     await rename(tempFile, statusPath);
@@ -773,9 +762,7 @@ export async function completeTaskDoneWhen(
  */
 export function normalizeTasks(parsed: unknown): NormalizedTask[] {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
-  const container = 'tasks' in (parsed as Record<string, unknown>)
-    ? (parsed as Record<string, unknown>).tasks
-    : parsed;
+  const container = 'tasks' in (parsed as Record<string, unknown>) ? (parsed as Record<string, unknown>).tasks : parsed;
 
   const titleOf = (t: Record<string, unknown>): string | undefined => {
     if (typeof t.title === 'string') return t.title;
@@ -877,24 +864,27 @@ export async function clearHaltMarker(projectRoot: string): Promise<void> {
 export async function writeStallQuestionEvidence(
   projectRoot: string,
   content: string | null,
+  child?: ChildId,
 ): Promise<string> {
   const placeholder = '(agent wrote no reason into halt-user-input-required)';
 
   // Determine the effective text: use placeholder if content is null, empty, or whitespace-only
   const effectiveText =
-    content === null || (typeof content === 'string' && content.trim() === '')
-      ? placeholder
-      : content;
+    content === null || (typeof content === 'string' && content.trim() === '') ? placeholder : content;
 
   // Create .pipeline directory if needed
-  const pipelineDir = join(projectRoot, '.pipeline');
+  const evidencePath = pipelinePathFor(projectRoot, 'build-stall-question.md', child);
+  const pipelineDir = dirname(evidencePath);
   await mkdir(pipelineDir, { recursive: true });
 
   // Write to .pipeline/build-stall-question.md
-  const evidencePath = join(pipelineDir, 'build-stall-question.md');
   await writeFile(evidencePath, effectiveText, 'utf-8');
 
   return effectiveText;
+}
+
+export async function removeStallQuestionEvidence(projectRoot: string, child?: ChildId): Promise<void> {
+  await unlink(pipelinePathFor(projectRoot, 'build-stall-question.md', child)).catch(() => undefined);
 }
 
 /**
@@ -920,10 +910,5 @@ export async function writeStallHalt(
 
   const haltContent = [effectiveQuestion, detail].filter(Boolean).join('\n\n');
 
-  return writeHaltMarker(
-    projectRoot,
-    haltContent + '\n',
-    haltClass as Parameters<typeof writeHaltMarker>[2],
-    events,
-  );
+  return writeHaltMarker(projectRoot, haltContent + '\n', haltClass as Parameters<typeof writeHaltMarker>[2], events);
 }

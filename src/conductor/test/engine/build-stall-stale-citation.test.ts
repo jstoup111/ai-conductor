@@ -1,0 +1,305 @@
+// Covers: task:14, task:15
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  buildStallStaleCitationOutcome,
+  classifyBuildStallStaleCitation,
+  recordBuildStallStaleCitation,
+} from '../../src/engine/build-stall-stale-citation.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
+import type {
+  RemediationCaseRecord,
+  RemediationCaseStoreReadResult,
+  RemediationCaseStoreState,
+} from '../../src/engine/remediation-case-store.js';
+
+const FEATURE = { version: 'v1', repository: 'acme/conductor', feature: 'stale-citation' } as const;
+const child3 = parseChildId(3)!;
+const child4 = parseChildId(4)!;
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+async function eventSpine(): Promise<{ root: string; events: ConductorEventEmitter; persister: EventPersister }> {
+  const root = await mkdtemp(join(tmpdir(), 'build-stall-stale-citation-'));
+  temporaryDirectories.push(root);
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+  persister.start();
+  return { root, events, persister };
+}
+
+const resolvedCitation = { kind: 'stale', caseId: 'case-resolved', ownerChild: child4, state: 'resolved' } as const;
+
+function record(id: string, resolution: RemediationCaseRecord['resolution']): RemediationCaseRecord {
+  return {
+    id,
+    domain: 'build_review',
+    disposition: 'act',
+    priority: 'high',
+    rationale: 'The test fixture supplies a durable case.',
+    confidence: 'high',
+    resolution,
+    sources: [{ sourceId: `testQuality:${id}`, outcome: 'acted', recordedAt: '2026-11-19T00:00:00.000Z' }],
+    effect: { id: `effect-${id}`, kind: 'action', status: 'applied', workOrderId: `order-${id}` },
+  };
+}
+
+function readable(...cases: readonly RemediationCaseRecord[]): RemediationCaseStoreReadResult {
+  const state: RemediationCaseStoreState = {
+    version: 'v4',
+    feature: FEATURE,
+    cases,
+    prdWideningCases: [],
+    asBuiltCases: [],
+    suppressions: [],
+    outbox: [],
+  };
+  return { ok: true, state };
+}
+
+function classify(question: string | null | undefined, stores: ReadonlyMap<number, RemediationCaseStoreReadResult>) {
+  return classifyBuildStallStaleCitation({
+    question,
+    activeChild: child3,
+    caseStores: new Map([...stores].map(([child, result]) => [parseChildId(child)!, result])),
+  });
+}
+
+describe('build-stall stale-citation classifier', () => {
+  // Covers: task:16
+  it('classifies a case resolved in another child as stale', () => {
+    expect(
+      classify(
+        'Please repair case-resolved before retrying BUILD.',
+        new Map([
+          [3, readable()],
+          [4, readable(record('case-resolved', 'resolved'))],
+        ]),
+      ),
+    ).toEqual({ kind: 'stale', caseId: 'case-resolved', ownerChild: child4, state: 'resolved' });
+  });
+
+  // Covers: task:16
+  it('classifies a case open only in another child as a foreign stale citation', () => {
+    expect(
+      classify(
+        'Please repair case-foreign before retrying BUILD.',
+        new Map([
+          [3, readable()],
+          [4, readable(record('case-foreign', 'open'))],
+        ]),
+      ),
+    ).toEqual({ kind: 'stale', caseId: 'case-foreign', ownerChild: child4, state: 'foreign' });
+  });
+
+  // Covers: task:17
+  it('does not classify active, absent, null, or empty citations as stale', () => {
+    const activeStore = new Map([
+      [3, readable(record('case-active', 'open'))],
+      [4, readable()],
+    ]);
+
+    expect(classify('Please repair case-active before retrying BUILD.', activeStore)).toEqual({ kind: 'not-stale' });
+    expect(classify('Please repair an unknown case before retrying BUILD.', activeStore)).toEqual({
+      kind: 'not-stale',
+    });
+    expect(classify(null, activeStore)).toEqual({ kind: 'not-stale' });
+    expect(classify('', activeStore)).toEqual({ kind: 'not-stale' });
+  });
+
+  // Covers: task:17
+  it('does not classify a citation when any child case store is unreadable', () => {
+    expect(
+      classify(
+        'Please repair case-resolved before retrying BUILD.',
+        new Map([
+          [3, readable()],
+          [4, readable(record('case-resolved', 'resolved'))],
+          [5, { ok: false, reason: 'unreadable' }],
+        ]),
+      ),
+    ).toEqual({ kind: 'not-stale' });
+  });
+
+  // Covers: task:17
+  it('does not classify a mixed citation that names an open active-child case', () => {
+    expect(
+      classify(
+        'Please repair case-resolved and case-active before retrying BUILD.',
+        new Map([
+          [3, readable(record('case-active', 'open'))],
+          [4, readable(record('case-resolved', 'resolved'))],
+        ]),
+      ),
+    ).toEqual({ kind: 'not-stale' });
+  });
+});
+
+describe('build-stall stale-citation recorder', () => {
+  // Covers: task:16
+  it('persists the citation fields and its first attempt on the active event spine', async () => {
+    const { root, events, persister } = await eventSpine();
+    try {
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2)).resolves.toEqual({
+        kind: 'recorded',
+        attempt: 1,
+      });
+      const lines = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n');
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!)).toMatchObject({
+        type: 'build_stall_stale_citation',
+        caseId: 'case-resolved',
+        stalledChild: 3,
+        ownerChild: 4,
+        state: 'resolved',
+        resolvedTasks: 2,
+        attempt: 1,
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:18
+  it('counts consecutive identical citations across fresh recorder instances', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-stall-stale-citation-'));
+    temporaryDirectories.push(root);
+    for (const attempt of [1, 2, 3]) {
+      const events = new ConductorEventEmitter();
+      const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+      persister.start();
+      try {
+        await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2)).resolves.toEqual({
+          kind: 'recorded',
+          attempt,
+        });
+      } finally {
+        persister.stop();
+      }
+    }
+  });
+
+  // Covers: task:18
+  it('names the resolved case owner and halt-clear command in the attempt-three mechanical halt', () => {
+    expect(buildStallStaleCitationOutcome(resolvedCitation, { kind: 'recorded', attempt: 2 })).toEqual({
+      kind: 'retry',
+      hint: "Case case-resolved is settled by child 4 and is not this session's work.",
+    });
+    expect(buildStallStaleCitationOutcome(resolvedCitation, { kind: 'recorded', attempt: 3 })).toEqual({
+      kind: 'halt',
+      haltClass: 'mechanical',
+      detail:
+        'Stale citation case-resolved is settled by child 4; use ai-conductor halt clear after reviewing the stale citation.',
+    });
+  });
+
+  // Covers: task:18
+  it('keeps the resolved case owner in the attempt-four needs-human halt after a re-kick', async () => {
+    const { root, events, persister } = await eventSpine();
+    try {
+      for (const attempt of [1, 2, 3]) {
+        await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2)).resolves.toEqual({
+          kind: 'recorded',
+          attempt,
+        });
+      }
+      const reKick = await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      expect(buildStallStaleCitationOutcome(resolvedCitation, reKick)).toEqual({
+        kind: 'halt',
+        haltClass: 'needs-human',
+        detail:
+          'Stale citation case-resolved is settled by child 4; use ai-conductor halt clear after reviewing the stale citation.',
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:18
+  it('names ai-conductor halt clear when stale-citation persistence fails', () => {
+    expect(buildStallStaleCitationOutcome(resolvedCitation, { kind: 'persist-failed' })).toEqual({
+      kind: 'halt',
+      haltClass: 'needs-human',
+      detail: 'Unable to record stale citation; use ai-conductor halt clear after checking the event spine.',
+    });
+  });
+
+  // Covers: task:19
+  it('restarts at one after task progress or a different case', async () => {
+    const { root, events, persister } = await eventSpine();
+    try {
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 3)).resolves.toEqual({
+        kind: 'recorded',
+        attempt: 1,
+      });
+      const otherCitation = { ...resolvedCitation, caseId: 'case-other' } as const;
+      await expect(recordBuildStallStaleCitation(root, events, otherCitation, child3, 3)).resolves.toEqual({
+        kind: 'recorded',
+        attempt: 1,
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:18
+  it('returns persist-failed without an attempt when the active event spine write fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-stall-stale-citation-'));
+    temporaryDirectories.push(root);
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events, undefined, {
+      appendFile: () => {
+        throw new Error('disk unavailable');
+      },
+    });
+    persister.start();
+    try {
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2)).resolves.toEqual({
+        kind: 'persist-failed',
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:19
+  it('restarts the streak when the stalled child changes', async () => {
+    const { root, events, persister } = await eventSpine();
+    try {
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child4, 2)).resolves.toEqual({
+        kind: 'recorded',
+        attempt: 1,
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:15
+  it('delivers the persisted citation to the audit-trail subscriber', async () => {
+    const { root, events, persister } = await eventSpine();
+    const audit = new AuditTrailWriter(root);
+    audit.subscribe(events);
+    try {
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      await expect(readFile(join(root, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8')).resolves.toContain(
+        'build_stall_stale_citation',
+      );
+    } finally {
+      persister.stop();
+    }
+  });
+});

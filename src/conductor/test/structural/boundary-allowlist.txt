@@ -58,6 +58,7 @@ engine/build-review-rejection-retention.ts -> filesystem
 engine/build-review-scoped-run.ts -> process
 engine/build-review-test-quality-preflight.ts -> filesystem
 engine/build-review-work-order.ts -> filesystem
+engine/build-stall-stale-citation.ts -> filesystem
 engine/build-tail-rollup.ts -> filesystem
 engine/canonical-launcher.ts -> filesystem
 engine/child-context.ts -> filesystem

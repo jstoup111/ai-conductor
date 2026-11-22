@@ -56,6 +56,8 @@ import {
   markBuildReviewWorkOrderAttempted,
   readBuildReviewWorkOrder,
   readBuildReviewWorkOrderAttemptedCaseIds,
+  removeBuildReviewWorkOrder,
+  moveBuildReviewWorkOrderToChild,
 } from './build-review-work-order.js';
 import {
   appendRemediationCaseOutbox,
@@ -63,6 +65,7 @@ import {
   prdWideningCasesForState,
   readRemediationCaseStoreFeature,
   RemediationCaseStore,
+  type RemediationCaseFeatureIdentity,
 } from './remediation-case-store.js';
 import {
   recordAsBuiltNeedsHuman,
@@ -100,14 +103,23 @@ import {
 } from './remediation-case-reconciler.js';
 import { formatBuildReviewResolveCaseCommand } from './build-review-adjudication.js';
 import { buildRemediationProjection, type RemediationProjectionLimits } from './remediation-projection.js';
-import { readTypedRemediationPlan } from './remediation-plan-store.js';
+import {
+  readTypedRemediationPlan,
+  remediationTypedPlanPath,
+  removeTypedRemediationPlan,
+} from './remediation-plan-store.js';
 import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { executeGithubOperation } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
-import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
+import {
+  readRemediationCaseJudgement,
+  relocateRemediationCaseJudgement,
+  remediationCaseJudgementPath,
+  removeRemediationCaseJudgement,
+} from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import type { BuildReviewFinding } from './build-review-domain.js';
 import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
@@ -284,6 +296,11 @@ import { settleDerivedNoOpHost } from './routing/routed-exit.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
 import { admitQueuedRevalidation } from './routing/queue-admission.js';
 import { persistOnActiveEventSpine } from './event-persister.js';
+import {
+  buildStallStaleCitationOutcome,
+  classifyBuildStallStaleCitation,
+  recordBuildStallStaleCitation,
+} from './build-stall-stale-citation.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
@@ -512,6 +529,7 @@ import {
   clearHaltMarker,
   readHaltMarkerContent,
   writeStallQuestionEvidence,
+  removeStallQuestionEvidence,
   writeStallHalt,
   normalizeTasks,
   resolveTaskIds,
@@ -1318,12 +1336,13 @@ export class Conductor {
     persistState?: () => Promise<void>;
     surfaceRemediation?: boolean;
     loopHaltReason?: string;
-  }): Promise<void> {
+  }): Promise<Awaited<ReturnType<Conductor['writeHaltMarker']>>> {
     await this.closeOpenExecutions();
-    await this.writeHaltMarker(input.reason + '\n', input.haltClass);
+    const haltWrite = await this.writeHaltMarker(input.reason + '\n', input.haltClass);
     await input.persistState?.();
     const prUrl = input.surfaceRemediation ? await this.surfaceRemediationPr(input.reason) : undefined;
     await this.emitLoopHalt(input.loopHaltReason ?? input.reason, prUrl);
+    return haltWrite;
   }
 
   /**
@@ -4933,6 +4952,9 @@ export class Conductor {
         config: this.config,
         git: this.prdAuditGit(),
         includedGates: remediationEvidenceSources.map((evidence) => evidence.gate),
+        ...(hintSource.source === 'build_stall' || hintSource.source === 'build_stall_zero_work'
+          ? { evidenceFile: remediationEvidenceSources.find((evidence) => evidence.gate === 'build')?.evidenceFile }
+          : {}),
         ...(prdAuditOverScopeRoute?.kind === 'refusal-rework' ? { refusals: prdAuditOverScopeRoute.refusals } : {}),
       },
       this.remediationProjectionLimitOverrides,
@@ -4965,6 +4987,7 @@ export class Conductor {
         runId: attemptId,
         retryReason: dispatchContext,
         remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
+        ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
       });
 
       // The native-schema preflight is a deterministic engine capability
@@ -5008,7 +5031,7 @@ export class Conductor {
         continue;
       }
 
-      typedPlan = await readTypedRemediationPlan(this.projectRoot, { attemptId });
+      typedPlan = await readTypedRemediationPlan(this.projectRoot, { attemptId }, {}, this.activeRegionChild);
       if (typedPlan.kind === 'present') break;
 
       lastFault =
@@ -5114,7 +5137,10 @@ export class Conductor {
     // but never applied while the build burned its last retry.
     const buildStallEvidenceFile =
       hintSource.source === 'build_stall' || hintSource.source === 'build_stall_zero_work'
-        ? '.pipeline/build-stall-question.md'
+        ? relative(
+            this.projectRoot,
+            pipelinePathFor(this.projectRoot, 'build-stall-question.md', this.activeRegionChild),
+          )
         : hintSource.source === 'build-stall'
           ? '.pipeline/halt-user-input-required'
           : undefined;
@@ -6145,10 +6171,14 @@ export class Conductor {
         .join('; ');
       // Single source for the actionable BUILD hint: the initial dispatch and
       // the persisted repair obligation derive from this same value (AB-3).
-      const repairInstruction = buildRemediationHint(
-        routedFixes,
-        hintSource.source,
-        remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
+      // Name the typed plan before the admission is persisted so restart
+      // recovery replays the exact instruction that BUILD receives.
+      const repairInstruction = await this.buildTypedRemediationPlanInput(
+        buildRemediationHint(
+          routedFixes,
+          hintSource.source,
+          remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
+        ),
       );
       let buildPredicateDiagnostic = '';
       const disposition = await this.resolveDecideEntryDisposition({
@@ -6380,6 +6410,14 @@ export class Conductor {
       ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
     }).read();
     if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
+    if (!state.state.cases.some((record) => record.resolution === 'open')) {
+      // Retirement is deliberately non-fatal: a later dispatch repeats this
+      // check, while case settlement and its event outbox remain authoritative.
+      await Promise.all([
+        removeBuildReviewWorkOrder(this.projectRoot, undefined, this.activeRegionChild),
+        removeRemediationCaseJudgement(this.projectRoot, this.activeRegionChild),
+      ]).catch(() => undefined);
+    }
     const openActionCases = new Map(
       state.state.cases.flatMap((record) =>
         isBuildEligibleActionCase(record) ? [[record.id, record.effect.id] as const] : [],
@@ -6396,6 +6434,8 @@ export class Conductor {
       this.projectRoot,
       feature,
       state.state.cases.flatMap((record) => (record.effect.kind === 'action' ? [record.effect.id] : [])),
+      undefined,
+      this.activeRegionChild,
     );
     if (classifyBuildReviewDurableRead(order) === 'absent') {
       const openCase = state.state.cases.find(isBuildEligibleActionCase)!;
@@ -6406,16 +6446,88 @@ export class Conductor {
     }
     if (!order.ok) return { kind: 'invalid', reason: `work order ${order.reason}` };
     if (!order.workOrder.cases.some((row) => openActionCases.has(row.caseId))) return { kind: 'absent' };
-    const attempt = await markBuildReviewWorkOrderAttempted(this.projectRoot, feature);
+    const attempt = await markBuildReviewWorkOrderAttempted(
+      this.projectRoot,
+      feature,
+      undefined,
+      this.activeRegionChild,
+    );
     if (!attempt.ok) return { kind: 'invalid', reason: `work order attempt ${attempt.reason}` };
+    const judgementPath = remediationCaseJudgementPath(this.projectRoot, this.activeRegionChild);
+    const judgementContext = state.state.cases.some(isBuildEligibleActionCase)
+      ? `\n\nRemediation input you may read: ${relative(this.projectRoot, judgementPath)}`
+      : '';
     return {
       kind: 'ready',
       caseIds: order.workOrder.cases.map((row) => row.caseId).sort(),
-      context: appendBuildReviewWorkOrderContext(
-        retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
-        order.workOrder,
-      ),
+      context:
+        appendBuildReviewWorkOrderContext(
+          retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
+          order.workOrder,
+        ) + judgementContext,
     };
+  }
+
+  /** Name the admitted typed gap plan only while it remains readable in this BUILD region. */
+  private buildTypedRemediationPlanInput(retryHint: string): Promise<string>;
+  private buildTypedRemediationPlanInput(retryHint: undefined): Promise<undefined>;
+  private buildTypedRemediationPlanInput(retryHint: string | undefined): Promise<string | undefined>;
+  private async buildTypedRemediationPlanInput(retryHint: string | undefined): Promise<string | undefined> {
+    const path = remediationTypedPlanPath(this.projectRoot, this.activeRegionChild);
+    try {
+      await accessFile(path);
+    } catch {
+      return retryHint;
+    }
+    const input = `Typed remediation gap plan you may read: ${relative(this.projectRoot, path)}`;
+    if (retryHint?.includes(input)) return retryHint;
+    return retryHint ? `${retryHint}\n\n${input}` : input;
+  }
+
+  /** Move only a legacy flat order with a provable open child owner. */
+  private async adoptLegacyRemediationInputs(): Promise<void> {
+    if (this.activeRegionChild === undefined) return;
+    const children = await listExistingChildren(this.projectRoot);
+    let adopted = false;
+    const openChildEffects: Array<{ child: ChildId; feature: RemediationCaseFeatureIdentity; effectIds: string[] }> =
+      [];
+    for (const child of children) {
+      const feature = await readRemediationCaseStoreFeature(this.projectRoot, undefined, child);
+      // A flat order can be retired only after every child region has been
+      // observed. An unreadable region might be its open owner.
+      if (!feature.ok) return;
+      if (!feature.feature) continue;
+      const store = await new RemediationCaseStore(this.projectRoot, feature.feature, { child }).read();
+      if (!store.ok) return;
+      const effectIds = store.state.cases.flatMap((record) =>
+        record.resolution === 'open' && record.effect.kind === 'action' ? [record.effect.id] : [],
+      );
+      if (effectIds.length > 0) openChildEffects.push({ child, feature: feature.feature, effectIds });
+    }
+    for (const { child, feature, effectIds } of openChildEffects) {
+      const order = await readBuildReviewWorkOrder(this.projectRoot, feature, effectIds);
+      if (order.ok) {
+        await moveBuildReviewWorkOrderToChild(this.projectRoot, child).catch(() => undefined);
+        adopted = true;
+        break;
+      }
+    }
+    if (!adopted) await removeBuildReviewWorkOrder(this.projectRoot).catch(() => undefined);
+    // These artifacts have no legacy owner encoding; a stacked retry must not
+    // borrow them from the feature root.
+    await Promise.all([
+      removeRemediationCaseJudgement(this.projectRoot),
+      removeTypedRemediationPlan(this.projectRoot),
+      removeStallQuestionEvidence(this.projectRoot),
+    ]).catch(() => undefined);
+  }
+
+  /** Terminal build-stall artifacts have already been copied into the HALT. */
+  private async retireTerminalBuildStallInputs(): Promise<void> {
+    await Promise.all([
+      removeTypedRemediationPlan(this.projectRoot, {}, this.activeRegionChild),
+      removeStallQuestionEvidence(this.projectRoot, this.activeRegionChild),
+    ]).catch(() => undefined);
   }
 
   /** Keep every adjudication gate on the same resolved configuration accessor. */
@@ -6507,7 +6619,12 @@ export class Conductor {
       await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
     };
     await drainOutbox();
-    const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
+    const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(
+      this.projectRoot,
+      feature,
+      undefined,
+      this.activeRegionChild,
+    );
     if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) !== 'absent') {
       return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
     }
@@ -6623,6 +6740,16 @@ export class Conductor {
       };
     }
     // /ai-conductor:session-command-context
+    // Once every case in this region is settled, its BUILD-only handoff
+    // artifacts are no longer evidence for a later child.  Retiring them is
+    // best-effort: the resolved case store and its outbox are authoritative,
+    // and durableBuildReviewRetryContext will retry a failed removal.
+    if (!reconciled.state.cases.some((record) => record.resolution === 'open')) {
+      await Promise.all([
+        removeBuildReviewWorkOrder(this.projectRoot, undefined, this.activeRegionChild),
+        removeRemediationCaseJudgement(this.projectRoot, this.activeRegionChild),
+      ]).catch(() => undefined);
+    }
     await drainOutbox();
     return { kind: 'settled' };
   }
@@ -12114,6 +12241,10 @@ export class Conductor {
             }
           }
         }
+        // Adopt compatibility inputs before durable recovery reads its child
+        // region. Otherwise an open action case with only a legacy flat work
+        // order is reported as missing before its owning region can receive it.
+        if (step.name === 'build') await this.adoptLegacyRemediationInputs();
         if (step.name === 'build' && this.buildReviewAdjudicationEnabled()) {
           // Durable, not process-local: this is the clause an in-memory hint
           // alone can never satisfy (Task 18 Done-when 5).
@@ -12799,6 +12930,13 @@ export class Conductor {
                   }
                 }
                 if (step.name === 'build_review' && !missingWorktree) await this.settlePreservedSuiteProof(state);
+                // ADR D4: compatibility adoption is a per-dispatch boundary,
+                // independent of build-review adjudication. A retry can see a
+                // newly written legacy flat input, so it must reconcile it
+                // before every BUILD provider invocation.
+                if (step.name === 'build') await this.adoptLegacyRemediationInputs();
+                const dispatchRetryHint =
+                  step.name === 'build' ? await this.buildTypedRemediationPlanInput(retryHint) : retryHint;
                 result =
                   missingWorktree ??
                   (step.name === 'complexity'
@@ -12823,7 +12961,7 @@ export class Conductor {
                                   step.name,
                                   state,
                                   attempt,
-                                  retryHint,
+                                  dispatchRetryHint,
                                   // D1 scope, self-host path: the verdict gate's
                                   // lifecycle `attempt.id` and its sidecar stamp
                                   // are the one value minted above.
@@ -12852,7 +12990,7 @@ export class Conductor {
                                         ? { prdWideningReviewContext: this.prdWideningReviewContext }
                                         : {}),
                                       ...this.buildReviewCapabilityOption(step.name),
-                                      retryReason: retryHint,
+                                      retryReason: dispatchRetryHint,
                                       attempt,
                                       escalate: resolved.escalate,
                                       modelOverride: esc.model,
@@ -14709,7 +14847,11 @@ export class Conductor {
                     let effectiveQuestion: string | null = null;
                     if (stalled === 'halt_marker') {
                       const question = await readHaltMarkerContent(this.projectRoot);
-                      effectiveQuestion = await writeStallQuestionEvidence(this.projectRoot, question);
+                      effectiveQuestion = await writeStallQuestionEvidence(
+                        this.projectRoot,
+                        question,
+                        this.activeRegionChild,
+                      );
                       // Task 8: save the question for use in degraded remediation error handling
                       stallQuestion = question;
                     } else if (stalled === 'no_task_progress' && this.daemon && this.mode === 'auto') {
@@ -14724,9 +14866,70 @@ export class Conductor {
                         `Build stall: no forward progress (resolved ` +
                         `${resolvedTasksBefore} → ${resolvedTasksAfter} tasks).`;
                       const synthesized = `${lastBuildStallReason ?? progressPart}\n${reasonPart}.`;
-                      effectiveQuestion = await writeStallQuestionEvidence(this.projectRoot, synthesized);
+                      effectiveQuestion = await writeStallQuestionEvidence(
+                        this.projectRoot,
+                        synthesized,
+                        this.activeRegionChild,
+                      );
                     }
                     const isZeroWorkStall = stalled === 'no_task_progress';
+
+                    // A stacked child can cite a case which has already settled
+                    // (or belongs to a sibling).  That is not remediation work;
+                    // persist the bounded observation and give BUILD a precise
+                    // correction without consuming a remediation round.
+                    if (stalled === 'halt_marker' && effectiveQuestion && this.activeRegionChild !== undefined) {
+                      const caseStores = new Map<ChildId, Awaited<ReturnType<RemediationCaseStore['read']>>>();
+                      for (const child of await listExistingChildren(this.projectRoot)) {
+                        const feature = await readRemediationCaseStoreFeature(this.projectRoot, undefined, child);
+                        if (!feature.ok) {
+                          caseStores.set(child, { ok: false, reason: feature.reason });
+                          continue;
+                        }
+                        if (!feature.feature) continue;
+                        caseStores.set(
+                          child,
+                          await new RemediationCaseStore(this.projectRoot, feature.feature, { child }).read(),
+                        );
+                      }
+                      const citation = classifyBuildStallStaleCitation({
+                        question: effectiveQuestion,
+                        activeChild: this.activeRegionChild,
+                        caseStores,
+                      });
+                      if (citation.kind === 'stale') {
+                        const recorded = await recordBuildStallStaleCitation(
+                          this.projectRoot,
+                          this.events,
+                          citation,
+                          this.activeRegionChild,
+                          resolvedTasksAfter,
+                        );
+                        const staleOutcome = buildStallStaleCitationOutcome(citation, recorded);
+                        if (staleOutcome.kind === 'halt') {
+                          const haltWrite = await writeStallHalt(
+                            this.projectRoot,
+                            effectiveQuestion,
+                            staleOutcome.detail,
+                            this.events,
+                            staleOutcome.haltClass,
+                          );
+                          if (haltWrite.status === 'written') await this.retireTerminalBuildStallInputs();
+                          await clearHaltMarker(this.projectRoot);
+                          await this.persistPendingStateChanges(state, 'persist conductor transition');
+                          await this.emitLoopHalt(effectiveQuestion);
+                          process.off('SIGINT', sigintHandler);
+                          process.off('SIGTERM', sigterm);
+                          return;
+                        }
+                        if (staleOutcome.kind === 'fall-through') continue;
+                        await clearHaltMarker(this.projectRoot);
+                        await removeStallQuestionEvidence(this.projectRoot, this.activeRegionChild);
+                        retryHint = staleOutcome.hint;
+                        attempt--;
+                        continue;
+                      }
+                    }
 
                     await clearHaltMarker(this.projectRoot);
                     // adr-2026-08-23-committed-halt-record §7 supersedes the
@@ -14764,13 +14967,14 @@ export class Conductor {
                           '\n\nRemediation budget exhausted (max ' +
                           MAX_KICKBACKS_PER_GATE +
                           ' kickbacks per gate).';
-                        await this.haltSerialExecution({
+                        const haltWrite = await this.haltSerialExecution({
                           reason: haltContent,
                           haltClass: 'needs-human',
                           persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
                           surfaceRemediation: true,
                           loopHaltReason: effectiveQuestion,
                         });
+                        if (haltWrite.status === 'written') await this.retireTerminalBuildStallInputs();
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -14792,7 +14996,15 @@ export class Conductor {
                           `Remediate build stall: ${effectiveQuestion}`,
                           {
                             source: isZeroWorkStall ? 'build_stall_zero_work' : 'build_stall',
-                            evidence: [{ gate: 'build', evidenceFile: '.pipeline/build-stall-question.md' }],
+                            evidence: [
+                              {
+                                gate: 'build',
+                                evidenceFile: relative(
+                                  this.projectRoot,
+                                  pipelinePathFor(this.projectRoot, 'build-stall-question.md', this.activeRegionChild),
+                                ),
+                              },
+                            ],
                           },
                         );
                       } catch (err) {
@@ -14810,9 +15022,15 @@ export class Conductor {
                         if (!isZeroWorkStall) {
                           const detail = 'remediation dispatch failed: ' + String(err);
                           const haltContent = effectiveQuestion + '\n\n' + detail;
-                          await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
+                          const haltWrite = await writeStallHalt(
+                            this.projectRoot,
+                            effectiveQuestion,
+                            detail,
+                            this.events,
+                          ).catch(() => {
                             /* best-effort marker */
                           });
+                          if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
                           await this.persistPendingStateChanges(state, 'persist conductor transition');
                           const prUrl = await this.surfaceRemediationPr(haltContent);
                           await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -14842,6 +15060,7 @@ export class Conductor {
                               count: remediationRounds,
                             });
                             retryHint = outcome.hint;
+                            await removeStallQuestionEvidence(this.projectRoot, this.activeRegionChild);
                             attempt--;
                             continue;
                           }
@@ -14858,9 +15077,15 @@ export class Conductor {
                               `misrouted to '${outcome.target}': build stall answers must be ` +
                               `disposition='build', not routed elsewhere.`;
                             const haltContent = effectiveQuestion + '\n\n' + detail;
-                            await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
+                            const haltWrite = await writeStallHalt(
+                              this.projectRoot,
+                              effectiveQuestion,
+                              detail,
+                              this.events,
+                            ).catch(() => {
                               /* best-effort marker */
                             });
+                            if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -14880,7 +15105,7 @@ export class Conductor {
                           // retry/auto-park path.
                           if (!isZeroWorkStall) {
                             const haltContent = effectiveQuestion + '\n\n' + outcome.detail;
-                            await writeStallHalt(
+                            const haltWrite = await writeStallHalt(
                               this.projectRoot,
                               effectiveQuestion,
                               outcome.detail,
@@ -14889,6 +15114,7 @@ export class Conductor {
                             ).catch(() => {
                               /* best-effort marker */
                             });
+                            if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -14909,9 +15135,15 @@ export class Conductor {
                           // actionable without changing auto-park admission.
                           if (!isZeroWorkStall) {
                             const haltContent = effectiveQuestion + '\n\n' + detail;
-                            await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
+                            const haltWrite = await writeStallHalt(
+                              this.projectRoot,
+                              effectiveQuestion,
+                              detail,
+                              this.events,
+                            ).catch(() => {
                               /* best-effort marker */
                             });
+                            if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -15706,6 +15938,9 @@ export class Conductor {
                                 state.session_started_at,
                               );
                               if (!judgement.ok) throw new Error(judgement.reason);
+                              if (this.activeRegionChild !== undefined) {
+                                await relocateRemediationCaseJudgement(this.projectRoot, this.activeRegionChild);
+                              }
                               return judgement.judgement;
                             },
                             // Task 18 Done-when 4: the deferral path is only reachable
@@ -16763,6 +16998,14 @@ export class Conductor {
               if (!existingHalt || existingHalt.trim().length === 0) {
                 await this.writeHaltMarker(terminalReason + '\n', 'needs-human');
               }
+              // A zero-work stall reaches this common terminal path after its
+              // planner outcome falls through. The HALT now preserves the
+              // question, so retire the region-scoped live inputs afterwards.
+              // Best effort is intentional: a later BUILD boundary repeats
+              // compatible cleanup without changing the terminal outcome.
+              if (step.name === 'build' && lastBuildStallReason !== undefined) {
+                await this.retireTerminalBuildStallInputs();
+              }
               // The HALT marker is written before escalation. All state transitions
               // have already crossed the state-store boundary.
               // so the daemon can classify the outcome even if escalation throws (C1).
@@ -16990,6 +17233,12 @@ export class Conductor {
             (await this.settleCleanBuildReviewSuccess(state, buildReviewAdjudicationSettlement)) === 'halted'
           ) {
             return;
+          }
+
+          if (step.name === 'build') {
+            // A gap plan is single-use routing authority. Once its target BUILD
+            // passes, retaining it would make a later retry read stale input.
+            await removeTypedRemediationPlan(this.projectRoot, {}, this.activeRegionChild).catch(() => undefined);
           }
 
           // For complexity + worktree, 'done' (and tier / worktree fields) are

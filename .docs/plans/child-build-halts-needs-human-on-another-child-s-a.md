@@ -576,3 +576,63 @@ All engine paths below are under `src/conductor/src/engine/` unless they start a
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-6: In src/conductor/src/engine/conductor.ts BUILD dispatch (routed-host hint ~6023, ordinary hint ~6149/6312, readable-input injection ~6427), name the admitted flat or child-scoped typed gap plan path (remediationTypedPlanPath(projectRoot, child)) as an input the session may read when a gap plan exists in that region, and omit it when none exists; add tests for child 3 with and without .pipeline/children/3/remediation-plan.json
+**Gate:** prd-audit
+**Rationale:** Verified: remediationTypedPlanPath is referenced only in remediation-plan-store.ts; no BUILD prompt names the typed gap plan. Task 6 admits this. It is a conforming implementation gap, so no architecture decision is needed.
+**Criterion:** S2.3
+**Parent task:** 6
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-18: In src/conductor/src/engine/build-stall-stale-citation.ts, make the halt detail (and retry hint) name citation.ownerChild for resolved citations as well as foreign ones; add tests asserting that the attempt-3 mechanical HALT names the case and its owning child for a resolved citation
+**Gate:** prd-audit
+**Rationale:** Verified: build-stall-stale-citation.ts:84 prints 'settled' without the owning child when the citation state is resolved, even though citation.ownerChild is populated for every stale citation. Task 18 admits the fix.
+**Criterion:** S6.1
+**Parent task:** 18
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-18 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-d4-legacy-cleanup: In src/conductor/src/engine/conductor.ts BUILD dispatch (~12245), call adoptLegacyRemediationInputs() before every build step dispatch, independent of buildReviewAdjudicationEnabled(), and stop depending on durableBuildReviewRetryContext for it (keep that call idempotent). Add a conductor test with build-review adjudication disabled: a stacked child's BUILD adopts a flat work order that has an open owner into that owner's region, and removes flat remediation inputs that have no open owner (plan Tasks 12/13 behavior preserved).
+**Gate:** as-built
+**Rationale:** Verified: adoptLegacyRemediationInputs() is called only inside durableBuildReviewRetryContext (conductor.ts:6397), and its sole BUILD-dispatch caller is gated by buildReviewAdjudicationEnabled() at conductor.ts:12245. When adjudication is disabled, the legacy adoption and removal of flat inputs never runs before a child's BUILD. ADR D4 already makes that boundary unconditional, so no architecture decision is needed. This is conforming implementation drift admitted by plan Tasks 12 and 13 (legacy adoption and unowned removal before a child's BUILD). Route to BUILD.
+**Governing clause:** adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 4
+**Done when:**
+- adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-d4-legacy-cleanup is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-d3-terminal-stall-retire: In src/conductor/src/engine/conductor.ts terminal step-failure HALT path (~16987-17001), when the failed step is a build stall, retire the active region's captured stall question and stall-routed typed gap plan (best-effort, non-fatal) after the HALT marker is written. Leave existing retry, auto-park and HALT-class routing unchanged. Add conductor tests for a zero-work stall reaching the terminal HALT through each of these routes: remediation budget exhausted, planner halt, and dispatch exception. Each test asserts that the question and gap plan files for child 3 are gone and that the HALT class and reason are unchanged.
+**Gate:** as-built
+**Rationale:** Verified: the terminal retries-exhausted HALT path at conductor.ts ~16987-17001 writes the needs-human HALT, surfaces the PR, emits the loop halt and returns. It never retires the captured stall question or the remaining stall gap plan. The zero-work dispatch-exception, misroute, planner-halt, planner-fault and budget-exhausted branches all fall through to that path. ADR D3 already requires deleting the question and gap plan once their stall halts, and plan Tasks 10 and 11 admit the work, so this is conforming implementation drift. Route to BUILD.
+**Governing clause:** adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 3
+**Done when:**
+- adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-d3-terminal-stall-retire is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-s1-4-zero-work-evidence: In src/conductor/src/engine/conductor.ts remediation projection call (~4955), pass the build-gate evidenceFile to buildRemediationProjection for both 'build_stall' and 'build_stall_zero_work' hint sources so zero-work stalls read the active child's region question. Add a conductor test: a zero-work stall with active child 3 sends a projection that cites .pipeline/children/3/build-stall-question.md and carries that file's question text in its excerpts (not empty). Keep the existing no-children flat-path test passing.
+**Gate:** prd-audit
+**Rationale:** Verified at conductor.ts:4955: buildRemediationProjection gets evidenceFile only when hintSource.source === 'build_stall'. Zero-work stalls (source 'build_stall_zero_work') therefore fall back to flat .pipeline/build-stall-question.md (remediation-projection.ts:387), and an ENOENT there gives empty excerpts. Approved architecture already requires the region path, so this is conforming implementation drift and belongs in BUILD. Task 4's behavior and tests are kept; the repair only widens the source condition.
+**Criterion:** S1.4
+**Parent task:** 4
+**Done when:**
+- [test] S1.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-s1-4-zero-work-evidence is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-d4-adopt-before-durable-recovery: In src/conductor/src/engine/conductor.ts BUILD step setup (~12245), call adoptLegacyRemediationInputs() for every build step before the buildReviewAdjudicationEnabled()/durableBuildReviewRetryContext block. Keep the per-dispatch adoption call at ~12933 for retries, and keep adoption idempotent. Add a conductor test with adjudication enabled: an open action case whose work order exists only as a legacy flat file is adopted into its owner's region, and BUILD dispatches without a 'durable remediation recovery halted' HALT. Keep the existing adjudication-disabled adoption test passing.
+**Gate:** as-built
+**Rationale:** Verified: conductor.ts:12247 calls durableBuildReviewRetryContext, which can halt needs-human at :12248-12254. Adoption runs only later, at :12933. An open action case whose work order is still flat therefore halts before it is ever adopted. D4 is clear and authoritative, so this is an implementation ordering fix in BUILD. The prior repair made adoption unconditional and keeps its per-dispatch call; the new task adds an earlier call.
+**Governing clause:** adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 4
+**Done when:**
+- adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-d4-adopt-before-durable-recovery is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-s6-3-clear-marker-on-stale-halt: In src/conductor/src/engine/conductor.ts stale-citation halt branch (~14909-14920), call clearHaltMarker(this.projectRoot) before returning. Match sibling stall-halt paths by persisting pending state changes (persistPendingStateChanges) and detaching the SIGINT/SIGTERM handlers (process.off) before the return. Keep the HALT class, the HALT body and retireTerminalBuildStallInputs unchanged. Add a conductor test: after a stale-citation mechanical HALT, `.pipeline/halt-user-input-required` is absent. After an `ai-conductor halt clear` and a re-run whose BUILD session makes progress without writing a new question, no stalled='halt_marker' re-detection occurs and no attempt-4 needs-human HALT is written.
+**Gate:** prd-audit
+**Rationale:** Verified at conductor.ts:14909-14920: the stale-citation `halt` branch writes the stall HALT, retires inputs, emits loop halt and returns without calling clearHaltMarker. The sibling non-halt branch (14922) and the general stall path (14930) do clear it. So `.pipeline/halt-user-input-required` survives `ai-conductor halt clear` and re-kicks. The next BUILD then re-detects stalled='halt_marker' on the stale question and keeps counting attempts 4, 5 and so on. This is implementation drift inside approved Task 18 (mechanical then needs-human halt semantics), and the approved architecture stays authoritative. No architecture or product decision is needed, so the route is BUILD bound to owner task 18. Preserved: the existing attempt-3 mechanical, attempt-4 needs-human and persist-failed halt tests and HALT-body wording (S6.1, S6.6-S6.8) stay unchanged.
+**Criterion:** S6.3
+**Parent task:** 18
+**Done when:**
+- [test] S6.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-s6-3-clear-marker-on-stale-halt is committed and its targeted tests pass.

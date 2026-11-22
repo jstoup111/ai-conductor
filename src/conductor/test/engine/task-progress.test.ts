@@ -20,11 +20,7 @@ import {
   HALT_MARKER_RELATIVE,
 } from '../../src/engine/task-progress.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import {
-  detectTaskCommand,
-  dispatchTaskCommand,
-  runTaskStart,
-} from '../../src/engine/task-cli.js';
+import { detectTaskCommand, dispatchTaskCommand, runTaskStart } from '../../src/engine/task-cli.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { createRepairObligationStore, taskObligationStanding } from '../../src/engine/repair-obligations.js';
 import { makeGitRunner, performRebase } from '../../src/engine/rebase.js';
@@ -50,19 +46,40 @@ describe('task-progress', () => {
       await writeFile(
         join(dir, '.docs', 'plans', 'demo.md'),
         [
-          '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
-          '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | T1 |', '| 2 | Two | T2 |', '',
-          '### Task T1: One', '**Story:** Story 1', '**Dependencies:** none', '',
-          '### Task T2: Two', '**Story:** Story 2', '**Dependencies:** T1', '',
+          '# Implementation Plan: demo',
+          '',
+          '**Stories:** .docs/stories/demo.md',
+          '',
+          '## Slices',
+          '',
+          '| Slice | Title | Tasks |',
+          '| --- | --- | --- |',
+          '| 1 | One | T1 |',
+          '| 2 | Two | T2 |',
+          '',
+          '### Task T1: One',
+          '**Story:** Story 1',
+          '**Dependencies:** none',
+          '',
+          '### Task T2: Two',
+          '**Story:** Story 2',
+          '**Dependencies:** T1',
+          '',
           `### Task rem-prd-audit-T1: repair\n${childLine === undefined ? '' : `\n**Child:** ${childLine}\n`}`,
         ].join('\n'),
       );
-      await writeFile(join(dir, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: One\n\n## Story 2: Two\n');
+      await writeFile(
+        join(dir, '.docs', 'stories', 'demo.md'),
+        '# Stories: demo\n\n## Story 1: One\n\n## Story 2: Two\n',
+      );
       if (cachedChild !== undefined) {
-        await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-          appendedRemediationTaskIds: ['rem-prd-audit-T1'],
-          appendedRemediationTaskChildren: { 'rem-prd-audit-T1': cachedChild },
-        }));
+        await writeFile(
+          join(dir, '.pipeline', 'engine-state.json'),
+          JSON.stringify({
+            appendedRemediationTaskIds: ['rem-prd-audit-T1'],
+            appendedRemediationTaskChildren: { 'rem-prd-audit-T1': cachedChild },
+          }),
+        );
       }
     }
 
@@ -70,7 +87,8 @@ describe('task-progress', () => {
       await writeMembershipFixture(1);
 
       await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toEqual({
-        kind: 'available', taskIds: ['T1', 'rem-prd-audit-T1'],
+        kind: 'available',
+        taskIds: ['T1', 'rem-prd-audit-T1'],
       });
     });
 
@@ -78,17 +96,22 @@ describe('task-progress', () => {
       await writeMembershipFixture(1, 2);
 
       await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toEqual({
-        kind: 'available', taskIds: ['T1', 'rem-prd-audit-T1'],
+        kind: 'available',
+        taskIds: ['T1', 'rem-prd-audit-T1'],
       });
     });
 
-    it.each([2, '2'] as const)('uses canonical cached remediation child %j when the Child line is absent', async (cachedChild) => {
-      await writeMembershipFixture(undefined, cachedChild);
+    it.each([2, '2'] as const)(
+      'uses canonical cached remediation child %j when the Child line is absent',
+      async (cachedChild) => {
+        await writeMembershipFixture(undefined, cachedChild);
 
-      await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toEqual({
-        kind: 'available', taskIds: ['T2', 'rem-prd-audit-T1'],
-      });
-    });
+        await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toEqual({
+          kind: 'available',
+          taskIds: ['T2', 'rem-prd-audit-T1'],
+        });
+      },
+    );
 
     it('refuses a malformed cached remediation child when the Child line is absent', async () => {
       await writeMembershipFixture(undefined, 'x');
@@ -101,9 +124,12 @@ describe('task-progress', () => {
 
     it('refuses rem task scope when both committed Child line and cache are absent', async () => {
       await writeMembershipFixture();
-      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-        appendedRemediationTaskIds: ['rem-prd-audit-T1'],
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({
+          appendedRemediationTaskIds: ['rem-prd-audit-T1'],
+        }),
+      );
 
       await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toMatchObject({
         kind: 'refused',
@@ -113,28 +139,63 @@ describe('task-progress', () => {
 
     it('derives child two task scope from the plan with no envelope', async () => {
       await writeMembershipFixture();
-      await writeFile(join(dir, '.docs', 'plans', 'demo.md'), [
-        '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
-        '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | Foundation | 1, 2, 3 |', '| 2 | Delivery | 4, 5, 6 |', '',
-        '### Task 1: Foundation', '**Story:** Story 1', '**Dependencies:** none', '',
-        '### Task 2: Foundation', '**Story:** Story 1', '**Dependencies:** 1', '',
-        '### Task 3: Foundation', '**Story:** Story 1', '**Dependencies:** 2', '',
-        '### Task 4: Delivery', '**Story:** Story 2', '**Dependencies:** 3', '',
-        '### Task 5: Delivery', '**Story:** Story 2', '**Dependencies:** 4', '',
-        '### Task 6: Delivery', '**Story:** Story 2', '**Dependencies:** 5', '',
-      ].join('\n'));
+      await writeFile(
+        join(dir, '.docs', 'plans', 'demo.md'),
+        [
+          '# Implementation Plan: demo',
+          '',
+          '**Stories:** .docs/stories/demo.md',
+          '',
+          '## Slices',
+          '',
+          '| Slice | Title | Tasks |',
+          '| --- | --- | --- |',
+          '| 1 | Foundation | 1, 2, 3 |',
+          '| 2 | Delivery | 4, 5, 6 |',
+          '',
+          '### Task 1: Foundation',
+          '**Story:** Story 1',
+          '**Dependencies:** none',
+          '',
+          '### Task 2: Foundation',
+          '**Story:** Story 1',
+          '**Dependencies:** 1',
+          '',
+          '### Task 3: Foundation',
+          '**Story:** Story 1',
+          '**Dependencies:** 2',
+          '',
+          '### Task 4: Delivery',
+          '**Story:** Story 2',
+          '**Dependencies:** 3',
+          '',
+          '### Task 5: Delivery',
+          '**Story:** Story 2',
+          '**Dependencies:** 4',
+          '',
+          '### Task 6: Delivery',
+          '**Story:** Story 2',
+          '**Dependencies:** 5',
+          '',
+        ].join('\n'),
+      );
 
       await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toEqual({
-        kind: 'available', taskIds: ['4', '5', '6'],
+        kind: 'available',
+        taskIds: ['4', '5', '6'],
       });
     });
 
     it('refuses malformed plan slices instead of returning an unscoped child', async () => {
       await writeMembershipFixture();
-      await writeFile(join(dir, '.docs', 'plans', 'demo.md'), '# Plan\n\n## Slices\n\n| Slice | Title | Tasks |\n| --- | --- | --- |\n| 1 | broken |\n');
+      await writeFile(
+        join(dir, '.docs', 'plans', 'demo.md'),
+        '# Plan\n\n## Slices\n\n| Slice | Title | Tasks |\n| --- | --- | --- |\n| 1 | broken |\n',
+      );
 
       await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toMatchObject({
-        kind: 'refused', reason: expect.stringContaining('plan-invalid'),
+        kind: 'refused',
+        reason: expect.stringContaining('plan-invalid'),
       });
     });
   });
@@ -186,10 +247,7 @@ describe('task-progress', () => {
 
     it('returns 0 when the tasks field is missing or empty', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(dir, '.pipeline/task-status.json'),
-        JSON.stringify({ plan_ref: 'foo' }),
-      );
+      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ plan_ref: 'foo' }));
       expect(await countResolvedTasks(dir)).toBe(0);
     });
 
@@ -335,10 +393,7 @@ describe('task-progress', () => {
 
     it('empty-rows: pins countResolvedTasks to 0 when the tasks field is missing', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(dir, '.pipeline/task-status.json'),
-        JSON.stringify({ plan_ref: 'foo' }),
-      );
+      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ plan_ref: 'foo' }));
       expect(await countResolvedTasks(dir)).toBe(0);
     });
   });
@@ -449,13 +504,18 @@ describe('task-progress', () => {
       repairObligations: { currentByPlan: Record<string, Record<string, string>> };
     };
 
-    async function prepareResolverRepairState(taskRows: Array<{ id: string; status: string }> = [{ id: '2', status: 'completed' }]) {
+    async function prepareResolverRepairState(
+      taskRows: Array<{ id: string; status: string }> = [{ id: '2', status: 'completed' }],
+    ) {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '# Plan\n');
-      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-        activePlanPath: '.docs/plans/feature.md',
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({
+          activePlanPath: '.docs/plans/feature.md',
+        }),
+      );
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: taskRows }));
       return createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
     }
@@ -482,12 +542,15 @@ describe('task-progress', () => {
       await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
       const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
       await repairs.close({
-        planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
+        planPath: '.docs/plans/feature.md',
+        taskId: '2',
+        obligationId: current.id,
         evidence: { kind: 'task-done', value: 'current' },
       });
 
       await expect(resolveTaskIdsWithDiagnostics(dir, ['2'])).resolves.toEqual({
-        resolved: new Set(['2']), unavailableReasons: new Map(),
+        resolved: new Set(['2']),
+        unavailableReasons: new Map(),
       });
     });
 
@@ -496,13 +559,17 @@ describe('task-progress', () => {
       const older = await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
       const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
       await repairs.close({
-        planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
+        planPath: '.docs/plans/feature.md',
+        taskId: '2',
+        obligationId: current.id,
         evidence: { kind: 'task-done', value: 'current' },
       });
-      const rewritten = await repairs.rewriteBaselines(new Map([
-        [older.id, 'translated-older'],
-        [current.id, 'translated-current'],
-      ]));
+      const rewritten = await repairs.rewriteBaselines(
+        new Map([
+          [older.id, 'translated-older'],
+          [current.id, 'translated-current'],
+        ]),
+      );
       expect(rewritten).toEqual({ ok: true, value: { rewritten: [older.id, current.id] } });
       const rewrittenState = await repairs.read();
       if (!rewrittenState.ok) throw new Error(rewrittenState.message);
@@ -530,7 +597,9 @@ describe('task-progress', () => {
       await admitResolverObligation(repairs, 'audit', 'prd_audit', 'audit-boundary');
       const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
       await repairs.close({
-        planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
+        planPath: '.docs/plans/feature.md',
+        taskId: '2',
+        obligationId: current.id,
         evidence: { kind: 'task-done', value: 'current' },
       });
 
@@ -538,18 +607,33 @@ describe('task-progress', () => {
     });
 
     it.each([
-      ['is missing', (state: MutableRepairState) => delete state.repairObligations.currentByPlan['.docs/plans/feature.md']['2']],
-      ['names a missing record', (state: MutableRepairState) => { state.repairObligations.currentByPlan['.docs/plans/feature.md']['2'] = 'missing'; }],
+      [
+        'is missing',
+        (state: MutableRepairState) => delete state.repairObligations.currentByPlan['.docs/plans/feature.md']['2'],
+      ],
+      [
+        'names a missing record',
+        (state: MutableRepairState) => {
+          state.repairObligations.currentByPlan['.docs/plans/feature.md']['2'] = 'missing';
+        },
+      ],
     ])('keeps a task unresolved with the current-less reason when its current entry %s', async (_caseName, corrupt) => {
       const repairs = await prepareResolverRepairState();
       await admitResolverObligation(repairs, 'open', 'build_review', 'boundary');
-      const state = JSON.parse(await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8')) as MutableRepairState;
+      const state = JSON.parse(
+        await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'),
+      ) as MutableRepairState;
       corrupt(state);
       await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify(state));
 
       await expect(resolveTaskIdsWithDiagnostics(dir, ['2'])).resolves.toEqual({
         resolved: new Set(),
-        unavailableReasons: new Map([['2', 'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it']]),
+        unavailableReasons: new Map([
+          [
+            '2',
+            'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it',
+          ],
+        ]),
       });
     });
 
@@ -558,7 +642,9 @@ describe('task-progress', () => {
       await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
       const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
       await repairs.close({
-        planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
+        planPath: '.docs/plans/feature.md',
+        taskId: '2',
+        obligationId: current.id,
         evidence: { kind: 'task-done', value: 'current' },
       });
 
@@ -574,18 +660,29 @@ describe('task-progress', () => {
     });
 
     it.each([
-      ['is missing', (state: MutableRepairState) => delete state.repairObligations.currentByPlan['.docs/plans/feature.md']['2']],
-      ['names a missing record', (state: MutableRepairState) => { state.repairObligations.currentByPlan['.docs/plans/feature.md']['2'] = 'missing'; }],
+      [
+        'is missing',
+        (state: MutableRepairState) => delete state.repairObligations.currentByPlan['.docs/plans/feature.md']['2'],
+      ],
+      [
+        'names a missing record',
+        (state: MutableRepairState) => {
+          state.repairObligations.currentByPlan['.docs/plans/feature.md']['2'] = 'missing';
+        },
+      ],
     ])('reports a current-less repair as unavailable when its current entry %s', async (_caseName, corrupt) => {
       const repairs = await prepareResolverRepairState();
       await admitResolverObligation(repairs, 'open', 'build_review', 'boundary');
-      const state = JSON.parse(await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8')) as MutableRepairState;
+      const state = JSON.parse(
+        await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'),
+      ) as MutableRepairState;
       corrupt(state);
       await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify(state));
 
       await expect(openRepairForTask(dir, '2')).resolves.toEqual({
         kind: 'unavailable',
-        reason: 'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it',
+        reason:
+          'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it',
       });
     });
 
@@ -595,21 +692,28 @@ describe('task-progress', () => {
         { id: '4', status: 'completed' },
       ]);
       const admitted = await repairs.admitOrReplay('resolved-4', {
-        id: 'resolved-4', planPath: '.docs/plans/feature.md', taskIds: ['4'],
+        id: 'resolved-4',
+        planPath: '.docs/plans/feature.md',
+        taskIds: ['4'],
         source: { findingId: 'resolved-4', authority: 'build_review', instruction: 'repair it' },
         baseline: { head: 'boundary', tree: 'tree', resolvedTaskIds: [] },
       });
       if (!admitted.ok) throw new Error(admitted.message);
       await repairs.close({
-        planPath: '.docs/plans/feature.md', taskId: '4', obligationId: admitted.obligation.id,
+        planPath: '.docs/plans/feature.md',
+        taskId: '4',
+        obligationId: admitted.obligation.id,
         evidence: { kind: 'task-done', value: 'resolved' },
       });
-      const state = JSON.parse(await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8')) as MutableRepairState;
+      const state = JSON.parse(
+        await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'),
+      ) as MutableRepairState;
       delete state.repairObligations.currentByPlan['.docs/plans/feature.md']['4'];
       await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify(state));
 
       await expect(resolveTaskIdsWithDiagnostics(dir, ['3', '4'])).resolves.toEqual({
-        resolved: new Set(['3', '4']), unavailableReasons: new Map(),
+        resolved: new Set(['3', '4']),
+        unavailableReasons: new Map(),
       });
     });
 
@@ -620,12 +724,18 @@ describe('task-progress', () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '### Task 7: Repair the close path\n');
-      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-        activePlanPath: '.docs/plans/feature.md',
-      }));
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '7', status: 'completed' }],
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({
+          activePlanPath: '.docs/plans/feature.md',
+        }),
+      );
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [{ id: '7', status: 'completed' }],
+        }),
+      );
       await writeFile(join(dir, 'original.txt'), 'original\n');
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'original implementation\n\nTask: 7'], { cwd: dir });
@@ -663,10 +773,7 @@ describe('task-progress', () => {
      * first-parent successor survives. The translator must persist the
      * selected boundary before task-progress reads it.
      */
-    async function rebaseWithTranslatedBoundary(
-      taskId: string,
-      boundary: TranslatedBoundary,
-    ): Promise<void> {
+    async function rebaseWithTranslatedBoundary(taskId: string, boundary: TranslatedBoundary): Promise<void> {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
@@ -674,9 +781,12 @@ describe('task-progress', () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '# Plan\n');
-      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-        activePlanPath: '.docs/plans/feature.md',
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({
+          activePlanPath: '.docs/plans/feature.md',
+        }),
+      );
       await writeFile(join(dir, 'base.txt'), 'base\n');
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'base'], { cwd: dir });
@@ -763,12 +873,18 @@ describe('task-progress', () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '### Task 2: repaired task\n');
-      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-        activePlanPath: '.docs/plans/feature.md',
-      }));
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '2', status: 'completed' }],
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({
+          activePlanPath: '.docs/plans/feature.md',
+        }),
+      );
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [{ id: '2', status: 'completed' }],
+        }),
+      );
       await writeFile(join(dir, 'old.txt'), 'old');
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'old completion\n\nTask: 2'], { cwd: dir });
@@ -797,9 +913,12 @@ describe('task-progress', () => {
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-        activePlanPath: '.docs/plans/feature.md',
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({
+          activePlanPath: '.docs/plans/feature.md',
+        }),
+      );
       await writeFile(join(dir, 'baseline.txt'), 'baseline');
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'baseline\n\nTask: T2'], { cwd: dir });
@@ -835,9 +954,12 @@ describe('task-progress', () => {
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-        activePlanPath: '.docs/plans/feature.md',
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({
+          activePlanPath: '.docs/plans/feature.md',
+        }),
+      );
       await writeFile(join(dir, 'base.txt'), 'base');
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'base'], { cwd: dir });
@@ -873,10 +995,7 @@ describe('task-progress', () => {
       expect(untranslated.resolved).toEqual(new Set());
       expect(untranslated.unavailableReasons.get('2')).toContain('not an ancestor of HEAD');
 
-      await writeFile(
-        join(dir, '.pipeline', 'rebase-rewrites.json'),
-        JSON.stringify({ [oldBoundary]: newBoundary }),
-      );
+      await writeFile(join(dir, '.pipeline', 'rebase-rewrites.json'), JSON.stringify({ [oldBoundary]: newBoundary }));
       expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
     });
 
@@ -892,13 +1011,13 @@ describe('task-progress', () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '### Task 2: repaired task\n');
+      await writeFile(join(dir, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'feature' }));
       await writeFile(
-        join(dir, '.pipeline', 'conduct-state.json'),
-        JSON.stringify({ feature_desc: 'feature' }),
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [{ id: '2', status: 'completed' }],
+        }),
       );
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '2', status: 'completed' }],
-      }));
       await writeFile(join(dir, 'old.txt'), 'old');
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'old completion\n\nTask: 2'], { cwd: dir });
@@ -914,9 +1033,10 @@ describe('task-progress', () => {
       });
       if (!admitted.ok) throw new Error(admitted.message);
 
-      const engineState = JSON.parse(
-        await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'),
-      ) as Record<string, unknown>;
+      const engineState = JSON.parse(await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8')) as Record<
+        string,
+        unknown
+      >;
       expect(engineState.activePlanPath).toBeUndefined();
 
       expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set());
@@ -924,9 +1044,12 @@ describe('task-progress', () => {
 
     it('refuses the legacy union when obligations exist but no plan resolves', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '2', status: 'completed' }],
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [{ id: '2', status: 'completed' }],
+        }),
+      );
       const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
       const admitted = await repairs.admitOrReplay('key-unresolvable-plan', {
         id: 'orphan-round',
@@ -946,18 +1069,24 @@ describe('task-progress', () => {
     it('leaves the legacy union alone when no obligation has ever been admitted', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({}));
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '2', status: 'completed' }],
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [{ id: '2', status: 'completed' }],
+        }),
+      );
 
       expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
     });
 
     it('retains a persisted current closure when its historical boundary is unavailable', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-        activePlanPath: '.docs/plans/feature.md',
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({
+          activePlanPath: '.docs/plans/feature.md',
+        }),
+      );
       const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
       const admitted = await repairs.admitOrReplay('key-3', {
         id: 'closed-round',
@@ -995,9 +1124,9 @@ describe('task-progress', () => {
     }
 
     async function taskRow(id = '1'): Promise<Record<string, unknown>> {
-      const status = JSON.parse(
-        await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
-      ) as { tasks: Array<Record<string, unknown>> };
+      const status = JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8')) as {
+        tasks: Array<Record<string, unknown>>;
+      };
       return status.tasks.find((task) => task.id === id) ?? {};
     }
 
@@ -1010,10 +1139,17 @@ describe('task-progress', () => {
 - third observable outcome`);
 
       const command = detectTaskCommand([
-        'node', 'conduct', 'task', 'done', '1',
-        '--done-when', '1=proved first',
-        '--done-when', '2=proved second',
-        '--done-when', '3=proved third',
+        'node',
+        'conduct',
+        'task',
+        'done',
+        '1',
+        '--done-when',
+        '1=proved first',
+        '--done-when',
+        '2=proved second',
+        '--done-when',
+        '3=proved third',
       ]);
 
       expect(command).not.toBeNull();
@@ -1035,7 +1171,7 @@ describe('task-progress', () => {
       await mkdir(join(dir, 'test'), { recursive: true });
       await writeFile(
         join(dir, 'test', 'mixed-close.test.ts'),
-        '// Covers: task:1\n\nit(\'closes the tagged outcome\', () => {});\n',
+        "// Covers: task:1\n\nit('closes the tagged outcome', () => {});\n",
       );
       await execa('git', ['add', 'test/mixed-close.test.ts'], { cwd: dir });
       await execa('git', ['commit', '-m', 'seed tagged test'], { cwd: dir });
@@ -1046,9 +1182,15 @@ describe('task-progress', () => {
 - untagged configuration outcome`);
 
       const command = detectTaskCommand([
-        'node', 'conduct', 'task', 'done', '1',
-        '--done-when', '1=test:test/mixed-close.test.ts::closes the tagged outcome',
-        '--done-when', '2=configuration was applied',
+        'node',
+        'conduct',
+        'task',
+        'done',
+        '1',
+        '--done-when',
+        '1=test:test/mixed-close.test.ts::closes the tagged outcome',
+        '--done-when',
+        '2=configuration was applied',
       ]);
 
       expect(command).not.toBeNull();
@@ -1081,18 +1223,29 @@ describe('task-progress', () => {
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'seed task state'], { cwd: dir });
 
-      await expect(completeTaskDoneWhen(dir, '1', [], [{
-        index: 1,
-        reason: 'the required service is unavailable in this environment',
-      }])).resolves.toEqual({ kind: 'completed' });
+      await expect(
+        completeTaskDoneWhen(
+          dir,
+          '1',
+          [],
+          [
+            {
+              index: 1,
+              reason: 'the required service is unavailable in this environment',
+            },
+          ],
+        ),
+      ).resolves.toEqual({ kind: 'completed' });
       expect(await taskRow()).toMatchObject({
         status: 'completed',
-        doneWhen: [{
-          check: '[test] a test must prove this outcome',
-          evidence: 'the required service is unavailable in this environment',
-          source: 'unverified',
-          reason: 'the required service is unavailable in this environment',
-        }],
+        doneWhen: [
+          {
+            check: '[test] a test must prove this outcome',
+            evidence: 'the required service is unavailable in this environment',
+            source: 'unverified',
+            reason: 'the required service is unavailable in this environment',
+          },
+        ],
       });
       await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
     });
@@ -1119,8 +1272,13 @@ describe('task-progress', () => {
       for (const id of ['1', '2']) {
         if (id === '2') expect(await runTaskStart(dir, id)).toBe(0);
         const command = detectTaskCommand([
-          'node', 'conduct', 'task', 'done', id,
-          '--done-when', '1=the same free-text evidence',
+          'node',
+          'conduct',
+          'task',
+          'done',
+          id,
+          '--done-when',
+          '1=the same free-text evidence',
         ]);
         expect(command).not.toBeNull();
         expect(await dispatchTaskCommand(command!, dir)).toBe(0);
@@ -1128,19 +1286,23 @@ describe('task-progress', () => {
 
       expect(await taskRow('1')).toMatchObject({
         status: 'completed',
-        doneWhen: [{
-          check: 'first untagged outcome',
-          evidence: 'the same free-text evidence',
-          source: 'reported',
-        }],
+        doneWhen: [
+          {
+            check: 'first untagged outcome',
+            evidence: 'the same free-text evidence',
+            source: 'reported',
+          },
+        ],
       });
       expect(await taskRow('2')).toMatchObject({
         status: 'completed',
-        doneWhen: [{
-          check: 'second untagged outcome',
-          evidence: 'the same free-text evidence',
-          source: 'reported',
-        }],
+        doneWhen: [
+          {
+            check: 'second untagged outcome',
+            evidence: 'the same free-text evidence',
+            source: 'reported',
+          },
+        ],
       });
     });
 
@@ -1154,9 +1316,15 @@ describe('task-progress', () => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => {});
       try {
         const command = detectTaskCommand([
-          'node', 'conduct', 'task', 'done', '1',
-          '--done-when', '1=proved first',
-          '--done-when', '2=proved second',
+          'node',
+          'conduct',
+          'task',
+          'done',
+          '1',
+          '--done-when',
+          '1=proved first',
+          '--done-when',
+          '2=proved second',
         ]);
 
         expect(await dispatchTaskCommand(command!, dir)).toBe(1);
@@ -1183,11 +1351,22 @@ describe('task-progress', () => {
 
 **Done when:**
 - observable outcome`);
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{
-        id: '1', status: 'completed', doneWhen: [{ check: 'observable outcome', source: 'bogus' }],
-      }] }));
-      await expect(completeTaskDoneWhen(dir, '1', [{ index: 1, evidence: 'new evidence' }]))
-        .resolves.toMatchObject({ kind: 'refused', message: expect.stringContaining('unknown done-when close source: bogus') });
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: '1',
+              status: 'completed',
+              doneWhen: [{ check: 'observable outcome', source: 'bogus' }],
+            },
+          ],
+        }),
+      );
+      await expect(completeTaskDoneWhen(dir, '1', [{ index: 1, evidence: 'new evidence' }])).resolves.toMatchObject({
+        kind: 'refused',
+        message: expect.stringContaining('unknown done-when close source: bogus'),
+      });
     });
 
     it('closes a verify-only task through prove-closed evidence', async () => {
@@ -1233,15 +1412,19 @@ describe('task-progress', () => {
       await mkdir(join(dir, 'test'), { recursive: true });
       await writeFile(
         join(dir, 'test', 'verify-only.test.ts'),
-        '// Covers: task:1\n\nit(\'keeps tagged behavior covered\', () => {});\n',
+        "// Covers: task:1\n\nit('keeps tagged behavior covered', () => {});\n",
       );
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'seed verify-only reference'], { cwd: dir });
 
-      await expect(completeTaskDoneWhen(dir, '1', [{
-        index: 1,
-        evidence: 'test:test/verify-only.test.ts::keeps tagged behavior covered',
-      }])).resolves.toEqual({ kind: 'completed' });
+      await expect(
+        completeTaskDoneWhen(dir, '1', [
+          {
+            index: 1,
+            evidence: 'test:test/verify-only.test.ts::keeps tagged behavior covered',
+          },
+        ]),
+      ).resolves.toEqual({ kind: 'completed' });
       expect(await taskRow()).toMatchObject({
         status: 'completed',
         doneWhen: [
@@ -1268,10 +1451,19 @@ describe('task-progress', () => {
 - [test] tagged behavior needs an explicit close
 - untagged behavior remains closed`);
 
-      await expect(completeTaskDoneWhen(dir, '1', [], [{
-        index: 1,
-        reason: 'the required dependency is unavailable',
-      }])).resolves.toEqual({ kind: 'completed' });
+      await expect(
+        completeTaskDoneWhen(
+          dir,
+          '1',
+          [],
+          [
+            {
+              index: 1,
+              reason: 'the required dependency is unavailable',
+            },
+          ],
+        ),
+      ).resolves.toEqual({ kind: 'completed' });
       expect(await taskRow()).toMatchObject({
         status: 'completed',
         doneWhen: [
@@ -1357,6 +1549,18 @@ describe('task-progress', () => {
   });
 
   describe('writeStallQuestionEvidence', () => {
+    // Covers: task:4
+    it('writes an active child stall question in that child region without touching the flat path', async () => {
+      const child = parseChildId(3)!;
+      await writeStallQuestionEvidence(dir, 'Child 3 question', child);
+      await expect(readFile(join(dir, '.pipeline', 'children', '3', 'build-stall-question.md'), 'utf8')).resolves.toBe(
+        'Child 3 question',
+      );
+      await expect(readFile(join(dir, '.pipeline', 'build-stall-question.md'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    });
+
     it('writes multi-line content verbatim to .pipeline/build-stall-question.md and returns it', async () => {
       const content = 'line 1\nline 2\nline 3';
       const result = await writeStallQuestionEvidence(dir, content);
@@ -1564,5 +1768,4 @@ describe('task-progress', () => {
       expect(halt).toContain(detail);
     });
   });
-
 });

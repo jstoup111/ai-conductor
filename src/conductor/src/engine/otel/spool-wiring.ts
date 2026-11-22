@@ -21,6 +21,7 @@ export interface SpoolRuntimeOptions {
   environment?: NodeJS.ProcessEnv;
   commandRunner?: CommandRunner;
   now?: () => number;
+  fetch?: typeof globalThis.fetch;
 }
 
 const warnedStarts = new Set<string>();
@@ -29,11 +30,13 @@ const disabledWarnings = new Map<string, Promise<void>>();
 async function spoolSize(directory: string): Promise<number> {
   try {
     const entries = await readdir(directory);
-    const sizes = await Promise.all(entries.map(async (entry) => {
-      const path = join(directory, entry);
-      const metadata = await stat(path);
-      return metadata.isDirectory() ? spoolSize(path) : metadata.size;
-    }));
+    const sizes = await Promise.all(
+      entries.map(async (entry) => {
+        const path = join(directory, entry);
+        const metadata = await stat(path);
+        return metadata.isDirectory() ? spoolSize(path) : metadata.size;
+      }),
+    );
     return sizes.reduce((total, size) => total + size, 0);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
@@ -51,7 +54,9 @@ export async function resolveSpoolDir(startDir: string): Promise<string | null> 
 export function resolveSpoolDirSync(startDir: string): string | null {
   try {
     const gitCommonDir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
-      cwd: startDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: startDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
     if (!gitCommonDir) return null;
     const mainRoot = dirname(isAbsolute(gitCommonDir) ? gitCommonDir : resolve(startDir, gitCommonDir));
@@ -69,13 +74,18 @@ export function createSpoolRuntime(
 ): SpoolRuntime {
   const store = new SpoolStore(directory, { maxBytes: config.spool?.maxBytes });
   let drainer: SpoolDrainer | undefined;
-  const lease = new SpoolLease(directory, { onLost: () => { void drainer?.stop(); } });
+  const lease = new SpoolLease(directory, {
+    onLost: () => {
+      void drainer?.stop();
+    },
+  });
   drainer = new SpoolDrainer(store, {
-      endpoint: config.endpoint,
-      // Resolve references per POST. Credentials never enter the spool.
-      headers: createOtelHeaderProvider(config.headerReferences, config.headers, options),
-      events,
-    });
+    endpoint: config.endpoint,
+    // Resolve references per POST. Credentials never enter the spool.
+    headers: createOtelHeaderProvider(config.headerReferences, config.headers, options),
+    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+    events,
+  });
   return { store, lease, drainer };
 }
 
@@ -94,7 +104,11 @@ export async function warnDisabledSpoolBacklog(
     const size = await spoolSize(directory);
     if (size > 0 && !warnedStarts.has(startDir)) {
       warnedStarts.add(startDir);
-      await events?.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] spool disabled: existing spool at ${directory} (${size} bytes) left untouched` });
+      await events?.emit({
+        type: 'renderer_error',
+        rendererName: 'otel',
+        error: `[otel] spool disabled: existing spool at ${directory} (${size} bytes) left untouched`,
+      });
     }
   })();
   disabledWarnings.set(startDir, warning);
@@ -109,5 +123,9 @@ export async function warnDisabledSpoolBacklog(
 export function warnSpoolUnavailable(startDir: string, events?: ConductorEventEmitter): void {
   if (warnedStarts.has(startDir)) return;
   warnedStarts.add(startDir);
-  void events?.emit({ type: 'renderer_error', rendererName: 'otel', error: '[otel] spool disabled: main git checkout could not be resolved; exporting directly' });
+  void events?.emit({
+    type: 'renderer_error',
+    rendererName: 'otel',
+    error: '[otel] spool disabled: main git checkout could not be resolved; exporting directly',
+  });
 }
