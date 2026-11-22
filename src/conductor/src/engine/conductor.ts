@@ -3411,7 +3411,9 @@ export class Conductor {
     state: ConductState,
     slug: string,
     indexOf: (name: StepName) => number,
-  ): Promise<{ readonly kind: 'ready'; readonly index: number; readonly activeChild: ActiveChildLifecycleTarget } | 'halt'> {
+  ): Promise<
+    { readonly kind: 'ready'; readonly index: number; readonly activeChild: ActiveChildLifecycleTarget } | 'halt'
+  > {
     await this.restoreWholeFeatureState(state);
     const cursor = await this.resolveActiveChild(this.projectRoot, slug);
     switch (cursor.kind) {
