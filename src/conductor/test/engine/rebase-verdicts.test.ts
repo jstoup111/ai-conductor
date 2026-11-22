@@ -85,6 +85,18 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
     });
   });
 
+  // Covers: task:4
+  it('preserves a verified completed-rebase gate while reopening only its failed required recheck', async () => {
+    const result = await applyRebaseVerdicts(projectRoot, changed, false, async (step) => ({
+      done: step === 'build',
+      ...(step === 'test_suite' ? { reason: 'required evidence is stale' } : {}),
+    }));
+    expect(result.reverified).toEqual(['build']);
+    expect(result.kickedBack).toContain('test_suite');
+    expect((await readVerdict(projectRoot, 'build'))?.satisfied).toBe(true);
+    expect((await readVerdict(projectRoot, 'test_suite'))?.satisfied).toBe(false);
+  });
+
   it('writes a non-publishable rebase operation before downstream gate effects', async () => {
     await applyRebaseVerdicts(projectRoot, changed, false, async (step) => {
       if (step === 'build') {
