@@ -192,7 +192,7 @@ describe('build-stall stale-citation recorder', () => {
   it('names the resolved case owner and halt-clear command in the attempt-three mechanical halt', () => {
     expect(buildStallStaleCitationOutcome(resolvedCitation, { kind: 'recorded', attempt: 2 })).toEqual({
       kind: 'retry',
-      hint: 'Case case-resolved is settled by child 4 and is not this session\'s work.',
+      hint: "Case case-resolved is settled by child 4 and is not this session's work.",
     });
     expect(buildStallStaleCitationOutcome(resolvedCitation, { kind: 'recorded', attempt: 3 })).toEqual({
       kind: 'halt',
