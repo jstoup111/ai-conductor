@@ -1,5 +1,7 @@
 // Covers: task:16, task:17
 import { describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -13,6 +15,9 @@ import { REMEDIATION_PLAN_SCHEMA, renderRemediationPlanShape } from '../../src/e
 import { REMEDIATION_TYPED_PLAN_PATH, remediationRequiredReferenceDigest, type RemediationPlanStoreFilesystem } from '../../src/engine/remediation-plan-store.js';
 import type { RemediationProjection } from '../../src/engine/remediation-projection.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+
+// Keep any native-schema scratch directory inside Vitest's run-scoped tmp root.
+const projectRoot = join(tmpdir(), 'remediation-gap-plan');
 
 const projection: RemediationProjection = {
   version: 2,
@@ -38,7 +43,7 @@ function runnerFor(
     ...(nativeOutputSchema ? { nativeSchemaCapability: { nativeOutputSchema: true as const } } : {}),
     invoke,
   };
-  return new DefaultStepRunner({ invoke: vi.fn() }, 'runner-session', '/tmp/remediation-gap-plan', {
+  return new DefaultStepRunner({ invoke: vi.fn() }, 'runner-session', projectRoot, {
     config: { llm_provider: key, steps: { remediate: { llm_provider: key } } },
     configuredProviders: [key],
     providerRuntimes: new ProviderRuntimeSet([{
@@ -156,7 +161,7 @@ describe('remediate gap-plan native-schema dispatch', () => {
     });
 
     expect(result).toMatchObject({ success: true, finalStructuredResult: terminal });
-    expect(JSON.parse(files.get(`/tmp/remediation-gap-plan/${REMEDIATION_TYPED_PLAN_PATH}`)!)).toEqual({
+    expect(JSON.parse(files.get(`${projectRoot}/${REMEDIATION_TYPED_PLAN_PATH}`)!)).toEqual({
       version: 'v1',
       attemptId: 'gap-plan-attempt',
       source: 'build-stall',
@@ -199,7 +204,7 @@ describe('remediate gap-plan native-schema dispatch', () => {
     expect(result.output).toContain('dispositions[0].disposition');
     expect(result.output).toContain('invented-disposition');
     expect(files.size).toBe(0);
-    expect(files.has(`/tmp/remediation-gap-plan/${REMEDIATION_TYPED_PLAN_PATH}`)).toBe(false);
+    expect(files.has(`${projectRoot}/${REMEDIATION_TYPED_PLAN_PATH}`)).toBe(false);
   });
 
   // Covers: task:17
