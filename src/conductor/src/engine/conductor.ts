@@ -99,7 +99,11 @@ import {
   retiresOpenBuildReviewCase,
 } from './remediation-case-reconciler.js';
 import { formatBuildReviewResolveCaseCommand } from './build-review-adjudication.js';
-import { buildRemediationProjection, type RemediationProjectionDependencies, type RemediationProjectionLimits } from './remediation-projection.js';
+import {
+  buildRemediationProjection,
+  type RemediationProjectionDependencies,
+  type RemediationProjectionLimits,
+} from './remediation-projection.js';
 import { readTypedRemediationPlan } from './remediation-plan-store.js';
 import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import { createGithubTrackerClient } from './tracker-client.js';
@@ -4967,7 +4971,11 @@ export class Conductor {
       const dispatch = await this.stepRunner.run('remediate', state, {
         runId: attemptId,
         retryReason: dispatchContext,
-        remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection, history: projectionResult.history },
+        remediationRequest: {
+          mode: 'gap-plan',
+          projection: projectionResult.projection,
+          history: projectionResult.history,
+        },
       });
 
       // The native-schema preflight is a deterministic engine capability

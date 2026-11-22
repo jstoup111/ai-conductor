@@ -1,4 +1,14 @@
-import type { ConductState, FinishPublicationEvent, StepName, StepStatus, Phase, RunMode, RecoveryContext, RecoveryOption, ComplexityTier } from '../types/index.js';
+import type {
+  ConductState,
+  FinishPublicationEvent,
+  StepName,
+  StepStatus,
+  Phase,
+  RunMode,
+  RecoveryContext,
+  RecoveryOption,
+  ComplexityTier,
+} from '../types/index.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { SchedulingUnitRef } from '../types/scheduling-unit.js';
 import type { ConductStateStore } from './conduct-state-store.js';
@@ -209,11 +219,7 @@ export interface ConductorOptions {
   onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
   onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
   onReviewArtifacts?: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
-  onRecovery?: (
-    step: StepName,
-    isGating: boolean,
-    context?: RecoveryContext,
-  ) => Promise<RecoveryOption>;
+  onRecovery?: (step: StepName, isGating: boolean, context?: RecoveryContext) => Promise<RecoveryOption>;
   onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
   /**
    * Injectable escalation function called after any irrecoverable daemon HALT
@@ -248,10 +254,7 @@ export interface ConductorOptions {
    * `verifyMergedPrShipment`; a valid verdict still follows the normal gate
    * loop instead of fabricating terminal markers.
    */
-  verifyMergedShipment?: (
-    prUrl: string,
-    slug: string,
-  ) => Promise<VerifiedMergedPrResult>;
+  verifyMergedShipment?: (prUrl: string, slug: string) => Promise<VerifiedMergedPrResult>;
   /** Test seam for the finish completion gate's strict evidence verifier. */
   shipmentEvidence?: (input: ShipmentEvidenceInput) => Promise<ShipmentEvidenceResult>;
   /**

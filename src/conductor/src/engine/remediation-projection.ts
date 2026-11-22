@@ -37,34 +37,30 @@ import { slugify } from './worktree.js';
 export const REMEDIATION_PROJECTION_VERSION = 3;
 
 export type RemediationProjectionSource =
-  | 'validation-group'
-  | 'prd-audit'
-  | 'as-built'
-  | 'build-stall'
-  | 'finish-verification';
+  'validation-group' | 'prd-audit' | 'as-built' | 'build-stall' | 'finish-verification';
 
 export type RemediationRequiredReference =
   | {
-    readonly kind: 'prd-criterion';
-    readonly id: string;
-    readonly sourceGate: 'prd_audit';
-    readonly ownerTaskId: string;
-    readonly summary: string;
-  }
+      readonly kind: 'prd-criterion';
+      readonly id: string;
+      readonly sourceGate: 'prd_audit';
+      readonly ownerTaskId: string;
+      readonly summary: string;
+    }
   | {
-    readonly kind: 'as-built-finding';
-    readonly id: string;
-    readonly sourceGate: 'architecture_review_as_built';
-    readonly reference: AsBuiltGoverningReference;
-    readonly summary: string;
-  }
+      readonly kind: 'as-built-finding';
+      readonly id: string;
+      readonly sourceGate: 'architecture_review_as_built';
+      readonly reference: AsBuiltGoverningReference;
+      readonly summary: string;
+    }
   | {
-    readonly kind: 'refusal';
-    readonly id: string;
-    readonly sourceGate: 'refusal-rework';
-    readonly revision: number;
-    readonly rationale: string;
-  };
+      readonly kind: 'refusal';
+      readonly id: string;
+      readonly sourceGate: 'refusal-rework';
+      readonly revision: number;
+      readonly rationale: string;
+    };
 
 export interface RemediationProjectionTask {
   readonly id: string;
@@ -104,9 +100,10 @@ export interface RemediationProjectionPriorAsBuiltCase {
    * `summary` is omitted when the source finding is still pending: the same text is
    * already in `pendingAsBuiltFindings` under that `findingId`.
    */
-  readonly sources: readonly (
-    Pick<RemediationCaseAsBuiltRecord['sources'][number], 'findingId' | 'reference' | 'relation'> & { readonly summary?: string }
-  )[];
+  readonly sources: readonly (Pick<
+    RemediationCaseAsBuiltRecord['sources'][number],
+    'findingId' | 'reference' | 'relation'
+  > & { readonly summary?: string })[];
   readonly repairTasks: readonly { readonly id: string; readonly resolution: string }[];
 }
 
@@ -152,9 +149,19 @@ export interface RemediationProjectionHistory {
 export function renderRemediationPromptProjection(
   projection: RemediationProjection,
   history?: RemediationProjectionHistory,
-): RemediationProjection | (Omit<RemediationProjection, 'pendingAsBuiltFindings' | 'priorAsBuiltCases' | 'priorLaps' | 'refusals'> & { readonly history: RemediationProjectionHistory }) {
+):
+  | RemediationProjection
+  | (Omit<RemediationProjection, 'pendingAsBuiltFindings' | 'priorAsBuiltCases' | 'priorLaps' | 'refusals'> & {
+      readonly history: RemediationProjectionHistory;
+    }) {
   if (history === undefined) return projection;
-  const { pendingAsBuiltFindings: _pending, priorAsBuiltCases: _cases, priorLaps: _laps, refusals: _refusals, ...prompt } = projection;
+  const {
+    pendingAsBuiltFindings: _pending,
+    priorAsBuiltCases: _cases,
+    priorLaps: _laps,
+    refusals: _refusals,
+    ...prompt
+  } = projection;
   return { ...prompt, history };
 }
 
@@ -212,21 +219,22 @@ function roundUpPowerOfTwo(bytes: number): number {
 
 const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
   // `.pipeline/prd-audit.json` + `.pipeline/architecture-review-as-built.json`: 3,911 B union; D7.2 floor → 262,144 B.
-  requiredReferencesBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes,
-  )),
+  requiredReferencesBytes: roundUpPowerOfTwo(
+    Math.max(
+      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes,
+    ),
+  ),
   // Largest current plan-task projection in the repository corpus; D7.2 floor → 262,144 B.
-  tasksBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes,
-  )),
+  tasksBytes: roundUpPowerOfTwo(
+    Math.max(REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes),
+  ),
 } as const;
 
 const REMEDIATION_PROJECTION_TOTAL_LIMIT_BYTES = roundUpPowerOfTwo(
   REMEDIATION_PROJECTION_COMPONENT_LIMITS.requiredReferencesBytes +
-  REMEDIATION_PROJECTION_COMPONENT_LIMITS.tasksBytes +
-  REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
+    REMEDIATION_PROJECTION_COMPONENT_LIMITS.tasksBytes +
+    REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
 );
 
 /** Finite engine bounds for required structured input; required values are never truncated. */
@@ -265,19 +273,26 @@ const REMEDIATION_DISPOSITIONS: readonly RemediationDisposition[] = [
 ];
 
 function includesPrdAudit(request: RemediationProjectionRequest): boolean {
-  return request.includedGates?.includes('prd_audit') ??
-    (request.source === 'prd-audit' || request.source === 'validation-group');
+  return (
+    request.includedGates?.includes('prd_audit') ??
+    (request.source === 'prd-audit' || request.source === 'validation-group')
+  );
 }
 
 function includesAsBuilt(request: RemediationProjectionRequest): boolean {
-  return request.includedGates?.includes('architecture_review_as_built') ??
-    (request.source === 'as-built' || request.source === 'validation-group');
+  return (
+    request.includedGates?.includes('architecture_review_as_built') ??
+    (request.source === 'as-built' || request.source === 'validation-group')
+  );
 }
 
 function preparationFault(
   source: string,
   detail: string,
-  fields: Pick<Extract<RemediationProjectionResult, { readonly ok: false }>['fault'], 'dimension' | 'actual' | 'limit'> = {},
+  fields: Pick<
+    Extract<RemediationProjectionResult, { readonly ok: false }>['fault'],
+    'dimension' | 'actual' | 'limit'
+  > = {},
   cause: Extract<RemediationProjectionResult, { readonly ok: false }>['fault']['cause'] = 'input',
 ): RemediationProjectionResult {
   return { ok: false, kind: 'preparation-fault', fault: { source, detail, cause, ...fields } };
@@ -291,10 +306,9 @@ function serializedBytes(value: unknown): number {
   return utf8Bytes(JSON.stringify(value));
 }
 
-type RemediationHistoryContents = Pick<
-  RemediationProjection,
-  'pendingAsBuiltFindings' | 'priorLaps' | 'refusals'
-> & { readonly priorAsBuiltCases?: readonly RemediationProjectionPriorAsBuiltCase[] };
+type RemediationHistoryContents = Pick<RemediationProjection, 'pendingAsBuiltFindings' | 'priorLaps' | 'refusals'> & {
+  readonly priorAsBuiltCases?: readonly RemediationProjectionPriorAsBuiltCase[];
+};
 
 function historyDigest(contents: RemediationHistoryContents): string {
   return `sha256:${createHash('sha256').update(JSON.stringify(contents)).digest('hex')}`;
@@ -323,11 +337,11 @@ async function writeRemediationHistory(
   const resolvedPath = join(directory, `${attemptId}.resolved.json`);
   const priorCases = projection.priorAsBuiltCases;
   const pendingFindingIds = new Set(projection.pendingAsBuiltFindings.map((finding) => finding.finding));
-  const activeCases = priorCases?.filter((entry) =>
-    entry.status !== 'resolved' || entry.sources.some((source) => pendingFindingIds.has(source.findingId)),
+  const activeCases = priorCases?.filter(
+    (entry) => entry.status !== 'resolved' || entry.sources.some((source) => pendingFindingIds.has(source.findingId)),
   );
-  const resolvedCases = priorCases?.filter((entry) =>
-    entry.status === 'resolved' && !entry.sources.some((source) => pendingFindingIds.has(source.findingId)),
+  const resolvedCases = priorCases?.filter(
+    (entry) => entry.status === 'resolved' && !entry.sources.some((source) => pendingFindingIds.has(source.findingId)),
   );
   const active: RemediationHistoryContents = {
     pendingAsBuiltFindings: projection.pendingAsBuiltFindings,
@@ -372,11 +386,19 @@ function projectionLimitFault(
   limits: RemediationProjectionLimits,
 ): RemediationProjectionResult | undefined {
   const dimensions: readonly { readonly dimension: string; readonly actual: number; readonly limit: number }[] = [
-    { dimension: 'required-references', actual: serializedBytes(projection.requiredReferences), limit: limits.requiredReferencesBytes },
+    {
+      dimension: 'required-references',
+      actual: serializedBytes(projection.requiredReferences),
+      limit: limits.requiredReferencesBytes,
+    },
     { dimension: 'tasks', actual: serializedBytes(projection.tasks), limit: limits.tasksBytes },
     // Evidence is bounded and omitted by its independent as-built caps. The
     // total named bound governs structured remediation input only (D7.3).
-    { dimension: 'total', actual: serializedBytes(renderRemediationPromptProjection(projection)), limit: limits.totalBytes },
+    {
+      dimension: 'total',
+      actual: serializedBytes(renderRemediationPromptProjection(projection)),
+      limit: limits.totalBytes,
+    },
   ];
   const overflow = dimensions.find(({ actual, limit }) => actual > limit);
   return overflow === undefined
@@ -389,15 +411,11 @@ function errorDetail(error: unknown): string {
 }
 
 function verdictFault(source: string, detail: string): RemediationProjectionResult {
-  const normalized = detail.toLowerCase().includes('version')
-    ? `unsupported typed verdict version: ${detail}`
-    : detail;
+  const normalized = detail.toLowerCase().includes('version') ? `unsupported typed verdict version: ${detail}` : detail;
   return preparationFault(source, normalized);
 }
 
-async function safelyReadLedger(
-  read: () => Promise<KickbackLedgerReadResult>,
-): Promise<KickbackLedgerReadResult> {
+async function safelyReadLedger(read: () => Promise<KickbackLedgerReadResult>): Promise<KickbackLedgerReadResult> {
   try {
     return await read();
   } catch (error) {
@@ -433,7 +451,10 @@ async function projectUntypedEvidence(
   worktree: string,
   request: RemediationProjectionRequest,
   limits: RemediationEvidenceLimits,
-): Promise<{ readonly ok: true; readonly evidence: RemediationProjectionEvidence } | { readonly ok: false; readonly detail: string }> {
+): Promise<
+  | { readonly ok: true; readonly evidence: RemediationProjectionEvidence }
+  | { readonly ok: false; readonly detail: string }
+> {
   const source = untypedEvidenceSource(worktree, request);
   if (source === undefined) return { ok: true, evidence: { excerpts: [], omittedFiles: [] } };
 
@@ -449,18 +470,25 @@ async function projectUntypedEvidence(
 
   const bytes = utf8Bytes(content);
   if (bytes > limits.perFileHunksBytes || bytes > limits.totalDiffBytes) {
-    return { ok: true, evidence: {
-      excerpts: [],
-      omittedFiles: [{
-        ...source,
-        digest: `sha256:${createHash('sha256').update(content).digest('hex')}`,
-      }],
-    } };
+    return {
+      ok: true,
+      evidence: {
+        excerpts: [],
+        omittedFiles: [
+          {
+            ...source,
+            digest: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+          },
+        ],
+      },
+    };
   }
   return { ok: true, evidence: { excerpts: [{ ...source, content }], omittedFiles: [] } };
 }
 
-function projectPriorLaps(gates: Readonly<Record<string, { readonly laps?: number }>>): readonly RemediationProjectionPriorLap[] {
+function projectPriorLaps(
+  gates: Readonly<Record<string, { readonly laps?: number }>>,
+): readonly RemediationProjectionPriorLap[] {
   return Object.entries(gates)
     .map(([gate, entry]) => ({ gate, laps: entry.laps ?? 0 }))
     .sort((left, right) => left.gate.localeCompare(right.gate));
@@ -492,10 +520,12 @@ async function projectActiveTasks(
   return { ok: true, tasks };
 }
 
-async function projectPriorAsBuiltCases(
-  worktree: string,
-): Promise<
-  | { readonly ok: true; readonly cases: readonly RemediationProjectionPriorAsBuiltCase[]; readonly repairTaskIds: ReadonlySet<string> }
+async function projectPriorAsBuiltCases(worktree: string): Promise<
+  | {
+      readonly ok: true;
+      readonly cases: readonly RemediationProjectionPriorAsBuiltCase[];
+      readonly repairTaskIds: ReadonlySet<string>;
+    }
   | { readonly ok: false; readonly detail: string }
 > {
   const feature = await readRemediationCaseStoreFeature(worktree);
@@ -511,7 +541,11 @@ async function projectPriorAsBuiltCases(
     // The case history remains useful before BUILD has created task status.
   }
   const resolutions = new Map<string, string>();
-  if (typeof taskStatus === 'object' && taskStatus !== null && Array.isArray((taskStatus as { tasks?: unknown }).tasks)) {
+  if (
+    typeof taskStatus === 'object' &&
+    taskStatus !== null &&
+    Array.isArray((taskStatus as { tasks?: unknown }).tasks)
+  ) {
     for (const task of (taskStatus as { tasks: unknown[] }).tasks) {
       if (typeof task !== 'object' || task === null) continue;
       const row = task as { id?: unknown; status?: unknown };
@@ -526,7 +560,12 @@ async function projectPriorAsBuiltCases(
       id: record.id,
       status: record.status,
       recurrenceCount: record.recurrenceCount,
-      sources: record.sources.map(({ findingId, summary, reference, relation }) => ({ findingId, summary, reference, relation })),
+      sources: record.sources.map(({ findingId, summary, reference, relation }) => ({
+        findingId,
+        summary,
+        reference,
+        relation,
+      })),
       repairTasks: record.repairTaskIds.map((id) => ({ id, resolution: resolutions.get(id) ?? 'unknown' })),
     };
   });
@@ -581,11 +620,14 @@ export async function buildRemediationProjection(
       return preparationFault('as-built verdict', `typed verdict is unreadable: ${errorDetail(error)}`);
     }
     if (current.kind !== 'present') {
-      return verdictFault('as-built verdict', current.kind === 'absent'
-        ? 'architecture-review-as-built typed verdict is missing'
-        : current.kind === 'prior-version'
-          ? `architecture-review-as-built typed verdict uses prior contract version ${current.version}`
-          : current.reason);
+      return verdictFault(
+        'as-built verdict',
+        current.kind === 'absent'
+          ? 'architecture-review-as-built typed verdict is missing'
+          : current.kind === 'prior-version'
+            ? `architecture-review-as-built typed verdict uses prior contract version ${current.version}`
+            : current.reason,
+      );
     }
     if (current.value.verdict.verdict === 'BLOCKED') {
       for (const finding of current.value.verdict.findings) {
@@ -616,10 +658,9 @@ export async function buildRemediationProjection(
   const limits: RemediationProjectionLimits = { ...REMEDIATION_PROJECTION_LIMITS, ...limitOverrides };
   const readPending = dependencies.readPendingAsBuiltRemediationFindings ?? readPendingAsBuiltRemediationFindings;
   const readLedger = dependencies.readKickbackLedgerResult ?? readKickbackLedgerResult;
-  const priorCases = includesAsBuilt(request)
-    ? await projectPriorAsBuiltCases(worktree)
-    : undefined;
-  if (priorCases !== undefined && !priorCases.ok) return preparationFault('remediation case store', priorCases.detail, {}, 'case-store-unreadable');
+  const priorCases = includesAsBuilt(request) ? await projectPriorAsBuiltCases(worktree) : undefined;
+  if (priorCases !== undefined && !priorCases.ok)
+    return preparationFault('remediation case store', priorCases.detail, {}, 'case-store-unreadable');
   if (priorCases !== undefined) priorCases.repairTaskIds.forEach((id) => ownerTaskIds.add(id));
   const [pending, ledger, taskContext, evidence] = await Promise.all([
     safelyReadPendingFindings(() => readPending(worktree)),
@@ -633,8 +674,11 @@ export async function buildRemediationProjection(
     // A repair-task id recorded in prior as-built history is operator-owned
     // context.  Its disappearance is not a generic plan parse failure: the
     // next repair cannot safely decide whether that prior case was superseded.
-    const isMissingPriorAsBuiltRepair = priorCases !== undefined && priorCases.ok &&
-      taskContext.missingTaskId !== undefined && priorCases.repairTaskIds.has(taskContext.missingTaskId);
+    const isMissingPriorAsBuiltRepair =
+      priorCases !== undefined &&
+      priorCases.ok &&
+      taskContext.missingTaskId !== undefined &&
+      priorCases.repairTaskIds.has(taskContext.missingTaskId);
     return preparationFault(
       'active plan',
       taskContext.detail,
@@ -651,9 +695,7 @@ export async function buildRemediationProjection(
 
   // Pre-v2 provider ids remain in the ledger for historical shipment
   // records, but are not planning context or remediation obligations.
-  const pendingAsBuiltFindings = pending.findings.filter((finding) =>
-    isEngineStampedAsBuiltFindingId(finding.finding),
-  );
+  const pendingAsBuiltFindings = pending.findings.filter((finding) => isEngineStampedAsBuiltFindingId(finding.finding));
   const pendingFindingIds = new Set(pendingAsBuiltFindings.map((finding) => finding.finding));
 
   const projection: RemediationProjection = {
@@ -663,13 +705,16 @@ export async function buildRemediationProjection(
     evidence: evidence.evidence,
     tasks: taskContext.tasks,
     pendingAsBuiltFindings,
-    ...(priorCases === undefined ? {} : {
-      priorAsBuiltCases: priorCases.cases.map((record) => ({
-        ...record,
-        sources: record.sources.map(({ summary, ...source }) =>
-          pendingFindingIds.has(source.findingId) ? source : { ...source, summary }),
-      })),
-    }),
+    ...(priorCases === undefined
+      ? {}
+      : {
+          priorAsBuiltCases: priorCases.cases.map((record) => ({
+            ...record,
+            sources: record.sources.map(({ summary, ...source }) =>
+              pendingFindingIds.has(source.findingId) ? source : { ...source, summary },
+            ),
+          })),
+        }),
     priorLaps: ledger.kind === 'ok' ? projectPriorLaps(ledger.ledger.gates) : [],
     refusals,
     vocabulary: {
@@ -684,7 +729,12 @@ export async function buildRemediationProjection(
   try {
     history = await writeRemediationHistory(worktree, request.attemptRunId, projection, filesystem);
   } catch (error) {
-    return preparationFault('history snapshot', `history snapshot write failed: ${errorDetail(error)}`, {}, 'history-write-failed');
+    return preparationFault(
+      'history snapshot',
+      `history snapshot write failed: ${errorDetail(error)}`,
+      {},
+      'history-write-failed',
+    );
   }
   return { ok: true, projection, history };
 }

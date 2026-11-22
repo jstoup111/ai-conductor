@@ -10,7 +10,10 @@ import {
   buildReviewAdjudicationSourceId,
   describeBuildReviewAdjudicationContextStop,
 } from '../../src/engine/build-review-adjudication-context.js';
-import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import {
+  joinBuildReviewRubricOutcomes,
+  projectBuildReviewAggregateSources,
+} from '../../src/engine/build-review-aggregate.js';
 import { readBuildReviewAdjudicationArtifactFacts } from '../../src/engine/build-review-adjudication-artifact-facts.js';
 import { writeBuildReviewBranchArtifact } from '../../src/engine/build-review-artifacts.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
@@ -42,8 +45,13 @@ function aggregate(...findings: readonly BuildReviewFinding[]) {
     results: {
       security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
       testQuality: {
-        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v4',
-        findings, verdict: findings.length === 0 ? 'PASS' : 'FAIL',
+        kind: 'judged',
+        rubric: 'testQuality',
+        lapId,
+        snapshotDigest,
+        contractVersion: 'v4',
+        findings,
+        verdict: findings.length === 0 ? 'PASS' : 'FAIL',
       },
     },
   });
@@ -56,14 +64,24 @@ function securityAggregate() {
     results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
       security: {
-        kind: 'judged', rubric: 'security', lapId, snapshotDigest, contractVersion: 'v4', verdict: 'FAIL',
-        findings: [{
-          concernKind: 'injection',
-          severity: 'minor',
-          summary: 'The new request handler interpolates untrusted input into a query.',
-          evidenceLocations: ['src/http/search.ts:42'],
-          anchor: { rubric: 'security', locus: { path: 'src/http/search.ts', contentHash: HASH, display: 'new search handler' } },
-        }],
+        kind: 'judged',
+        rubric: 'security',
+        lapId,
+        snapshotDigest,
+        contractVersion: 'v4',
+        verdict: 'FAIL',
+        findings: [
+          {
+            concernKind: 'injection',
+            severity: 'minor',
+            summary: 'The new request handler interpolates untrusted input into a query.',
+            evidenceLocations: ['src/http/search.ts:42'],
+            anchor: {
+              rubric: 'security',
+              locus: { path: 'src/http/search.ts', contentHash: HASH, display: 'new search handler' },
+            },
+          },
+        ],
       },
     },
   });
@@ -71,12 +89,29 @@ function securityAggregate() {
 
 function implementationQualityAggregate() {
   return joinBuildReviewRubricOutcomes({
-    lapId, snapshotDigest,
+    lapId,
+    snapshotDigest,
     results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
       implementationQuality: {
-        kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v4', verdict: 'FAIL',
-        findings: [{ concernKind: 'primitive-obsession', severity: 'minor', summary: 'Raw string state permits invalid values.', evidenceLocations: ['src/state.ts:8'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: HASH, display: 'changed state model' } } }],
+        kind: 'judged',
+        rubric: 'implementationQuality',
+        lapId,
+        snapshotDigest,
+        contractVersion: 'v4',
+        verdict: 'FAIL',
+        findings: [
+          {
+            concernKind: 'primitive-obsession',
+            severity: 'minor',
+            summary: 'Raw string state permits invalid values.',
+            evidenceLocations: ['src/state.ts:8'],
+            anchor: {
+              rubric: 'implementationQuality',
+              locus: { path: 'src/state.ts', contentHash: HASH, display: 'changed state model' },
+            },
+          },
+        ],
       },
     },
   });
@@ -84,35 +119,67 @@ function implementationQualityAggregate() {
 
 function customAggregate(criteria?: readonly string[]) {
   const declaration = {
-    version: 'v1' as const, rubricId: 'security', semanticSkill: 'security-review',
+    version: 'v1' as const,
+    rubricId: 'security',
+    semanticSkill: 'security-review',
     question: 'Does the changed code preserve the security boundary?',
-    source: 'plugin' as const, resources: ['references/security-criteria.md'],
+    source: 'plugin' as const,
+    resources: ['references/security-criteria.md'],
   };
   const descriptor = {
-    version: 'v1' as const, semanticSkill: 'security-review', declaration,
+    version: 'v1' as const,
+    semanticSkill: 'security-review',
+    declaration,
     installation: { source: 'plugin' as const, plugin: { id: 'security-suite', version: '2.1.0' } },
     effectivePolicy: { version: 'v1' as const, bundleDigest: POLICY_DIGEST },
     reviewedInput: { version: 'v1' as const, contentDigest: POLICY_DIGEST },
     producer: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
     ...(criteria === undefined ? {} : { criteria: Object.freeze([...criteria]) }),
   };
-  const sourceRegion = { path: 'src/handler.ts', startLine: 12, endLine: 16, contentHash: HASH, display: 'changed handler' };
-  const result = stampBuildReviewCustomJudgedResult({
-    kind: 'custom-findings', version: 'v2',
-    findings: [{
-      concernId: 'authorization-bypass', summary: 'The changed handler bypasses authorization.',
-      evidenceLocations: ['src/handler.ts:12'], confidence: 92, severity: 'major', sourceRegions: [sourceRegion],
-    }],
-  }, {
-    rubric: 'security', lapId, declaration, policy: descriptor.effectivePolicy,
-    candidate: descriptor.producer, reviewedInput: descriptor.reviewedInput,
-  }, { sourceRegions: [sourceRegion] })!;
+  const sourceRegion = {
+    path: 'src/handler.ts',
+    startLine: 12,
+    endLine: 16,
+    contentHash: HASH,
+    display: 'changed handler',
+  };
+  const result = stampBuildReviewCustomJudgedResult(
+    {
+      kind: 'custom-findings',
+      version: 'v2',
+      findings: [
+        {
+          concernId: 'authorization-bypass',
+          summary: 'The changed handler bypasses authorization.',
+          evidenceLocations: ['src/handler.ts:12'],
+          confidence: 92,
+          severity: 'major',
+          sourceRegions: [sourceRegion],
+        },
+      ],
+    },
+    {
+      rubric: 'security',
+      lapId,
+      declaration,
+      policy: descriptor.effectivePolicy,
+      candidate: descriptor.producer,
+      reviewedInput: descriptor.reviewedInput,
+    },
+    { sourceRegions: [sourceRegion] },
+  )!;
   return joinBuildReviewRubricOutcomes({
-    lapId, snapshotDigest,
+    lapId,
+    snapshotDigest,
     results: {
       testQuality: {
-        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v3',
-        findings: [], verdict: 'PASS',
+        kind: 'judged',
+        rubric: 'testQuality',
+        lapId,
+        snapshotDigest,
+        contractVersion: 'v3',
+        findings: [],
+        verdict: 'PASS',
       },
     },
     customResults: {
@@ -149,11 +216,13 @@ function priorRefutedCase(id: string): RemediationCaseRecord {
     effect: { kind: 'none' },
     refutation: {
       claim: 'The alleged coverage gap does not exist.',
-      assertions: [{
-        assertion: 'The regression test covers the changed path.',
-        verdict: 'refuted',
-        evidence: [{ path: 'test/regression.test.ts', excerpt: 'covers the changed path' }],
-      }],
+      assertions: [
+        {
+          assertion: 'The regression test covers the changed path.',
+          verdict: 'refuted',
+          evidence: [{ path: 'test/regression.test.ts', excerpt: 'covers the changed path' }],
+        },
+      ],
     },
   };
 }
@@ -166,7 +235,10 @@ function priorDecisionStop(id: string): RemediationCaseRecord {
     sources: [{ sourceId: `security:${id}`, outcome: 'escalate', recordedAt: '2026-08-30T12:00:00.000Z' }],
     effect: { kind: 'none' },
     escalation: { owner: 'architecture' },
-    consistencyStop: { sourceIds: [`security:${id}`], rationale: 'The proposed cases contradict the approved baseline.' },
+    consistencyStop: {
+      sourceIds: [`security:${id}`],
+      rationale: 'The proposed cases contradict the approved baseline.',
+    },
   };
 }
 
@@ -189,7 +261,9 @@ describe('build-review adjudication context', () => {
     try {
       const filesystem = {
         readFile: (path: string) => readFile(path, 'utf8'),
-        mkdir: async (path: string) => { await mkdir(path, { recursive: true }); },
+        mkdir: async (path: string) => {
+          await mkdir(path, { recursive: true });
+        },
         writeFile,
         rename,
       };
@@ -198,21 +272,32 @@ describe('build-review adjudication context', () => {
         const number = index + 1;
         const sourceLapId = parseBuildReviewLapId(`lap-prior-${number}`)!;
         const sourceFinding: BuildReviewFinding = {
-          concernKind: 'test-insensitive', severity: 'minor',
+          concernKind: 'test-insensitive',
+          severity: 'minor',
           summary: `artifact-${number}:${'s'.repeat(1_000)}`,
           evidenceLocations,
           anchor: {
             rubric: 'testQuality',
-            locus: { path: `test/prior-${number}.test.ts`, contentHash: `sha256:${number.toString().repeat(64)}`, display: `prior ${number}` },
+            locus: {
+              path: `test/prior-${number}.test.ts`,
+              contentHash: `sha256:${number.toString().repeat(64)}`,
+              display: `prior ${number}`,
+            },
           },
         };
         const sourceAggregate = joinBuildReviewRubricOutcomes({
-          lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
+          lapId: sourceLapId,
+          snapshotDigest: `sha256:prior-${number}`,
           results: {
             security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
             testQuality: {
-              kind: 'judged', rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
-              contractVersion: 'v4', findings: [sourceFinding], verdict: 'FAIL',
+              kind: 'judged',
+              rubric: 'testQuality',
+              lapId: sourceLapId,
+              snapshotDigest: `sha256:prior-${number}`,
+              contractVersion: 'v4',
+              findings: [sourceFinding],
+              verdict: 'FAIL',
             },
           },
         });
@@ -220,14 +305,25 @@ describe('build-review adjudication context', () => {
         return { number, sourceLapId, sourceFinding, source };
       });
       for (const { sourceLapId, sourceFinding, number } of historical) {
-        await writeBuildReviewBranchArtifact(root, {
-          rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
-          result: {
-            kind: 'judged', rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
-            contractVersion: 'v4', findings: [sourceFinding], verdict: 'FAIL',
+        await writeBuildReviewBranchArtifact(
+          root,
+          {
+            rubric: 'testQuality',
+            lapId: sourceLapId,
+            snapshotDigest: `sha256:prior-${number}`,
+            result: {
+              kind: 'judged',
+              rubric: 'testQuality',
+              lapId: sourceLapId,
+              snapshotDigest: `sha256:prior-${number}`,
+              contractVersion: 'v4',
+              findings: [sourceFinding],
+              verdict: 'FAIL',
+            },
+            provenance: { kind: 'fresh' },
           },
-          provenance: { kind: 'fresh' },
-        }, filesystem);
+          filesystem,
+        );
       }
       const recordedAts = [
         'September 30, 2026 12:00:00 UTC',
@@ -243,7 +339,8 @@ describe('build-review adjudication context', () => {
       }));
       const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate(finding('current')));
       const result = assembleBuildReviewAdjudicationContext({
-        aggregate: aggregate(finding('current')), priorCases: [{ ...priorCase('case-digests'), sources }],
+        aggregate: aggregate(finding('current')),
+        priorCases: [{ ...priorCase('case-digests'), sources }],
         priorFindingDigests: facts.priorFindingDigests,
       });
 
@@ -255,14 +352,22 @@ describe('build-review adjudication context', () => {
         expect.objectContaining({
           ...sources[1],
           finding: {
-            rubric: 'testQuality', concernKind: 'test-insensitive',
+            rubric: 'testQuality',
+            concernKind: 'test-insensitive',
             summary: `artifact-2:${'s'.repeat(989)}`,
-            evidenceLocations: evidenceLocations.slice(0, 8), lapId: 'lap-prior-2',
+            evidenceLocations: evidenceLocations.slice(0, 8),
+            lapId: 'lap-prior-2',
           },
         }),
-        expect.objectContaining({ finding: expect.objectContaining({ summary: `artifact-3:${'s'.repeat(989)}`, lapId: 'lap-prior-3' }) }),
-        expect.objectContaining({ finding: expect.objectContaining({ summary: `artifact-4:${'s'.repeat(989)}`, lapId: 'lap-prior-4' }) }),
-        expect.objectContaining({ finding: expect.objectContaining({ summary: `artifact-5:${'s'.repeat(989)}`, lapId: 'lap-prior-5' }) }),
+        expect.objectContaining({
+          finding: expect.objectContaining({ summary: `artifact-3:${'s'.repeat(989)}`, lapId: 'lap-prior-3' }),
+        }),
+        expect.objectContaining({
+          finding: expect.objectContaining({ summary: `artifact-4:${'s'.repeat(989)}`, lapId: 'lap-prior-4' }),
+        }),
+        expect.objectContaining({
+          finding: expect.objectContaining({ summary: `artifact-5:${'s'.repeat(989)}`, lapId: 'lap-prior-5' }),
+        }),
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -278,37 +383,59 @@ describe('build-review adjudication context', () => {
         recordedAt: `2026-10-24T12:00:0${sourceIndex}.000Z`,
       })),
     }));
-    const priorFindingDigests = new Map(priorCases.flatMap((prior) => prior.sources.map((source) => [source.sourceId, {
-      rubric: 'testQuality', concernKind: 'test-insensitive', summary: 'd'.repeat(1_000),
-      evidenceLocations: ['src/prior.ts:1'], lapId: 'lap-prior',
-    }] as const)));
+    const priorFindingDigests = new Map(
+      priorCases.flatMap((prior) =>
+        prior.sources.map(
+          (source) =>
+            [
+              source.sourceId,
+              {
+                rubric: 'testQuality',
+                concernKind: 'test-insensitive',
+                summary: 'd'.repeat(1_000),
+                evidenceLocations: ['src/prior.ts:1'],
+                lapId: 'lap-prior',
+              },
+            ] as const,
+        ),
+      ),
+    );
     const input = { aggregate: aggregate(finding('current')), priorCases, priorFindingDigests };
     const ordinary = assembleBuildReviewAdjudicationContext(input);
     const expanded = assembleBuildReviewAdjudicationContext({
       ...input,
       planContract: {
-        path: '.docs/plans/example.md', pointers: [],
-        admittedTaskContracts: Array.from({ length: 128 }, (_value, index) => ({ id: String(index), contract: 'p'.repeat(1_500) })),
+        path: '.docs/plans/example.md',
+        pointers: [],
+        admittedTaskContracts: Array.from({ length: 128 }, (_value, index) => ({
+          id: String(index),
+          contract: 'p'.repeat(1_500),
+        })),
       },
     });
 
     expect(ordinary).toMatchObject({ ok: true });
     expect(expanded).toMatchObject({ ok: true });
     if (!ordinary.ok || !expanded.ok) return;
-    const countDigests = (context: typeof ordinary.context) => context.priorCases
-      .flatMap((prior) => prior.sources).filter((source) => source.finding !== undefined).length;
+    const countDigests = (context: typeof ordinary.context) =>
+      context.priorCases.flatMap((prior) => prior.sources).filter((source) => source.finding !== undefined).length;
     expect(ordinary.context.priorDigestsOmitted).toBe(120 - countDigests(ordinary.context));
     expect(expanded.context.priorDigestsOmitted).toBe(120 - countDigests(expanded.context));
     expect(expanded.context.priorDigestsOmitted).toBeGreaterThan(ordinary.context.priorDigestsOmitted);
     expect(expanded.context.priorCases[0]!.sources[0]).not.toHaveProperty('finding');
-    expect(Buffer.byteLength(JSON.stringify(expanded.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
+    expect(Buffer.byteLength(JSON.stringify(expanded.context))).toBeLessThanOrEqual(
+      BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes,
+    );
   });
 
   it('reserves multi-digit omission-counter headroom while dropping every digest', () => {
-    const priorCases = Array.from({ length: 128 }, (_value, index) => priorCase(`case-${index.toString().padStart(3, '0')}`));
+    const priorCases = Array.from({ length: 128 }, (_value, index) =>
+      priorCase(`case-${index.toString().padStart(3, '0')}`),
+    );
     const minimumContracts = Array.from({ length: 128 }, (_value, index) => ({ id: String(index), contract: 'p' }));
     const input = {
-      aggregate: aggregate(finding('current')), priorCases,
+      aggregate: aggregate(finding('current')),
+      priorCases,
       planContract: { path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: minimumContracts },
     };
     const minimum = assembleBuildReviewAdjudicationContext({ ...input, priorFindingDigests: new Map() });
@@ -318,7 +445,10 @@ describe('build-review adjudication context', () => {
     // 128 omitted candidates serialize as three digits. Reserve that width
     // before adding digest content, rather than letting the final omission
     // counter overflow an otherwise valid context.
-    let remainingPadding = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 3 - Buffer.byteLength(JSON.stringify(minimum.context));
+    let remainingPadding =
+      BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes -
+      3 -
+      Buffer.byteLength(JSON.stringify(minimum.context));
     expect(remainingPadding).toBeGreaterThan(0);
     const admittedTaskContracts = minimumContracts.map((task) => {
       const padding = Math.min(7_999, remainingPadding);
@@ -330,18 +460,33 @@ describe('build-review adjudication context', () => {
     const base = assembleBuildReviewAdjudicationContext({ ...nearCeiling, priorFindingDigests: new Map() });
     expect(base).toMatchObject({ ok: true });
     if (!base.ok) return;
-    expect(Buffer.byteLength(JSON.stringify(base.context))).toBe(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 3);
+    expect(Buffer.byteLength(JSON.stringify(base.context))).toBe(
+      BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 3,
+    );
 
-    const priorFindingDigests = new Map(priorCases.map((prior) => [prior.sources[0]!.sourceId, {
-      rubric: 'testQuality', concernKind: 'test-insensitive', summary: 'd'.repeat(1_000),
-      evidenceLocations: ['src/prior.ts:1'], lapId: 'lap-prior',
-    }] as const));
+    const priorFindingDigests = new Map(
+      priorCases.map(
+        (prior) =>
+          [
+            prior.sources[0]!.sourceId,
+            {
+              rubric: 'testQuality',
+              concernKind: 'test-insensitive',
+              summary: 'd'.repeat(1_000),
+              evidenceLocations: ['src/prior.ts:1'],
+              lapId: 'lap-prior',
+            },
+          ] as const,
+      ),
+    );
     const result = assembleBuildReviewAdjudicationContext({ ...nearCeiling, priorFindingDigests });
 
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
     expect(result.context.priorDigestsOmitted).toBe(128);
-    expect(Buffer.byteLength(JSON.stringify(result.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
+    expect(Buffer.byteLength(JSON.stringify(result.context))).toBeLessThanOrEqual(
+      BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes,
+    );
   });
 
   it('keeps a prior source whose lap artifact is unreadable without a digest and does not count it as budget-omitted', async () => {
@@ -349,19 +494,31 @@ describe('build-review adjudication context', () => {
     try {
       const sourceLapId = parseBuildReviewLapId('lap-prior-unreadable')!;
       const sourceAggregate = joinBuildReviewRubricOutcomes({
-        lapId: sourceLapId, snapshotDigest: 'sha256:prior-unreadable',
+        lapId: sourceLapId,
+        snapshotDigest: 'sha256:prior-unreadable',
         results: {
           security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
           testQuality: {
-            kind: 'judged', rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: 'sha256:prior-unreadable',
-            contractVersion: 'v4', findings: [finding('prior-unreadable')], verdict: 'FAIL',
+            kind: 'judged',
+            rubric: 'testQuality',
+            lapId: sourceLapId,
+            snapshotDigest: 'sha256:prior-unreadable',
+            contractVersion: 'v4',
+            findings: [finding('prior-unreadable')],
+            verdict: 'FAIL',
           },
         },
       });
       const [source] = projectBuildReviewAggregateSources(sourceAggregate)!;
       const prior = {
         ...priorCase('case-missing-artifact'),
-        sources: [{ sourceId: buildReviewAdjudicationSourceId(source!), outcome: 'acted' as const, recordedAt: '2026-10-24T12:00:00.000Z' }],
+        sources: [
+          {
+            sourceId: buildReviewAdjudicationSourceId(source!),
+            outcome: 'acted' as const,
+            recordedAt: '2026-10-24T12:00:00.000Z',
+          },
+        ],
       };
       await mkdir(join(root, '.pipeline', 'build-review', sourceLapId), { recursive: true });
       await writeFile(join(root, '.pipeline', 'build-review', sourceLapId, 'testQuality.json'), '{ unreadable');
@@ -369,7 +526,9 @@ describe('build-review adjudication context', () => {
       const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate(finding('current')));
       expect(facts.priorFindingDigests.has(prior.sources[0]!.sourceId)).toBe(false);
       const result = assembleBuildReviewAdjudicationContext({
-        aggregate: aggregate(finding('current')), priorCases: [prior], priorFindingDigests: facts.priorFindingDigests,
+        aggregate: aggregate(finding('current')),
+        priorCases: [prior],
+        priorFindingDigests: facts.priorFindingDigests,
       });
 
       expect(result).toMatchObject({ ok: true });
@@ -388,21 +547,38 @@ describe('build-review adjudication context', () => {
     const result = assembleBuildReviewAdjudicationContext({
       aggregate: aggregate(finding('current')),
       priorCases: [advisory],
-      suppressions: [{
-        kind: 'severity', findingId: 'threshold-advisory', rubric: 'testQuality',
-        summary: 'A separate finding is below the severity threshold.', severity: 'minor', threshold: 'major', lastSeenLap: 'lap-prior',
-      }],
+      suppressions: [
+        {
+          kind: 'severity',
+          findingId: 'threshold-advisory',
+          rubric: 'testQuality',
+          summary: 'A separate finding is below the severity threshold.',
+          severity: 'minor',
+          threshold: 'major',
+          lastSeenLap: 'lap-prior',
+        },
+      ],
     });
 
     expect(result).toEqual({
       ok: true,
       context: expect.objectContaining({
-        priorCases: [expect.objectContaining({
-          id: 'case-advisory', disposition: 'advisory', effect: { kind: 'none' }, adjudicatedSeverity: 'minor',
-        })],
-        suppressionHistory: [expect.objectContaining({
-          kind: 'severity', findingId: 'threshold-advisory', severity: 'minor', threshold: 'major',
-        })],
+        priorCases: [
+          expect.objectContaining({
+            id: 'case-advisory',
+            disposition: 'advisory',
+            effect: { kind: 'none' },
+            adjudicatedSeverity: 'minor',
+          }),
+        ],
+        suppressionHistory: [
+          expect.objectContaining({
+            kind: 'severity',
+            findingId: 'threshold-advisory',
+            severity: 'minor',
+            threshold: 'major',
+          }),
+        ],
       }),
     });
   });
@@ -439,39 +615,51 @@ describe('build-review adjudication context', () => {
       priorCases: [accepted, withdrawn, noLongerMatches, currentLap],
       carryInput: {
         currentLapId: lapId,
-        effectiveAcceptedSourceIds: new Set(['testQuality:accepted-first', 'security:accepted-second', 'testQuality:current']),
+        effectiveAcceptedSourceIds: new Set([
+          'testQuality:accepted-first',
+          'security:accepted-second',
+          'testQuality:current',
+        ]),
       },
     });
 
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
-    expect(result.context.priorCases).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: 'case-accepted',
-        operatorAccepted: {
-          originSourceIds: ['testQuality:accepted-first', 'security:accepted-second'],
-          originLapIds: ['lap-first', 'lap-second'],
-        },
-      }),
-      expect.not.objectContaining({ id: 'case-withdrawn', operatorAccepted: expect.anything() }),
-      expect.not.objectContaining({ id: 'case-no-longer-matches', operatorAccepted: expect.anything() }),
-      expect.not.objectContaining({ id: 'case-current-lap', operatorAccepted: expect.anything() }),
-    ]));
+    expect(result.context.priorCases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'case-accepted',
+          operatorAccepted: {
+            originSourceIds: ['testQuality:accepted-first', 'security:accepted-second'],
+            originLapIds: ['lap-first', 'lap-second'],
+          },
+        }),
+        expect.not.objectContaining({ id: 'case-withdrawn', operatorAccepted: expect.anything() }),
+        expect.not.objectContaining({ id: 'case-no-longer-matches', operatorAccepted: expect.anything() }),
+        expect.not.objectContaining({ id: 'case-current-lap', operatorAccepted: expect.anything() }),
+      ]),
+    );
   });
 
   // Covers: task:2
   it('lists the dispositions that each prior case can bind in this lap', () => {
     const caseA = priorCase('case-A');
     const caseJ: RemediationCaseRecord = {
-      ...priorCase('case-J'), disposition: 'reject', resolution: 'resolved', effect: { kind: 'none' },
+      ...priorCase('case-J'),
+      disposition: 'reject',
+      resolution: 'resolved',
+      effect: { kind: 'none' },
       sources: [{ sourceId: 'testQuality:case-J', outcome: 'rejected', recordedAt: '2026-08-30T12:00:00.000Z' }],
     };
     const caseC: RemediationCaseRecord = {
-      ...priorCase('case-C'), resolution: 'resolved',
+      ...priorCase('case-C'),
+      resolution: 'resolved',
       operatorAcceptance: { origins: [{ sourceId: 'testQuality:case-C', lapId: 'lap-prior' }] },
     };
     const result = assembleBuildReviewAdjudicationContext({
-      aggregate: aggregate(finding('current')), priorCases: [caseA, caseJ, caseC], attemptedCaseIds: ['case-A'],
+      aggregate: aggregate(finding('current')),
+      priorCases: [caseA, caseJ, caseC],
+      attemptedCaseIds: ['case-A'],
       carryInput: { currentLapId: lapId, effectiveAcceptedSourceIds: new Set(['testQuality:case-C']) },
     });
 
@@ -494,7 +682,9 @@ describe('build-review adjudication context', () => {
     const caseU = priorCase('case-U');
     const caseF = priorRefutedCase('case-F');
     const result = assembleBuildReviewAdjudicationContext({
-      aggregate: aggregate(finding('current')), priorCases: [caseR, caseU, caseF], attemptedCaseIds: ['case-A'],
+      aggregate: aggregate(finding('current')),
+      priorCases: [caseR, caseU, caseF],
+      attemptedCaseIds: ['case-A'],
     });
 
     expect(result).toMatchObject({ ok: true });
@@ -509,21 +699,31 @@ describe('build-review adjudication context', () => {
   // Covers: task:2
   it('emits binding corrections only for a correction round and accounts for their bytes', () => {
     const correction = {
-      caseRef: 'case-ref-1', existingCaseId: 'case-A', disposition: 'reject' as const,
+      caseRef: 'case-ref-1',
+      existingCaseId: 'case-A',
+      disposition: 'reject' as const,
       bindableDispositions: ['act', 'defer', 'refute'] as const,
     };
     const withoutCorrections = assembleBuildReviewAdjudicationContext({
-      aggregate: aggregate(finding('current')), priorCases: [],
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
     });
     const emptyCorrections = assembleBuildReviewAdjudicationContext({
-      aggregate: aggregate(finding('current')), priorCases: [], bindingCorrections: [],
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
+      bindingCorrections: [],
     });
     const corrected = assembleBuildReviewAdjudicationContext({
-      aggregate: aggregate(finding('current')), priorCases: [], bindingCorrections: [correction],
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
+      bindingCorrections: [correction],
     });
     const overflowing = assembleBuildReviewAdjudicationContext({
-      aggregate: aggregate(finding('current')), priorCases: [],
-      bindingCorrections: [{ ...correction, caseRef: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes) }],
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
+      bindingCorrections: [
+        { ...correction, caseRef: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes) },
+      ],
     });
 
     expect(withoutCorrections).toMatchObject({ ok: true });
@@ -533,7 +733,9 @@ describe('build-review adjudication context', () => {
     expect(withoutCorrections.context).not.toHaveProperty('bindingCorrections');
     expect(emptyCorrections.context).not.toHaveProperty('bindingCorrections');
     expect(corrected.context.bindingCorrections).toEqual([correction]);
-    expect(Buffer.byteLength(JSON.stringify(corrected.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
+    expect(Buffer.byteLength(JSON.stringify(corrected.context))).toBeLessThanOrEqual(
+      BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes,
+    );
     expect(overflowing).toMatchObject({ ok: false, stop: { code: 'serialized-byte-overflow' } });
   });
 
@@ -561,19 +763,27 @@ describe('build-review adjudication context', () => {
     expect(JSON.stringify(marked.context)).not.toContain('operator@example.test');
     expect(JSON.stringify(marked.context)).not.toContain('The operator accepted this bounded risk.');
 
-    const atCeiling = Array.from({ length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxPriorCases }, (_value, index) => ({
-      ...priorCase(`case-${index.toString().padStart(3, '0')}`),
-      resolution: 'resolved' as const,
-      operatorAcceptance: { origins: [{ sourceId: `testQuality:case-${index}`, lapId: 'lap-prior' }] },
-      rationale: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxTextBytes),
-    }));
-    const unmarked = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('current')), priorCases: atCeiling });
+    const atCeiling = Array.from(
+      { length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxPriorCases },
+      (_value, index) => ({
+        ...priorCase(`case-${index.toString().padStart(3, '0')}`),
+        resolution: 'resolved' as const,
+        operatorAcceptance: { origins: [{ sourceId: `testQuality:case-${index}`, lapId: 'lap-prior' }] },
+        rationale: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxTextBytes),
+      }),
+    );
+    const unmarked = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: atCeiling,
+    });
     const overflowingMarked = assembleBuildReviewAdjudicationContext({
       aggregate: aggregate(finding('current')),
       priorCases: atCeiling,
       carryInput: {
         currentLapId: lapId,
-        effectiveAcceptedSourceIds: new Set(atCeiling.flatMap((record) => record.operatorAcceptance!.origins.map((origin) => origin.sourceId))),
+        effectiveAcceptedSourceIds: new Set(
+          atCeiling.flatMap((record) => record.operatorAcceptance!.origins.map((origin) => origin.sourceId)),
+        ),
       },
     });
 
@@ -582,30 +792,67 @@ describe('build-review adjudication context', () => {
   });
 
   it('requires case-v2 admission for implementation-quality and exposes its raw source question', () => {
-    const missing = assembleBuildReviewAdjudicationContext({ aggregate: implementationQualityAggregate(), priorCases: [] });
-    expect(missing).toEqual({ ok: false, stop: { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' } });
+    const missing = assembleBuildReviewAdjudicationContext({
+      aggregate: implementationQualityAggregate(),
+      priorCases: [],
+    });
+    expect(missing).toEqual({
+      ok: false,
+      stop: { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' },
+    });
     const result = assembleBuildReviewAdjudicationContext({
-      aggregate: implementationQualityAggregate(), priorCases: [],
-      planContract: { path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '28', contract: 'Model the changed state.' }] },
+      aggregate: implementationQualityAggregate(),
+      priorCases: [],
+      planContract: {
+        path: '.docs/plans/example.md',
+        pointers: [],
+        admittedTaskContracts: [{ id: '28', contract: 'Model the changed state.' }],
+      },
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
     });
-    expect(result).toMatchObject({ ok: true, context: { mode: 'case-v2', currentFindings: [expect.objectContaining({ rubric: 'implementationQuality' })], policyContext: [expect.objectContaining({ rubric: 'implementationQuality', question: 'Does the changed code introduce a concrete code-quality or domain-modelling defect?' })] } });
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        mode: 'case-v2',
+        currentFindings: [expect.objectContaining({ rubric: 'implementationQuality' })],
+        policyContext: [
+          expect.objectContaining({
+            rubric: 'implementationQuality',
+            question: 'Does the changed code introduce a concrete code-quality or domain-modelling defect?',
+          }),
+        ],
+      },
+    });
   });
   it('projects a persisted decision stop with its owner and consistency evidence intact', () => {
     const stop = priorDecisionStop('stop-a');
-    const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [stop] });
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('alpha')),
+      priorCases: [stop],
+    });
 
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
-    expect(result.context.priorCases).toEqual([{
-      id: 'stop-a', disposition: 'escalate', priority: 'high', rationale: stop.rationale, confidence: 'high',
-      resolution: 'open', bindableDispositions: [], sources: stop.sources, effect: { kind: 'none' },
-      escalation: { owner: 'architecture' }, consistencyStop: stop.consistencyStop,
-    }]);
+    expect(result.context.priorCases).toEqual([
+      {
+        id: 'stop-a',
+        disposition: 'escalate',
+        priority: 'high',
+        rationale: stop.rationale,
+        confidence: 'high',
+        resolution: 'open',
+        bindableDispositions: [],
+        sources: stop.sources,
+        effect: { kind: 'none' },
+        escalation: { owner: 'architecture' },
+        consistencyStop: stop.consistencyStop,
+      },
+    ]);
     expect(result.context.effectPointers).toEqual([]);
     expect(Object.isFrozen(result.context.priorCases[0]!.consistencyStop!.sourceIds)).toBe(true);
     expect(JSON.parse(JSON.stringify(result.context)).priorCases[0]).toMatchObject({
-      escalation: { owner: 'architecture' }, consistencyStop: stop.consistencyStop,
+      escalation: { owner: 'architecture' },
+      consistencyStop: stop.consistencyStop,
     });
   });
 
@@ -623,11 +870,13 @@ describe('build-review adjudication context', () => {
     expect(result).toMatchObject({
       ok: true,
       context: {
-        priorCases: expect.arrayContaining([expect.objectContaining({
-          id: 'case-recurring',
-          recurrenceOf: ['case-resolved'],
-          distinctFrom: [{ caseId: 'case-distinct', reason: 'The changed source is independently owned.' }],
-        })]),
+        priorCases: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'case-recurring',
+            recurrenceOf: ['case-resolved'],
+            distinctFrom: [{ caseId: 'case-distinct', reason: 'The changed source is independently owned.' }],
+          }),
+        ]),
       },
     });
     if (!result.ok) return;
@@ -640,24 +889,61 @@ describe('build-review adjudication context', () => {
   it('projects an owner-only and a consistency-only decision stop without inventing the absent evidence', () => {
     const { consistencyStop: _c, ...ownerOnly } = priorDecisionStop('stop-owner');
     const { escalation: _e, ...consistencyOnly } = priorDecisionStop('stop-consistency');
-    const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [ownerOnly, consistencyOnly] });
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('alpha')),
+      priorCases: [ownerOnly, consistencyOnly],
+    });
 
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
-    expect(result.context.priorCases.map((record) => Object.keys(record).filter((key) => key === 'escalation' || key === 'consistencyStop')))
-      .toEqual([['consistencyStop'], ['escalation']]);
+    expect(
+      result.context.priorCases.map((record) =>
+        Object.keys(record).filter((key) => key === 'escalation' || key === 'consistencyStop'),
+      ),
+    ).toEqual([['consistencyStop'], ['escalation']]);
   });
 
   it.each([
-    ['an escalate case with no stop evidence', (stop: RemediationCaseRecord) => { const { escalation: _e, consistencyStop: _c, ...bare } = stop; return bare; }, 'decision-stop'],
-    ['an owner outside the store vocabulary', (stop: RemediationCaseRecord) => ({ ...stop, escalation: { owner: 'operator' as never } }), 'escalation.owner'],
-    ['an escalate case carrying an effect', (stop: RemediationCaseRecord) => ({ ...stop, effect: { id: 'effect-x', kind: 'deferral' as const, status: 'reserved' as const } }), 'effect'],
-    ['an empty consistency source set', (stop: RemediationCaseRecord) => ({ ...stop, consistencyStop: { ...stop.consistencyStop!, sourceIds: [] } }), 'consistencyStop.sourceIds'],
-    ['an empty consistency rationale', (stop: RemediationCaseRecord) => ({ ...stop, consistencyStop: { ...stop.consistencyStop!, rationale: '' } }), 'consistencyStop.rationale'],
-    ['stop evidence on an ordinary case', () => ({ ...priorCase('stop-a'), escalation: { owner: 'plan' as const } }), 'decision-stop'],
+    [
+      'an escalate case with no stop evidence',
+      (stop: RemediationCaseRecord) => {
+        const { escalation: _e, consistencyStop: _c, ...bare } = stop;
+        return bare;
+      },
+      'decision-stop',
+    ],
+    [
+      'an owner outside the store vocabulary',
+      (stop: RemediationCaseRecord) => ({ ...stop, escalation: { owner: 'operator' as never } }),
+      'escalation.owner',
+    ],
+    [
+      'an escalate case carrying an effect',
+      (stop: RemediationCaseRecord) => ({
+        ...stop,
+        effect: { id: 'effect-x', kind: 'deferral' as const, status: 'reserved' as const },
+      }),
+      'effect',
+    ],
+    [
+      'an empty consistency source set',
+      (stop: RemediationCaseRecord) => ({ ...stop, consistencyStop: { ...stop.consistencyStop!, sourceIds: [] } }),
+      'consistencyStop.sourceIds',
+    ],
+    [
+      'an empty consistency rationale',
+      (stop: RemediationCaseRecord) => ({ ...stop, consistencyStop: { ...stop.consistencyStop!, rationale: '' } }),
+      'consistencyStop.rationale',
+    ],
+    [
+      'stop evidence on an ordinary case',
+      () => ({ ...priorCase('stop-a'), escalation: { owner: 'plan' as const } }),
+      'decision-stop',
+    ],
   ])('stops as unrepresentable on %s', (_name, malform, field) => {
     const result = assembleBuildReviewAdjudicationContext({
-      aggregate: aggregate(finding('alpha')), priorCases: [malform(priorDecisionStop('stop-a'))],
+      aggregate: aggregate(finding('alpha')),
+      priorCases: [malform(priorDecisionStop('stop-a'))],
     });
 
     expect(result).toEqual({ ok: false, stop: { code: 'unrepresentable-prior-case', caseId: 'stop-a', field } });
@@ -667,16 +953,48 @@ describe('build-review adjudication context', () => {
     const limits = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS;
     const stop = priorDecisionStop('stop-a');
     const assemble = (consistencyStop: NonNullable<RemediationCaseRecord['consistencyStop']>) =>
-      assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [{ ...stop, consistencyStop }] });
+      assembleBuildReviewAdjudicationContext({
+        aggregate: aggregate(finding('alpha')),
+        priorCases: [{ ...stop, consistencyStop }],
+      });
 
     expect(assemble({ ...stop.consistencyStop!, rationale: 'r'.repeat(limits.maxTextBytes + 1) })).toEqual({
-      ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'consistencyStop.rationale', limit: limits.maxTextBytes, actual: limits.maxTextBytes + 1, caseId: 'stop-a' },
+      ok: false,
+      stop: {
+        code: 'field-overflow',
+        subject: 'prior-case',
+        field: 'consistencyStop.rationale',
+        limit: limits.maxTextBytes,
+        actual: limits.maxTextBytes + 1,
+        caseId: 'stop-a',
+      },
     });
     expect(assemble({ ...stop.consistencyStop!, sourceIds: ['s'.repeat(limits.maxReferenceBytes + 1)] })).toEqual({
-      ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'consistencyStop.sourceIds[]', limit: limits.maxReferenceBytes, actual: limits.maxReferenceBytes + 1, caseId: 'stop-a' },
+      ok: false,
+      stop: {
+        code: 'field-overflow',
+        subject: 'prior-case',
+        field: 'consistencyStop.sourceIds[]',
+        limit: limits.maxReferenceBytes,
+        actual: limits.maxReferenceBytes + 1,
+        caseId: 'stop-a',
+      },
     });
-    expect(assemble({ ...stop.consistencyStop!, sourceIds: Array.from({ length: limits.maxSourcesPerCase + 1 }, (_, index) => `s-${index}`) })).toEqual({
-      ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'consistencyStop.sourceIds', limit: limits.maxSourcesPerCase, actual: limits.maxSourcesPerCase + 1, caseId: 'stop-a' },
+    expect(
+      assemble({
+        ...stop.consistencyStop!,
+        sourceIds: Array.from({ length: limits.maxSourcesPerCase + 1 }, (_, index) => `s-${index}`),
+      }),
+    ).toEqual({
+      ok: false,
+      stop: {
+        code: 'field-overflow',
+        subject: 'prior-case',
+        field: 'consistencyStop.sourceIds',
+        limit: limits.maxSourcesPerCase,
+        actual: limits.maxSourcesPerCase + 1,
+        caseId: 'stop-a',
+      },
     });
   });
 
@@ -690,7 +1008,10 @@ describe('build-review adjudication context', () => {
     expect(result).toMatchObject({
       ok: true,
       context: {
-        version: 'v1', domain: 'build_review', lapId, snapshotDigest,
+        version: 'v1',
+        domain: 'build_review',
+        lapId,
+        snapshotDigest,
         currentFindings: expect.arrayContaining([
           expect.objectContaining({ rubric: 'testQuality', summary: finding('alpha').summary }),
           expect.objectContaining({ rubric: 'testQuality', summary: finding('beta').summary }),
@@ -703,14 +1024,23 @@ describe('build-review adjudication context', () => {
       },
     });
     if (!result.ok) return;
-    expect(result.context.currentFindings.map((source) => source.sourceId)).toEqual([...result.context.currentFindings.map((source) => source.sourceId)].sort());
-    expect(result.context.priorCases.map((caseRecord) => caseRecord.id)).toEqual(['case-first', 'case-middle', 'case-oldest']);
+    expect(result.context.currentFindings.map((source) => source.sourceId)).toEqual(
+      [...result.context.currentFindings.map((source) => source.sourceId)].sort(),
+    );
+    expect(result.context.priorCases.map((caseRecord) => caseRecord.id)).toEqual([
+      'case-first',
+      'case-middle',
+      'case-oldest',
+    ]);
   });
 
   it('omits only exact operator-resolved sources and emits no synthetic prior case for empty history', () => {
     const current = aggregate(finding('accepted'), finding('unresolved'));
     const all = assembleBuildReviewAdjudicationContext({ aggregate: current, priorCases: [] });
-    expect(all).toMatchObject({ ok: true, context: { priorCases: [], currentFindings: [expect.anything(), expect.anything()] } });
+    expect(all).toMatchObject({
+      ok: true,
+      context: { priorCases: [], currentFindings: [expect.anything(), expect.anything()] },
+    });
     if (!all.ok) return;
 
     const resolved = assembleBuildReviewAdjudicationContext({
@@ -718,7 +1048,13 @@ describe('build-review adjudication context', () => {
       priorCases: [],
       operatorResolvedFindingIds: new Set([all.context.currentFindings[0]!.findingId]),
     });
-    expect(resolved).toMatchObject({ ok: true, context: { priorCases: [], currentFindings: [expect.objectContaining({ summary: finding('unresolved').summary })] } });
+    expect(resolved).toMatchObject({
+      ok: true,
+      context: {
+        priorCases: [],
+        currentFindings: [expect.objectContaining({ summary: finding('unresolved').summary })],
+      },
+    });
   });
 
   it('keeps an off-plan security finding as a current source without a plan-binding bucket', () => {
@@ -728,25 +1064,46 @@ describe('build-review adjudication context', () => {
       planContract: { path: '.docs/plans/unrelated.md', pointers: ['Task 1: add a UI label'] },
     });
 
-    expect(result).toMatchObject({ ok: true, context: {
-      currentFindings: [expect.objectContaining({
-        rubric: 'security', concernKind: 'injection', summary: expect.stringContaining('untrusted input'),
-        sourceId: expect.stringMatching(/^security:/),
-      })],
-    } });
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        currentFindings: [
+          expect.objectContaining({
+            rubric: 'security',
+            concernKind: 'injection',
+            summary: expect.stringContaining('untrusted input'),
+            sourceId: expect.stringMatching(/^security:/),
+          }),
+        ],
+      },
+    });
     if (!result.ok) return;
     expect(JSON.stringify(result.context)).not.toMatch(/\b(?:beyond|boundTo)\b/);
   });
 
   it('carries suppression history separately from current findings', () => {
     const result = assembleBuildReviewAdjudicationContext({
-      aggregate: aggregate(finding('current')), priorCases: [],
-      suppressions: [{ kind: 'confidence', findingId: 'suppressed-id', rubric: 'testQuality', summary: 'Historical low-confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-prior' }],
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
+      suppressions: [
+        {
+          kind: 'confidence',
+          findingId: 'suppressed-id',
+          rubric: 'testQuality',
+          summary: 'Historical low-confidence finding.',
+          confidence: 40,
+          floor: 70,
+          lastSeenLap: 'lap-prior',
+        },
+      ],
     });
-    expect(result).toMatchObject({ ok: true, context: {
-      currentFindings: [expect.objectContaining({ summary: finding('current').summary })],
-      suppressionHistory: [expect.objectContaining({ findingId: 'suppressed-id', lastSeenLap: 'lap-prior' })],
-    } });
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        currentFindings: [expect.objectContaining({ summary: finding('current').summary })],
+        suppressionHistory: [expect.objectContaining({ findingId: 'suppressed-id', lastSeenLap: 'lap-prior' })],
+      },
+    });
   });
 
   it('projects the complete refutation for a prior refuted case', () => {
@@ -756,32 +1113,44 @@ describe('build-review adjudication context', () => {
       priorCases: [refuted],
     });
 
-    expect(result).toMatchObject({ ok: true, context: {
-      priorCases: [expect.objectContaining({
-        id: 'case-refuted', disposition: 'refute', resolution: 'resolved', refutation: refuted.refutation,
-      })],
-    } });
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        priorCases: [
+          expect.objectContaining({
+            id: 'case-refuted',
+            disposition: 'refute',
+            resolution: 'resolved',
+            refutation: refuted.refutation,
+          }),
+        ],
+      },
+    });
   });
 
   it('bounds only operator-unresolved sources, not the complete raw aggregate', () => {
-    const current = aggregate(...Array.from(
-      { length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources + 1 },
-      (_value, index) => finding(`resolved-${index}`),
-    ));
+    const current = aggregate(
+      ...Array.from({ length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources + 1 }, (_value, index) =>
+        finding(`resolved-${index}`),
+      ),
+    );
     const rawSources = projectBuildReviewAggregateSources(current)!;
 
-    expect(assembleBuildReviewAdjudicationContext({
-      aggregate: current,
-      priorCases: [],
-      operatorResolvedFindingIds: new Set(rawSources.map((source) => source.findingId)),
-    })).toMatchObject({ ok: true, context: { currentFindings: [], priorCases: [] } });
+    expect(
+      assembleBuildReviewAdjudicationContext({
+        aggregate: current,
+        priorCases: [],
+        operatorResolvedFindingIds: new Set(rawSources.map((source) => source.findingId)),
+      }),
+    ).toMatchObject({ ok: true, context: { currentFindings: [], priorCases: [] } });
   });
 
   it('stops before dispatch when operator-unresolved sources exceed the current-source bound', () => {
-    const current = aggregate(...Array.from(
-      { length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources + 1 },
-      (_value, index) => finding(`unresolved-${index}`),
-    ));
+    const current = aggregate(
+      ...Array.from({ length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources + 1 }, (_value, index) =>
+        finding(`unresolved-${index}`),
+      ),
+    );
 
     expect(assembleBuildReviewAdjudicationContext({ aggregate: current, priorCases: [] })).toEqual({
       ok: false,
@@ -802,7 +1171,10 @@ describe('build-review adjudication context', () => {
       results: {
         security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
         testQuality: {
-          kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'offline',
+          kind: 'infrastructure-failure',
+          rubric: 'testQuality',
+          reason: 'provider-error',
+          detail: 'offline',
         },
       },
     });
@@ -814,16 +1186,26 @@ describe('build-review adjudication context', () => {
   });
 
   it.each([
-    ['an over-limit prior field', {
-      ...priorCase('case-too-long'),
-      rationale: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxTextBytes + 1),
-    }, 'field-overflow'],
-    ['an unrepresentable prior effect state', {
-      ...priorCase('case-bad-effect'),
-      effect: { kind: 'none' },
-    }, 'unrepresentable-prior-case'],
+    [
+      'an over-limit prior field',
+      {
+        ...priorCase('case-too-long'),
+        rationale: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxTextBytes + 1),
+      },
+      'field-overflow',
+    ],
+    [
+      'an unrepresentable prior effect state',
+      {
+        ...priorCase('case-bad-effect'),
+        effect: { kind: 'none' },
+      },
+      'unrepresentable-prior-case',
+    ],
   ] as const)('stops before dispatch for %s', (_description, caseRecord, code) => {
-    expect(assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('current')), priorCases: [caseRecord] })).toMatchObject({
+    expect(
+      assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('current')), priorCases: [caseRecord] }),
+    ).toMatchObject({
       ok: false,
       stop: { code },
     });
@@ -870,18 +1252,28 @@ describe('build-review adjudication context', () => {
       aggregate: aggregate(finding('current')),
       priorCases: [],
       planContract: {
-        path: '.docs/plans/example.md', pointers: [],
+        path: '.docs/plans/example.md',
+        pointers: [],
         admittedTaskContracts: [{ id: '3', contract: 'Repair the current finding.' }],
-        index: [{ id: '3', title: 'Repair finding', dependencies: ['2'] }, { id: '4', title: 'Independent check', dependencies: [] }],
+        index: [
+          { id: '3', title: 'Repair finding', dependencies: ['2'] },
+          { id: '4', title: 'Independent check', dependencies: [] },
+        ],
       },
     });
 
-    expect(result).toMatchObject({ ok: true, context: {
-      planContract: {
-        admittedTaskContracts: [{ id: '3', contract: 'Repair the current finding.' }],
-        index: [{ id: '3', title: 'Repair finding', dependencies: ['2'] }, { id: '4', title: 'Independent check', dependencies: [] }],
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        planContract: {
+          admittedTaskContracts: [{ id: '3', contract: 'Repair the current finding.' }],
+          index: [
+            { id: '3', title: 'Repair finding', dependencies: ['2'] },
+            { id: '4', title: 'Independent check', dependencies: [] },
+          ],
+        },
       },
-    } });
+    });
     expect(result.ok && JSON.parse(JSON.stringify(result.context)).planContract.index).toEqual([
       { id: '3', title: 'Repair finding', dependencies: ['2'] },
       { id: '4', title: 'Independent check', dependencies: [] },
@@ -893,29 +1285,47 @@ describe('build-review adjudication context', () => {
       aggregate: aggregate(finding('current')),
       priorCases: [],
       planContract: {
-        path: '.docs/plans/example.md', pointers: [],
-        index: Array.from({ length: 1_025 }, (_value, index) => ({ id: String(index), title: `Task ${index}`, dependencies: [] })),
+        path: '.docs/plans/example.md',
+        pointers: [],
+        index: Array.from({ length: 1_025 }, (_value, index) => ({
+          id: String(index),
+          title: `Task ${index}`,
+          dependencies: [],
+        })),
       },
     });
 
-    expect(result).toEqual({ ok: false, stop: {
-      code: 'field-overflow', subject: 'plan-index', field: 'index', limit: 1_024, actual: 1_025,
-    } });
+    expect(result).toEqual({
+      ok: false,
+      stop: {
+        code: 'field-overflow',
+        subject: 'plan-index',
+        field: 'index',
+        limit: 1_024,
+        actual: 1_025,
+      },
+    });
   });
 
   it('keeps both plan task projections empty when no plan is bound', () => {
     const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('current')), priorCases: [] });
 
-    expect(result).toMatchObject({ ok: true, context: {
-      planContract: { path: null, admittedTaskContracts: [], index: [] },
-    } });
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        planContract: { path: null, admittedTaskContracts: [], index: [] },
+      },
+    });
   });
   it('declares the case-v1 discriminator and every input field the skill is told to read', () => {
     const result = assembleBuildReviewAdjudicationContext({
       aggregate: aggregate(finding('alpha')),
       priorCases: [priorCase('case-first')],
       attemptedCaseIds: ['case-first'],
-      planContract: { path: '.docs/plans/example.md', pointers: ['plan contract: .docs/plans/example.md — Task 3 (anchor: test/alpha.test.ts)'] },
+      planContract: {
+        path: '.docs/plans/example.md',
+        pointers: ['plan contract: .docs/plans/example.md — Task 3 (anchor: test/alpha.test.ts)'],
+      },
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '3', status: 'completed' }] },
     });
 
@@ -925,8 +1335,22 @@ describe('build-review adjudication context', () => {
     // names exactly these input fields. A context missing any of them routes a
     // real dispatch into the legacy gap-plan branch.
     expect(Object.keys(result.context).sort()).toEqual([
-      'admittedDispositions', 'currentFindings', 'declaredSeverityThresholds', 'domain', 'effectPointers', 'lapId', 'lifecycleOwners', 'mode',
-      'planContract', 'policyContext', 'priorCases', 'priorDigestsOmitted', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
+      'admittedDispositions',
+      'currentFindings',
+      'declaredSeverityThresholds',
+      'domain',
+      'effectPointers',
+      'lapId',
+      'lifecycleOwners',
+      'mode',
+      'planContract',
+      'policyContext',
+      'priorCases',
+      'priorDigestsOmitted',
+      'snapshotDigest',
+      'suppressionHistory',
+      'taskStatus',
+      'version',
     ]);
     expect(result.context).toMatchObject({
       mode: 'case-v1',
@@ -953,20 +1377,26 @@ describe('build-review adjudication context', () => {
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
     expect(result.context).not.toHaveProperty('history');
-    expect(result.context).toEqual(expect.objectContaining({
-      domain: 'build_review', mode: 'case-v1',
-      currentFindings: [expect.objectContaining({ summary: finding('history-boundary').summary })],
-    }));
+    expect(result.context).toEqual(
+      expect.objectContaining({
+        domain: 'build_review',
+        mode: 'case-v1',
+        currentFindings: [expect.objectContaining({ summary: finding('history-boundary').summary })],
+      }),
+    );
   });
 
   it('states absent plan and task evidence explicitly rather than omitting the field', () => {
     const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [] });
 
-    expect(result).toMatchObject({ ok: true, context: {
-      planContract: { path: null, pointers: [] },
-      taskStatus: { path: null, tasks: [] },
-      effectPointers: [],
-    } });
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        planContract: { path: null, pointers: [] },
+        taskStatus: { path: null, tasks: [] },
+        effectPointers: [],
+      },
+    });
   });
 
   it('delivers every custom policy boundary, reserved owner, and full admitted task contract', () => {
@@ -974,32 +1404,43 @@ describe('build-review adjudication context', () => {
       aggregate: customAggregate(),
       priorCases: [priorCase('case-security')],
       planContract: {
-        path: '.docs/plans/example.md', pointers: [],
-        admittedTaskContracts: [{
-          id: '28',
-          contract: '**Steps:**\n1. Preserve the authorization boundary.\n\n**Done when:**\n- The authorized route is covered.',
-        }],
+        path: '.docs/plans/example.md',
+        pointers: [],
+        admittedTaskContracts: [
+          {
+            id: '28',
+            contract:
+              '**Steps:**\n1. Preserve the authorization boundary.\n\n**Done when:**\n- The authorized route is covered.',
+          },
+        ],
       },
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
     });
 
-    expect(result).toMatchObject({ ok: true, context: {
-      mode: 'case-v2',
-      currentFindings: [expect.objectContaining({ rubric: 'security', concernKind: 'authorization-bypass' })],
-      policyContext: [{
-        rubric: 'security',
-        question: 'Does the changed code preserve the security boundary?',
-        effectivePolicyIdentity: POLICY_DIGEST,
-        criteria: ['references/security-criteria.md'],
-      }],
-      lifecycleOwners: expect.objectContaining({
-        productCompletion: 'prd_audit', architectureChoice: 'architecture_review', planGrowth: 'prd_audit',
-      }),
-      planContract: expect.objectContaining({
-        admittedTaskContracts: [{ id: '28', contract: expect.stringContaining('authorization boundary') }],
-      }),
-      priorCases: [expect.objectContaining({ id: 'case-security' })],
-    } });
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        mode: 'case-v2',
+        currentFindings: [expect.objectContaining({ rubric: 'security', concernKind: 'authorization-bypass' })],
+        policyContext: [
+          {
+            rubric: 'security',
+            question: 'Does the changed code preserve the security boundary?',
+            effectivePolicyIdentity: POLICY_DIGEST,
+            criteria: ['references/security-criteria.md'],
+          },
+        ],
+        lifecycleOwners: expect.objectContaining({
+          productCompletion: 'prd_audit',
+          architectureChoice: 'architecture_review',
+          planGrowth: 'prd_audit',
+        }),
+        planContract: expect.objectContaining({
+          admittedTaskContracts: [{ id: '28', contract: expect.stringContaining('authorization boundary') }],
+        }),
+        priorCases: [expect.objectContaining({ id: 'case-security' })],
+      },
+    });
   });
 
   it('prefers explicit short criteria over the declared resource references', () => {
@@ -1008,15 +1449,19 @@ describe('build-review adjudication context', () => {
       aggregate: customAggregate(explicit),
       priorCases: [],
       planContract: {
-        path: '.docs/plans/example.md', pointers: [],
+        path: '.docs/plans/example.md',
+        pointers: [],
         admittedTaskContracts: [{ id: '28', contract: 'Preserve the authorization boundary.' }],
       },
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
     });
 
-    expect(result).toMatchObject({ ok: true, context: {
-      policyContext: [{ rubric: 'security', effectivePolicyIdentity: POLICY_DIGEST, criteria: explicit }],
-    } });
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        policyContext: [{ rubric: 'security', effectivePolicyIdentity: POLICY_DIGEST, criteria: explicit }],
+      },
+    });
   });
 
   it('delivers a criterion at the reference bound whole and stops, untruncated, on one byte more', () => {
@@ -1024,7 +1469,8 @@ describe('build-review adjudication context', () => {
     const evidence = {
       priorCases: [],
       planContract: {
-        path: '.docs/plans/example.md', pointers: [],
+        path: '.docs/plans/example.md',
+        pointers: [],
         admittedTaskContracts: [{ id: '28', contract: 'Preserve the authorization boundary.' }],
       },
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
@@ -1035,18 +1481,23 @@ describe('build-review adjudication context', () => {
     if (!complete.ok) return;
     expect(complete.context.policyContext[0]!.criteria).toEqual([atBound]);
 
-    expect(assembleBuildReviewAdjudicationContext({ aggregate: customAggregate([`${atBound}x`]), ...evidence })).toEqual({
+    expect(
+      assembleBuildReviewAdjudicationContext({ aggregate: customAggregate([`${atBound}x`]), ...evidence }),
+    ).toEqual({
       ok: false,
       stop: { code: 'field-overflow', subject: 'policy-context', field: 'criteria[]', limit: 256, actual: 257 },
     });
   });
 
   it('stops rather than dispatching a custom policy without complete scope evidence', () => {
-    expect(assembleBuildReviewAdjudicationContext({
-      aggregate: customAggregate(), priorCases: [],
-      planContract: { path: '.docs/plans/example.md', pointers: [] },
-      taskStatus: { path: null, tasks: [] },
-    })).toEqual({
+    expect(
+      assembleBuildReviewAdjudicationContext({
+        aggregate: customAggregate(),
+        priorCases: [],
+        planContract: { path: '.docs/plans/example.md', pointers: [] },
+        taskStatus: { path: null, tasks: [] },
+      }),
+    ).toEqual({
       ok: false,
       stop: { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' },
     });
@@ -1058,9 +1509,26 @@ describe('describeBuildReviewAdjudicationContextStop', () => {
     expect([
       describeBuildReviewAdjudicationContextStop({ code: 'invalid-aggregate' }),
       describeBuildReviewAdjudicationContextStop({ code: 'missing-scope-evidence', subject: 'task-status' }),
-      describeBuildReviewAdjudicationContextStop({ code: 'field-overflow', subject: 'admitted-task-contract', field: 'contract', limit: 8000, actual: 13038 }),
-      describeBuildReviewAdjudicationContextStop({ code: 'field-overflow', subject: 'prior-case', field: 'summary', limit: 8000, actual: 9000, caseId: 'case-1' }),
-      describeBuildReviewAdjudicationContextStop({ code: 'unrepresentable-prior-case', caseId: 'case-2', field: 'effect' }),
+      describeBuildReviewAdjudicationContextStop({
+        code: 'field-overflow',
+        subject: 'admitted-task-contract',
+        field: 'contract',
+        limit: 8000,
+        actual: 13038,
+      }),
+      describeBuildReviewAdjudicationContextStop({
+        code: 'field-overflow',
+        subject: 'prior-case',
+        field: 'summary',
+        limit: 8000,
+        actual: 9000,
+        caseId: 'case-1',
+      }),
+      describeBuildReviewAdjudicationContextStop({
+        code: 'unrepresentable-prior-case',
+        caseId: 'case-2',
+        field: 'effect',
+      }),
       describeBuildReviewAdjudicationContextStop({ code: 'serialized-byte-overflow', limit: 131072, actual: 140000 }),
     ]).toEqual([
       'invalid-aggregate',

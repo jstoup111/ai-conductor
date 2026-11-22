@@ -31,21 +31,32 @@ describe('remediation projection corpus limits', () => {
       totalDiffBytes: expect.any(Number),
     });
     expect(Object.values(limits).every((limit) => Number.isFinite(limit) && limit > 0)).toBe(true);
-    expect(corpusAdmissionFailures([{
-      dimension: 'tasks',
-      measure: await largestPlanTasksBytes(join(repositoryRoot, '.docs', 'plans')),
-      limit: limits.tasksBytes,
-    }])).toEqual([]);
-    expect(limits.requiredReferencesBytes).toBe(roundUpPowerOfTwo(Math.max(
-      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes,
-    )));
-    expect(limits.tasksBytes).toBe(roundUpPowerOfTwo(Math.max(
-      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes,
-    )));
-    expect(limits.totalBytes).toBe(roundUpPowerOfTwo(
-      limits.requiredReferencesBytes + limits.tasksBytes + REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
-    ));
+    expect(
+      corpusAdmissionFailures([
+        {
+          dimension: 'tasks',
+          measure: await largestPlanTasksBytes(join(repositoryRoot, '.docs', 'plans')),
+          limit: limits.tasksBytes,
+        },
+      ]),
+    ).toEqual([]);
+    expect(limits.requiredReferencesBytes).toBe(
+      roundUpPowerOfTwo(
+        Math.max(
+          REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+          REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes,
+        ),
+      ),
+    );
+    expect(limits.tasksBytes).toBe(
+      roundUpPowerOfTwo(
+        Math.max(REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes),
+      ),
+    );
+    expect(limits.totalBytes).toBe(
+      roundUpPowerOfTwo(
+        limits.requiredReferencesBytes + limits.tasksBytes + REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
+      ),
+    );
   });
 });
