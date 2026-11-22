@@ -341,6 +341,40 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect(resumeIndexChecked).toBe(true);
   });
 
+  // Covers: task:5
+  it('refuses an unreadable child cursor before selecting whole-feature validation on resume', async () => {
+    const { subject, statePath, config } = await fixture();
+    const git = makeGitRunner(subject.repo);
+    await git(['update-ref', '-d', routeRecordRefFor('demo', roundId)]);
+    await git(['update-ref', '-d', repairMarkerRefFor('demo')]);
+    const root = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+    Object.assign(root, { feature_desc: 'demo', complexity_tier: 'M', manual_test: 'pending' });
+    delete root.acceptance_specs;
+    delete root.build;
+    delete root.test_suite;
+    delete root.build_review;
+    await writeState(statePath, root);
+
+    const unreadableRef = 'refs/conductor/demo/children/c2';
+    const run = vi.fn();
+    const resumed = new Conductor({
+      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', resume: true,
+      mode: 'auto', daemon: true, verifyArtifacts: false, config, events: new ConductorEventEmitter(),
+      stackPreflight: async () => ({ kind: 'clear' }), stepRunner: { run },
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'git-error', unreadableRef }) },
+    });
+    (resumed as unknown as { hasSettledRoutedLeafReturn(slug: string): Promise<boolean> }).hasSettledRoutedLeafReturn = async () => true;
+
+    await resumed.run();
+
+    expect(run).not.toHaveBeenCalled();
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(unreadableRef);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    const onDisk = await readState(statePath);
+    if (!onDisk.ok) throw new Error('root state is unreadable');
+    expect(onDisk.value).not.toHaveProperty('build');
+  });
+
   // Covers: task:3
   async function assertPendingLeafGate(
     expected: StepName,
