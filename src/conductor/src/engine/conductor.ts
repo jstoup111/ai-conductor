@@ -6389,7 +6389,14 @@ export class Conductor {
     // Effect-bound, not feature-bound: an order carrying a stable effect this
     // feature's case store never recorded is foreign and must never reach BUILD
     // prompt construction, even when it names an open case of this feature.
-    const order = await readBuildReviewWorkOrder(this.projectRoot, feature, [...openActionCases.values()]);
+    // The binding spans every recorded action effect, not only open ones: the
+    // order's effect is its primary case's, which may resolve before a sibling
+    // case in the same order (#3740).
+    const order = await readBuildReviewWorkOrder(
+      this.projectRoot,
+      feature,
+      state.state.cases.flatMap((record) => (record.effect.kind === 'action' ? [record.effect.id] : [])),
+    );
     if (classifyBuildReviewDurableRead(order) === 'absent') {
       const openCase = state.state.cases.find(isBuildEligibleActionCase)!;
       return {
