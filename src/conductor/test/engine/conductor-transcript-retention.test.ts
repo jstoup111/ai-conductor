@@ -883,6 +883,8 @@ describe('conductor transcript retention wiring', () => {
 
   it('retains a failed self-host provider attempt and prunes only its successful retry', async () => {
     const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-provider-retry-'));
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = join(root, 'operator-codex-home');
     const events = new ConductorEventEmitter();
     const lifecycle: Array<{ type: string; path: string }> = [];
     events.on('provider_transcripts_retained', (event) => {
@@ -1066,6 +1068,8 @@ describe('conductor transcript retention wiring', () => {
       await expect(readFile(join(root, first, 'session.jsonl'), 'utf8')).resolves.toBe(firstCapture);
       await expect(access(join(root, second))).rejects.toThrow();
     } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
       await rm(root, { recursive: true, force: true });
     }
   });
