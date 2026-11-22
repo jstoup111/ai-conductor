@@ -1031,6 +1031,10 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     Object.assign(kickbackState, {
       feature_desc: 'demo',
       complexity_tier: 'M',
+      // Deliberately differs from both child cursors. The manual-test
+      // transition must refresh this feature-owned compare-and-swap baseline
+      // rather than write either child's cursor back to the feature state.
+      last_step: 'post_region_check',
       prd_audit: 'pending',
       architecture_review_as_built: 'pending',
       manual_test: 'pending',
@@ -1050,7 +1054,9 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       build: 'done',
       test_suite: 'done',
       build_review: 'done',
-      last_step: 'build_review',
+      // Unlike the former host's build_review cursor, this is the settled
+      // leaf's cursor adopted for the resumed region.
+      last_step: 'test_suite',
     });
     for (const gate of [
       'prd_audit',
@@ -1067,6 +1073,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     const dispatched: StepName[] = [];
     const dispatchContexts: Array<{ readonly step: StepName; readonly activeChild: number | undefined }> = [];
     const routedRepairPhases: unknown[] = [];
+    const loopHalts: unknown[] = [];
     let manualTestDispatch: { readonly worktree: string; readonly head: string } | undefined;
     let leafState: ConductState | undefined;
     let leafSnapshot: ConductState | undefined;
@@ -1077,6 +1084,9 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     const events = new ConductorEventEmitter();
     events.on('routed_repair_phase', (event) => {
       routedRepairPhases.push(event);
+    });
+    events.on('loop_halt', (event) => {
+      loopHalts.push(event);
     });
     const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
     persister.start();
@@ -1131,6 +1141,10 @@ describe('Conductor routed final leaf return (real local Git)', () => {
             );
             await stores.commitStateChanges(state, 'record first post-return state change', {
               routed_return_probe: 'recorded',
+              // This writes through the root half of the routed store while
+              // state still carries the leaf cursor. It must align its CAS
+              // expectation to the root's post_region_check cursor.
+              last_step: 'manual_test',
             });
             // The observation boundary is the resumed leaf dispatch. Stop
             // before mocked-success validation can reach unrelated FINISH.
@@ -1149,6 +1163,10 @@ describe('Conductor routed final leaf return (real local Git)', () => {
 
     const onDisk = await readState(statePath);
     if (!onDisk.ok) throw new Error('leaf conduct state is unreadable');
+    const formerHostState = await readState(pipelinePathFor(subject.repo, 'conduct-state.json', host));
+    if (!formerHostState.ok) throw new Error('former host conduct state is unreadable');
+    const settledLeafState = await readState(pipelinePathFor(subject.repo, 'conduct-state.json', leaf));
+    if (!settledLeafState.ok) throw new Error('settled leaf conduct state is unreadable');
     expect(preflightCalls).toBe(0);
     expect(dispatched).toContain('manual_test');
     expect(dispatched).not.toContain('build');
@@ -1196,5 +1214,20 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect(persistedRootState?.test_suite).toBeUndefined();
     expect(persistedRootState?.build_review).toBeUndefined();
     expect((onDisk.value as Record<string, unknown>).routed_return_probe).toBe('recorded');
+    // The former host's region cursor remains isolated, while whole-feature
+    // validation advances only the root cursor. This is the cross-region CAS
+    // path: the routed store must refresh the root expectation from
+    // post_region_check instead of treating the leaf's test_suite cursor as a
+    // concurrent write.
+    expect(formerHostState.value.last_step).toBe('build_review');
+    expect(settledLeafState.value.last_step).toBe('test_suite');
+    expect(onDisk.value.last_step).toBe('manual_test');
+    expect(onDisk.value.last_step).not.toBe(formerHostState.value.last_step);
+    expect(onDisk.value.last_step).not.toBe(settledLeafState.value.last_step);
+    expect(loopHalts).toEqual([]);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8')).not.toMatch(
+      /concurrent[ -]state|state[ -]conflict/i,
+    );
   });
 });
