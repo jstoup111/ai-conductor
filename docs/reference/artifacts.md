@@ -48,6 +48,7 @@ Twenty-two entries. Alphabetized; the four with no code reference are marked.
 | `audits/` | free-form JSON | a one-off backfill | `shipment-audit.ts` — one hardcoded path, nothing else |
 | `coherence/` | `<plan-stem>.md` | `coherence-check` skill (M and L tiers only) | `coherence_check` completion glob; the land-time coherence validator |
 | `coherence-waivers/` | `<plan-stem>.md` | operator, hand-authored | the land-time coherence waiver check; `prd_audit`'s [waived-requirement projection](../explanation/gates.md#waived-prd-requirements). The directory appears when the first waiver is committed — see below |
+| `composer-runs/` | `<slug>.json` | `compose checkpoint`, the launcher's draft save, and resume take-over | `compose resume` reads it to find the first unaccepted step; `compose land` refuses unaccepted drafts or steps needing reconfirmation with gate `unaccepted-draft`, then removes the record so it never reaches the base branch. The draft PR's run block only displays it — see [save, switch, hand off, or resume a run](../guides/engineer-loop.md#save-switch-hand-off-or-resume-a-run) |
 | `complexity/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `complexity` step, composer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line; an optional `Stacked-Delivery: approved` line records operator sign-off for [stacked delivery](configuration.md#stacked_prs). Missing tier ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
 | `conflicts/` | `YYYY-MM-DD-<slug>.md` | `conflict-check` skill | `conflict_check` completion glob |
 | `decisions/` | New ADRs: `adr-YYYY-MM-DD-lowercase-hyphenated-slug.md` with a real calendar date. Existing legacy `adr-<topic>.md` and `NNN-<topic>.md` files remain valid; also `architecture-review-*.md`, `technical-assessment-*.md` | `architecture-review`, `assess`, `bootstrap`, `prd`, `simplify`, `debugging`, `finish` | `architecture_review` and `assess` completion globs; the land gate requires every newly added ADR to use the canonical date-prefixed name, while legacy ADRs already on the default branch are exempt. The land gate and daemon discovery both scan every `adr-*.md` and reject one whose first declared status is not `APPROVED` or `SUPERSEDED` |
@@ -647,7 +648,7 @@ To clear a halt safely, use the procedure in
 | `git-hooks/` | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction`, `pre-push` | Wired via the worktree-local `core.hooksPath` |
 | `events.jsonl` | The run event log | Append-only, no rotation — see below |
 | `pipeline-events.jsonl` | Externally written `build_review` disposition and kickback-budget authorization events | Separate ledger — see below |
-| `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`, `land_dependency_decided`, `feature_artifacts_registered`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
+| `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`, `land_dependency_decided`, `feature_artifacts_registered`, and the `composer_run_*` and `composer_provider_switched` run events), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
 | `transcripts/<step>/<runId>-a<attempt>[-<member>]-<provider>/` | Sanitized, allowlisted provider session transcripts captured before a self-host provider home is removed | Self-host only. Pruned after a step completes with progress; otherwise retained, capped at 20 captures / 1 GiB per worktree. Read with [`ai-conductor transcripts`](cli.md#ai-conductor-transcripts); see [provider transcripts](../guides/self-hosting.md#provider-transcripts) |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
@@ -1029,6 +1030,15 @@ status of each post-commit link write. It goes to the same `.pipeline/composer-e
 [feature manifest](#feature-manifest): the slug and the `{ kind, path }` entries newly added relative to
 the prior valid manifest. It goes to the same ledger; a write failure prints a warning and never fails
 the land.
+Composer run transitions go to the same ledger. `composer_run_started` records `compose worktree`
+creating a run inside a launcher session (`slug`, `worktreePath`, `launchId`, `provider`, `actor`); the
+launcher uses its `launchId` to find the run when the session exits. `composer_run_checkpointed` records a saved DECIDE
+boundary (`slug`, `step`, `state` of `accepted` or `draft`, `published`, `provider`, `actor`).
+`composer_run_resumed` records a resume (`provider`, `actor`, `ownership`, optional `previousProvider`
+and `previousActor`). `composer_provider_switched` records a deliberate launcher switch (`step`,
+`fromProvider`, `toProvider`, `actor`); it is distinct from step-level provider fallback and retry
+escalation. `composer_run_handed_off` records a hand-off with its optional `prUrl`. None of these
+render to the terminal.
 `dependency_drift_swept` records each hourly `intake-loop` drift sweep per repository: `status`
 (`swept` or `repository-indeterminate`) and the unlinked, stale, cycle, contradiction, and
 indeterminate findings. It persists to `.pipeline/events.jsonl` under the directory where
