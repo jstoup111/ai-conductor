@@ -26,11 +26,15 @@ const COMMIT_CALL_ALLOWLIST: Record<string, string> = {
 
 async function files(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
-  return (await Promise.all(entries.map(async (entry) => {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) return files(path);
-    return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
-  }))).flat();
+  return (
+    await Promise.all(
+      entries.map(async (entry) => {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) return files(path);
+        return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
+      }),
+    )
+  ).flat();
 }
 
 function isCommitInvocation(node: ts.CallExpression): boolean {
