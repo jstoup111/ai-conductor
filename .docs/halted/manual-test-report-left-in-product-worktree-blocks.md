@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-11-22T00:04:35.840Z
+Status: halted
 Slug: manual-test-report-left-in-product-worktree-blocks
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-manual-test-report-left-in-product-worktree-blocks
-Head SHA: 1dc938d9d80dd9dbce9483d54bdcccc95f3bbcc8
-Halted at: 2026-11-20T18:12:34.342Z
+Head SHA: 3a3924245ccd2d3d19debe776a734ee522e83231
+Halted at: 2026-11-22T07:15:28.423Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case recurrence limit 31412247-7fa5-477c-8653-06b064392c4a: lineage bcd12a91-060c-410e-b094-fdb3c653a426, a451d2b6-022a-4492-8a1f-36544c802192, 31412247-7fa5-477c-8653-06b064392c4a has 3 applied attempts (limit 3)
+build_review clean-PASS durable settlement halted: clean PASS cannot settle open action case 31412247-7fa5-477c-8653-06b064392c4a (applied); resolve with ai-conductor build-review resolve-case --feature manual-test-report-left-in-product-worktree-blocks --case 31412247-7fa5-477c-8653-06b064392c4a --rationale "<why>"
 ```
