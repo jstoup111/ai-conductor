@@ -610,3 +610,20 @@ All engine paths below are under `src/conductor/src/engine/` unless they start a
 **Done when:**
 - adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 3 is satisfied by this task.
 - The repair for task rem-as-built-rem-asbuilt-d3-terminal-stall-retire is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-s1-4-zero-work-evidence: In src/conductor/src/engine/conductor.ts remediation projection call (~4955), pass the build-gate evidenceFile to buildRemediationProjection for both 'build_stall' and 'build_stall_zero_work' hint sources so zero-work stalls read the active child's region question. Add a conductor test: a zero-work stall with active child 3 sends a projection that cites .pipeline/children/3/build-stall-question.md and carries that file's question text in its excerpts (not empty). Keep the existing no-children flat-path test passing.
+**Gate:** prd-audit
+**Rationale:** Verified at conductor.ts:4955: buildRemediationProjection gets evidenceFile only when hintSource.source === 'build_stall'. Zero-work stalls (source 'build_stall_zero_work') therefore fall back to flat .pipeline/build-stall-question.md (remediation-projection.ts:387), and an ENOENT there gives empty excerpts. Approved architecture already requires the region path, so this is conforming implementation drift and belongs in BUILD. Task 4's behavior and tests are kept; the repair only widens the source condition.
+**Criterion:** S1.4
+**Parent task:** 4
+**Done when:**
+- [test] S1.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-s1-4-zero-work-evidence is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-d4-adopt-before-durable-recovery: In src/conductor/src/engine/conductor.ts BUILD step setup (~12245), call adoptLegacyRemediationInputs() for every build step before the buildReviewAdjudicationEnabled()/durableBuildReviewRetryContext block. Keep the per-dispatch adoption call at ~12933 for retries, and keep adoption idempotent. Add a conductor test with adjudication enabled: an open action case whose work order exists only as a legacy flat file is adopted into its owner's region, and BUILD dispatches without a 'durable remediation recovery halted' HALT. Keep the existing adjudication-disabled adoption test passing.
+**Gate:** as-built
+**Rationale:** Verified: conductor.ts:12247 calls durableBuildReviewRetryContext, which can halt needs-human at :12248-12254. Adoption runs only later, at :12933. An open action case whose work order is still flat therefore halts before it is ever adopted. D4 is clear and authoritative, so this is an implementation ordering fix in BUILD. The prior repair made adoption unconditional and keeps its per-dispatch call; the new task adds an earlier call.
+**Governing clause:** adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 4
+**Done when:**
+- adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-d4-adopt-before-durable-recovery is committed and its targeted tests pass.
