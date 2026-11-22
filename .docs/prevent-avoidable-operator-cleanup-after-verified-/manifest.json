@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "slug": "prevent-avoidable-operator-cleanup-after-verified-",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/verified-rebase-recovery.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/prevent-avoidable-operator-cleanup-after-verified-.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/prevent-avoidable-operator-cleanup-after-verified-.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/prevent-avoidable-operator-cleanup-after-verified-.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-07-28-total-halt-classification-legacy-boundary.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-19-verified-rebase-admission.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/prevent-avoidable-operator-cleanup-after-verified-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/prevent-avoidable-operator-cleanup-after-verified-.md"
+    },
+    {
+      "kind": "prd",
+      "path": ".docs/specs/2026-11-19-prevent-avoidable-operator-cleanup-after-verified-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/prevent-avoidable-operator-cleanup-after-verified-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/prevent-avoidable-operator-cleanup-after-verified-.md"
+    }
+  ]
+}

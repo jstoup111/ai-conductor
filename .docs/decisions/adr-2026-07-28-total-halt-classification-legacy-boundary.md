@@ -51,6 +51,8 @@ If retry safety is not mechanically provable at a writer, the class is `needs-hu
 
 > **Amended 2026-10-17 by #2945:** FINISH stack publication may also write `stack-tip-diverged`, an operator-action class that is never auto-cleared and is retained by the re-kick sweep. It names a published or partly published stack that no longer matches the engine's record: a moved remote tip, a closed or merged member, a wrong base, or a wrong stack membership or order (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11). No other writer may select it.
 
+> **Amended 2026-11-19 by operator (verified rebase recovery):** The evidenced rebase writer may emit `rebase-recovery` under [verified rebase admission D1](adr-2026-11-19-verified-rebase-admission.md).
+
 ### D2 — Read disposition separates compatibility from corruption
 
 The read side returns one of four dispositions:
@@ -61,6 +63,8 @@ The read side returns one of four dispositions:
 - `unclassified` for missing, unreadable, or invalid state → retain the HALT and log that operator action is required.
 
 Absence never means legacy after the migration boundary.
+
+> **Amended 2026-11-19 by operator (verified rebase recovery):** Generic retries retain `rebase-recovery`. Its dedicated verifier may release the matching attempt under verified rebase admission D2–D3.
 
 ### D3 — A one-time migration stamps only pre-boundary markers
 
