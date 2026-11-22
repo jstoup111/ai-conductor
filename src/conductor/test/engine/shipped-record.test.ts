@@ -1,4 +1,4 @@
-// Covers: task:20, task:24, task:1
+// Covers: task:20, task:24, task:1, task:rem-prd-audit-rem-S7.4, task:rem-as-built-rem-asb-8
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -159,7 +159,7 @@ describe('renderShippedRecord', () => {
 });
 
 describe('appendRestackSection', () => {
-  it('renders fold, round, base-refresh and unattributed resolver costs without changing Cost', () => {
+  it('renders fold, round, base-refresh and unattributed resolver costs without changing Cost [late-gate regression]', () => {
     const record = appendTimingSection(
       renderShippedRecordWithCost(
         { slug: 'stack', specHash: 'abc' },

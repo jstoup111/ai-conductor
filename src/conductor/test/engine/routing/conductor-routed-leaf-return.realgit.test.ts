@@ -1,4 +1,4 @@
-// Covers: task:3, task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1, task:rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1
+// Covers: task:3, task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1, task:rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1, task:rem-prd-audit-rem-S6.1
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -267,7 +267,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
   });
 
   // Covers: task:13
-  it('drains a sole-round leaf-return close once and leaves the leaf gates pending', async () => {
+  it('drains a sole-round leaf-return close once and leaves the leaf gates pending [late-gate regression]', async () => {
     const { subject, statePath, config } = await fixture();
     const git = makeGitRunner(subject.repo);
     const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });

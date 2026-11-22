@@ -1,4 +1,4 @@
-// Covers: task:13, task:14
+// Covers: task:13, task:14, task:rem-prd-audit-rem-S4.1, task:rem-as-built-rem-asb-4
 import { execFile as execFileCallback } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -372,7 +372,7 @@ describe('placeFoldCommits (real local Git)', () => {
     });
   });
 
-  it('refuses a deferred host whose only owner placement is an empty whole commit', async () => {
+  it('refuses a deferred host whose only owner placement is an empty whole commit [late-gate regression]', async () => {
     const subject = await placementFixture();
     await subject.git(['commit', '--allow-empty', '-qm', `tdd evidence${trailers('r1', 'c1')}`]);
     const empty = await subject.head();

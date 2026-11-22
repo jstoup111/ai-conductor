@@ -1,4 +1,4 @@
-// Covers: task:4, task:5
+// Covers: task:4, task:5, task:rem-prd-audit-rem-S9.6, task:rem-as-built-rem-asb-9
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -268,7 +268,7 @@ describe('routed restack applied transaction (real local Git)', () => {
     await expectRoutedApplyHalt(subject.repo);
   });
 
-  it('halts at synced without retrying when a concurrent writer changes the routed record on the normal path', async () => {
+  it('halts at synced without retrying when a concurrent writer changes the routed record on the normal path [late-gate regression]', async () => {
     const subject = await routedRepairStack();
     const native = makeGitRunner(subject.repo);
     const concurrent = await concurrentRouteBlob(subject.repo, native);

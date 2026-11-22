@@ -1,4 +1,4 @@
-// Covers: task:16
+// Covers: task:16, task:rem-as-built-rem-asb-5, task:rem-as-built-rem-asb-6
 // A planned fold has a source-to-placement plan, not generic replay ranges.
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -166,7 +166,7 @@ async function snapshot(git: (args: string[]) => Promise<{ stdout: string }>) {
 }
 
 describe('planned fold recovery (real local Git)', () => {
-  it('re-materializes only frozen blocks while replaying a mixed source commit on its planned children', async () => {
+  it('re-materializes only frozen blocks while replaying a mixed source commit on its planned children [late-gate regression]', async () => {
     const subject = await fixture();
     const block = '### Task rem-prd-audit-T1: Repair\n**Done when:**\n- fixed\n**Child:** 1\n**Round:** r2\n';
     const planPath = join(subject.repo, '.docs', 'plans', 'demo.md');

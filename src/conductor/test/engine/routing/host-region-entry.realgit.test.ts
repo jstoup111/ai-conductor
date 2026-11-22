@@ -1,4 +1,4 @@
-// Covers: task:7, task:16, task:48
+// Covers: task:7, task:16, task:48, task:rem-as-built-rem-asb-12
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -853,7 +853,7 @@ describe('routed host region entry (real local Git)', () => {
     });
   });
 
-  it('persists a leaf boundary before a block-only entry can return derived-complete', async () => {
+  it('persists a leaf boundary before a block-only entry can return derived-complete [late-gate regression]', async () => {
     const subject = await fixture('audit', { execution: 'leaf' });
     const entryTip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
 

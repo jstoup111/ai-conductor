@@ -5,6 +5,7 @@
 // Covers: task:rem-as-built-rem-as-built-R16
 // Covers: task:rem-prd-audit-rem-S9.2
 // Covers: task:rem-prd-audit-rem-S9.6
+// Covers: task:rem-prd-audit-rem-S9.3, task:rem-prd-audit-rem-S9.5, task:rem-as-built-rem-asb-9
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,7 @@ import { readVerdict } from '../../../src/engine/gate-verdicts.js';
 import { installDaemonBotCoAuthor } from '../../../src/engine/bot-co-author.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { collectFoldSet, placeFoldCommits } from '../../../src/engine/restack/fold-plan.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
@@ -95,7 +97,7 @@ function child(value: number) {
 }
 
 describe('runRestack (real local Git)', () => {
-  it('remaps every deferred placement boundary in the applied feature-repair transaction', async () => {
+  it('remaps every deferred placement boundary in the applied feature-repair transaction [late-gate regression]', async () => {
     const subject = await fixture();
     const git = makeGitRunner(subject.repo);
     const roundId = parseRoundId('r1');
@@ -134,6 +136,82 @@ describe('runRestack (real local Git)', () => {
         } },
       },
     });
+  });
+
+  it('keeps collected fold placement parts stable after feature-repair remapping [late-gate regression]', async () => {
+    const subject = await fixture();
+    const git = makeGitRunner(subject.repo);
+    const roundId = parseRoundId('r1');
+    if (!roundId) throw new Error('invalid round id');
+    await writeFile(join(subject.repo, 'deferred-repair.txt'), 'repair\n');
+    await subject.git(['add', 'deferred-repair.txt']);
+    await subject.git(['commit', '-qm', 'deferred repair\n\nRound: r1\nOwner: c1']);
+    const exitTip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+
+    const created = await createRouteRecord(subject.repo, 'demo', {
+      roundId,
+      kind: 'audit',
+      sealedAuthored: 1,
+      execution: 'leaf',
+      items: [{ findingId: 'deferred', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] }],
+      allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
+    }, { git });
+    expect(created.kind).toBe('created');
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+    if (stored.kind !== 'record') throw new Error('could not read deferred route');
+    const recorded = await writeRoutingTransaction(subject.repo, 'demo', [{
+      kind: 'update-record',
+      previous: stored,
+      record: {
+        ...stored.record,
+        phase: 'closed',
+        hosts: { [child(1)]: 'done' },
+        placements: { [child(1)]: { state: 'deferred', leafEntryTip: subject.l1, exitTip } },
+      },
+    }], { git });
+    expect(recorded.kind).toBe('updated');
+
+    const beforeRange = { host: child(1), roundId, leafEntryTip: subject.l1 as never, exitTip: exitTip as never };
+    const beforeCollected = await collectFoldSet({ ranges: [beforeRange], slug: 'demo', git });
+    if (beforeCollected.kind !== 'collected') throw new Error('could not collect original deferred range');
+    const beforePlan = await placeFoldCommits({
+      worktree: subject.repo,
+      slug: 'demo',
+      commits: beforeCollected.commits,
+      ranges: [beforeRange],
+      git,
+    });
+    if (beforePlan.kind !== 'planned') throw new Error('could not plan original deferred range');
+
+    await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git }))
+      .resolves.toMatchObject({ kind: 'applied' });
+
+    const remapped = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+    if (remapped.kind !== 'record') throw new Error('could not read remapped route');
+    const placement = remapped.record.placements?.[child(1)];
+    if (!placement || placement.state !== 'deferred' || placement.exitTip === undefined)
+      throw new Error('deferred placement was not remapped');
+    const afterRange = { host: child(1), roundId, leafEntryTip: placement.leafEntryTip, exitTip: placement.exitTip };
+    const afterCollected = await collectFoldSet({ ranges: [afterRange], slug: 'demo', git });
+    if (afterCollected.kind !== 'collected') throw new Error('could not collect remapped deferred range');
+    const afterPlan = await placeFoldCommits({
+      worktree: subject.repo,
+      slug: 'demo',
+      commits: afterCollected.commits,
+      ranges: [afterRange],
+      git,
+    });
+    if (afterPlan.kind !== 'planned') throw new Error('could not plan remapped deferred range');
+
+    const parts = (plan: typeof beforePlan) => plan.commits.map((commit) => ({
+      owner: commit.owner,
+      parts: commit.parts.map((part) => {
+        if (part.kind !== 'hunks') return part;
+        const { probe: _probe, ...hunk } = part.hunk;
+        return { ...part, hunk };
+      }),
+    }));
+    expect(parts(afterPlan)).toEqual(parts(beforePlan));
   });
 
   it('preserves a historical raw message while daemon co-author configuration is active', async () => {

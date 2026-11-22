@@ -1,4 +1,4 @@
-// Covers: task:9, task:10
+// Covers: task:9, task:10, task:rem-prd-audit-rem-S7.3, task:rem-as-built-rem-asb-8
 /**
  * Covers: task:1, task:4, task:7, task:8, task:9
  *
@@ -1324,7 +1324,7 @@ describe('context-free provider attempts within an explicit execution', () => {
     });
   });
 
-  it('records restack attributes for a resolver attempt without an open lifecycle span', async () => {
+  it('records restack attributes for a resolver attempt without an open lifecycle span [late-gate regression]', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
     await emitter.emit({ type: 'step_started', step: 'build', index: 1 });

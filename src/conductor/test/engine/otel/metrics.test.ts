@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:rem-prd-audit-rem-S7.3, task:rem-as-built-rem-asb-8
 /**
  * Covers: task:1, task:2, task:3, task:4, task:10
  * metrics.test.ts — unit tests for MetricsRecorder through MetricsListener.
@@ -953,7 +953,7 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
     return { exporter, provider, recorder: new MetricsRecorder(provider.getMeter('task-4'), { project: 'test-project', worker: 'test-worker', feature: 'test-feature' }) };
   }
 
-  it('records cost and token dimensions with bounded feature identity', async () => {
+  it('records cost and token dimensions with bounded feature identity [late-gate regression]', async () => {
     const { exporter, provider, recorder } = await makeRecorder();
     try {
       recorder.onFeatureCostSnapshot(snapshot);
