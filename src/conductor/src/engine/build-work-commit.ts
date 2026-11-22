@@ -92,15 +92,13 @@ export async function commitUncommittedBuildWork(
   }
 
   const noun = committable.length === 1 ? 'path' : 'paths';
-  const message = withDaemonCoAuthorTrailer(
-    [
-      `build: commit work left uncommitted by BUILD attempt ${input.attempt}`,
-      '',
-      `Engine-owned commit of ${committable.length} ${noun} the settled build attempt did not commit.`,
-      'Downstream gates re-verify this work independently; the commit preserves it, nothing more.',
-      ...(taskIds.length === 0 ? [] : ['', ...taskIds.map((id) => `Task: ${id}`)]),
-    ].join('\n'),
-  );
+  const message = [
+    `build: commit work left uncommitted by BUILD attempt ${input.attempt}`,
+    '',
+    `Engine-owned commit of ${committable.length} ${noun} the settled build attempt did not commit.`,
+    'Downstream gates re-verify this work independently; the commit preserves it, nothing more.',
+    ...(taskIds.length === 0 ? [] : ['', ...taskIds.map((id) => `Task: ${id}`)]),
+  ].join('\n');
 
   // A feature that has entered the durable stacked-child lifecycle must not
   // race a restack move; its commit goes through the journal-fenced helper.
@@ -109,7 +107,7 @@ export async function commitUncommittedBuildWork(
       worktree: input.projectRoot,
       slug: input.slug,
       pathspec: committable,
-      message,
+      message: withDaemonCoAuthorTrailer(message),
     });
     if (guarded !== undefined) {
       if (guarded.kind === 'written') return { kind: 'committed', sha: guarded.sha, taskIds };
@@ -125,7 +123,7 @@ export async function commitUncommittedBuildWork(
     return fail(`git add: ${failureText(error)}`);
   }
   try {
-    await run(['commit', '-m', message]);
+    await run(['commit', '-m', withDaemonCoAuthorTrailer(message)]);
   } catch (error) {
     return fail(failureText(error));
   }
