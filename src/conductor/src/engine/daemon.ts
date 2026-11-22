@@ -514,6 +514,12 @@ interface DaemonSchedulerDeps {
   /** Operator authorizations are independent of base movement and run every loop. */
   consumeResumeAuthorizations?: () => Promise<void>;
   /**
+   * Lease-held verified-rebase admission. The implementation may only make a
+   * recovered feature eligible; the normal scheduler remains dispatch owner.
+   * Optional while the daemon-cli composition root is being upgraded.
+   */
+  reconcileVerifiedRebaseRecoveries?: () => Promise<void>;
+  /**
    * Task 18 (ADR-013): optional reconciliation hook for halt-PR state.
    * Invoked on startup and once per idle poll tick, BEFORE sweepMergeableLabels
    * so labels are correct when the mergeable sweep evaluates. Best-effort: a throw
@@ -1508,6 +1514,7 @@ export async function runDaemon(deps: DaemonDeps, options: DaemonOptions): Promi
         },
       ],
       ['resume-authorizations', consumeResumeAuthorizations],
+      ['verified-rebase-recovery', async () => { await deps.reconcileVerifiedRebaseRecoveries?.(); }],
       [
         'reconcileHaltPrs',
         async () =>
