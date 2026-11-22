@@ -4,9 +4,7 @@ const writeHaltMarker = vi.hoisted(() => vi.fn());
 
 vi.mock('../../src/engine/halt-marker.js', () => ({ writeHaltMarker }));
 
-import {
-  createProviderLifecycleSupervisor,
-} from '../../src/engine/provider-lifecycle.js';
+import { createProviderLifecycleSupervisor } from '../../src/engine/provider-lifecycle.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 
 function deferred<T>(): {
@@ -45,10 +43,11 @@ describe('provider lifecycle transitions', () => {
         preparationTimeoutMinutes: 5,
         timer: {
           now: () => now,
-          schedule: (callback, delayMilliseconds) => setTimeout(() => {
-            now += delayMilliseconds + 30_123;
-            callback();
-          }, delayMilliseconds),
+          schedule: (callback, delayMilliseconds) =>
+            setTimeout(() => {
+              now += delayMilliseconds + 30_123;
+              callback();
+            }, delayMilliseconds),
           cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
         },
         recovery: {
@@ -143,11 +142,7 @@ describe('provider lifecycle transitions', () => {
 
       expect({ result: await result, events }).toEqual({
         result: 'replacement-result',
-        events: [
-          'candidate:attempt-1',
-          'persist:recovering:1',
-          'candidate:attempt-2',
-        ],
+        events: ['candidate:attempt-1', 'persist:recovering:1', 'candidate:attempt-2'],
       });
     } finally {
       first.resolve('stale-first-result');
@@ -275,9 +270,9 @@ describe('provider lifecycle transitions', () => {
     });
 
     try {
-      const result = supervisor.supervise((lease) => (
-        lease.attempt.id === 'attempt-1' ? first.promise : replacement.promise
-      ));
+      const result = supervisor.supervise((lease) =>
+        lease.attempt.id === 'attempt-1' ? first.promise : replacement.promise,
+      );
 
       await vi.advanceTimersByTimeAsync(5 * 60_000);
       first.resolve('stale-first-result');
@@ -369,25 +364,31 @@ describe('provider lifecycle transitions', () => {
     const episodeStore: ProviderLifecycleEpisodeStore & {
       clearProviderLifecycleEpisode: typeof clearProviderLifecycleEpisode;
     } = {
-      readProviderLifecycleEpisode: vi.fn(async (_projectRoot, logicalStep) => (
+      readProviderLifecycleEpisode: vi.fn(async (_projectRoot, logicalStep) =>
         logicalStep === 'build'
-          ? { recoveryAuthority: 'persisted' as const, lifecycle: {
-            phase: 'recovering' as const,
-            attempt: { logicalStep: 'build', id: 'build-attempt-1' },
-            recoveryCount: 1,
-            reason: 'preparation-timeout' as const,
-          } }
-          : { recoveryAuthority: 'persisted' as const, lifecycle: {
-            phase: 'recovering' as const,
-            attempt: { logicalStep: 'build_review', id: 'review-attempt-1' },
-            recoveryCount: 1,
-            reason: 'preparation-timeout' as const,
-          } }
-      )),
+          ? {
+              recoveryAuthority: 'persisted' as const,
+              lifecycle: {
+                phase: 'recovering' as const,
+                attempt: { logicalStep: 'build', id: 'build-attempt-1' },
+                recoveryCount: 1,
+                reason: 'preparation-timeout' as const,
+              },
+            }
+          : {
+              recoveryAuthority: 'persisted' as const,
+              lifecycle: {
+                phase: 'recovering' as const,
+                attempt: { logicalStep: 'build_review', id: 'review-attempt-1' },
+                recoveryCount: 1,
+                reason: 'preparation-timeout' as const,
+              },
+            },
+      ),
       writeProviderLifecycleEpisode: vi.fn(),
       clearProviderLifecycleEpisode,
     };
-    const createSupervisor = (logicalStep: 'build' | 'build_review', states: string[]) => (
+    const createSupervisor = (logicalStep: 'build' | 'build_review', states: string[]) =>
       createProviderLifecycleSupervisor({
         attempt: { logicalStep, id: `${logicalStep}-attempt-2` },
         recoveryCount: 0,
@@ -399,8 +400,7 @@ describe('provider lifecycle transitions', () => {
           createReplacementAttempt: () => ({ logicalStep, id: `${logicalStep}-attempt-3` }),
         },
         onStateChange: (state) => states.push(`${state.attempt.logicalStep}:${state.recoveryCount}`),
-      })
-    );
+      });
     const buildStates: string[] = [];
     const reviewStates: string[] = [];
 
@@ -441,9 +441,9 @@ describe('provider lifecycle transitions', () => {
         },
       });
 
-      const result = supervisor.supervise((lease) => (
-        lease.attempt.id === 'attempt-1' ? first.promise : { provider: 'replacement' }
-      ));
+      const result = supervisor.supervise((lease) =>
+        lease.attempt.id === 'attempt-1' ? first.promise : { provider: 'replacement' },
+      );
 
       await vi.advanceTimersByTimeAsync(5 * 60_000);
 
@@ -544,5 +544,4 @@ describe('provider lifecycle transitions', () => {
       vi.useRealTimers();
     }
   });
-
 });

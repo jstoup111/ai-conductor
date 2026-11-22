@@ -118,9 +118,7 @@ export class DispatchLiveBoundary {
     if (!active) throw new DispatchLiveBoundaryExpiredError();
     try {
       this.openWindow();
-      live = this.memoize(this.liveSurfaces, args.liveCheckout, () =>
-        this.fingerprintLiveCheckout(args.liveCheckout),
-      );
+      live = this.memoize(this.liveSurfaces, args.liveCheckout, () => this.fingerprintLiveCheckout(args.liveCheckout));
       const providerKey = `${args.provider}\0${args.providerHome}`;
       provider = this.memoize(this.providerSurfaces, providerKey, () =>
         this.fingerprintProviderState({

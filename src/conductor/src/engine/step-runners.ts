@@ -2226,43 +2226,46 @@ export class DefaultStepRunner implements StepRunner {
     });
     try {
       const result = await supervisor.supervise((lease) =>
-        run({
-          ...baseOptions,
-          // Auxiliary provider paths (custom review, regrade, and coverage
-          // binding) share this supervisor.  Stamp the daemon-owned context
-          // here so none of those direct executor call sites can omit either
-          // attribution or managed-observation preparation.
-          ...(this.providerExecutionContext?.managedSessionContext
-            ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
-            : {}),
-          onActivity: pulse,
-          providerStreamObserverForCandidate: (provider) => {
-            const throttle = createProviderStreamThrottle<ProviderStreamObservation>(
-              (observation) => {
-                void this.events
-                  ?.emit({
-                    type: 'provider_stream_progress',
-                    step,
-                    provider,
-                    ...observation,
-                    ts: new Date().toISOString(),
-                  })
-                  .catch(() => {});
-              },
-              { minIntervalMs: providerStreamIntervalMs },
-            );
-            const heartbeat = setInterval(throttle.heartbeat, DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS);
-            heartbeat.unref(); // portability-ok: candidate-owned telemetry heartbeat is cleared at candidate close
-            return {
-              onProviderStream: throttle,
-              close: () => {
-                clearInterval(heartbeat);
-                throttle.flush();
-              },
-            };
+        run(
+          {
+            ...baseOptions,
+            // Auxiliary provider paths (custom review, regrade, and coverage
+            // binding) share this supervisor.  Stamp the daemon-owned context
+            // here so none of those direct executor call sites can omit either
+            // attribution or managed-observation preparation.
+            ...(this.providerExecutionContext?.managedSessionContext
+              ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+              : {}),
+            onActivity: pulse,
+            providerStreamObserverForCandidate: (provider) => {
+              const throttle = createProviderStreamThrottle<ProviderStreamObservation>(
+                (observation) => {
+                  void this.events
+                    ?.emit({
+                      type: 'provider_stream_progress',
+                      step,
+                      provider,
+                      ...observation,
+                      ts: new Date().toISOString(),
+                    })
+                    .catch(() => {});
+                },
+                { minIntervalMs: providerStreamIntervalMs },
+              );
+              const heartbeat = setInterval(throttle.heartbeat, DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS);
+              heartbeat.unref(); // portability-ok: candidate-owned telemetry heartbeat is cleared at candidate close
+              return {
+                onProviderStream: throttle,
+                close: () => {
+                  clearInterval(heartbeat);
+                  throttle.flush();
+                },
+              };
+            },
+            spawnPermit: lease.spawnPermit,
           },
-          spawnPermit: lease.spawnPermit,
-        }, lease.onRevoked),
+          lease.onRevoked,
+        ),
       );
       if (isProviderLifecycleHalted(result)) {
         return mapProviderLifecycleHalt(result, this.configuredProviders[0] ?? 'unknown');
