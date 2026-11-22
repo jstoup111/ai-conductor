@@ -136,9 +136,7 @@ the step that must re-run and the input that did not change, so that I learn the
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a `build_review` dispatch whose input assembly raises the typed suite-proof error, when the
-  loop terminates the run, then the halt reason names `test_suite` as the step that must re-run and
-  names the unchanged input.
+- Given a daemon run that has exhausted both automatic suite-proof recovery reruns, when `build_review` still requires fresh proof, then the halt identifies the unusable proof, names `build_review` and `test_suite`, and reports two attempts.
 - Given that halt, when it is classified, then it is written `needs-human`, so the daemon's re-kick
   sweep does not clear and re-dispatch it.
 
@@ -162,7 +160,7 @@ occurrence, so that provider spend and wall-clock are not consumed by identical 
 
 #### Happy Path
 - Given a `build_review` dispatch that fails with the typed suite-proof error on attempt 1, when the
-  retry decision is made, then the decision is `route` and no further attempt is dispatched.
+  retry decision is made, then the decision is `route`. With proof verification enabled and a recovery attempt available, the daemon reruns `test_suite` before retrying review.
 - Given that decision, when it is recorded, then a `retry_decision` event carries the routing signal
   and the step, so the existing rerun-vs-route measurement covers this class.
 

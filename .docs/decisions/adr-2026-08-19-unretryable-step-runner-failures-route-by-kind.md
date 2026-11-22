@@ -117,6 +117,8 @@ provable.
 > `advisory` step is skipped after its single attempt, exactly as an advisory step that exhausted its
 > retries is skipped today, because an advisory failure must not block the pipeline.
 
+> **Amended 2026-11-21 by #3586:** In daemon runs with proof verification and retry routing enabled, build review can recover by rerunning the test suite for the active build context. An early proof check and a late refusal at review share two recovery reruns per feature across children and restarts. If review needs another rerun after both attempts, its needs-human halt names build_review, test_suite, and the attempt count. A suite execution reporting failing tests takes the existing test-failure route. This exception lets the daemon resolve a known prerequisite before asking the operator to act.
+
 **This is the residual path, not the common one.** With `adr-2026-08-19-tree-attesting-gates-recheck-before-dispatch`
 in force, a stale proof is resolved by re-dispatching `test_suite` and this halt is not reached. D3
 governs the case where the proof is stale for a reason the loop genuinely cannot resolve — which is
