@@ -523,8 +523,8 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     });
   });
 
-  // Covers: task:2, task:13
-  it('resumes a settled leaf return through its child overlay before whole-feature validation', async () => {
+  // Covers: task:2, task:13, task:rem-prd-audit-2
+  it('resumes a settled leaf return through its child overlay to manual test before whole-feature validation', async () => {
     const { subject, statePath, config } = await fixture();
     await settleFixtureLeafReturn(subject, 'manual test repair lands on leaf');
 
