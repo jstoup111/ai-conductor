@@ -312,7 +312,7 @@ describe('child-scoped build-review remediation cases', () => {
     ]);
   });
 
-  // Covers: task:12, task:13
+  // Covers: task:12, task:13, task:rem-as-built-rem-as-built-d4-adopt-before-durable-recovery
   it.each([
     { label: 'with adjudication disabled', adjudicationEnabled: false },
     { label: 'before adjudicated durable recovery', adjudicationEnabled: true },

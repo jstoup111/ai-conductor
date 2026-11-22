@@ -378,7 +378,7 @@ describe('Conductor typed remediation-plan admission', () => {
     });
   });
 
-  // Covers: task:4
+  // Covers: task:4, task:rem-prd-audit-rem-prd-audit-s1-4-zero-work-evidence
   it('projects a zero-work child stall from child 3’s regional question evidence', async () => {
     const result = await fixture('claude', [{ kind: 'structured', finalStructuredResult: buildStallOutput() }], 2, {
       activeChild: 3,
