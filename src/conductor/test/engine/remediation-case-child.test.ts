@@ -314,9 +314,11 @@ describe('child-scoped build-review remediation cases', () => {
 
   // Covers: task:12, task:13, task:rem-as-built-rem-as-built-d4-adopt-before-durable-recovery
   it.each([
-    { label: 'with adjudication disabled', adjudicationEnabled: false },
-    { label: 'before adjudicated durable recovery', adjudicationEnabled: true },
-  ])('adopts a legacy flat work order at BUILD dispatch $label', async ({ adjudicationEnabled }) => {
+    { label: 'with adjudication disabled', adjudicationEnabled: false, dispatchChild: 3 },
+    // Run the owner: durable recovery must read the adopted order before the
+    // later per-dispatch adoption boundary can conceal a missing-order halt.
+    { label: 'before adjudicated durable recovery in its owning child', adjudicationEnabled: true, dispatchChild: 4 },
+  ])('adopts a legacy flat work order at BUILD dispatch $label', async ({ adjudicationEnabled, dispatchChild }) => {
     const root = await projectRoot();
     const child3 = parseChildId(3)!;
     const child4 = parseChildId(4)!;
@@ -369,7 +371,8 @@ describe('child-scoped build-review remediation cases', () => {
       verifyArtifacts: false,
       maxRetries: 2,
     });
-    (conductor as unknown as { activeRegionChild: typeof child3 }).activeRegionChild = child3;
+    (conductor as unknown as { activeRegionChild: typeof child3 }).activeRegionChild =
+      dispatchChild === 3 ? child3 : child4;
 
     await conductor.run();
 
