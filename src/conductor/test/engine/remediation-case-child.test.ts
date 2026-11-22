@@ -312,7 +312,7 @@ describe('child-scoped build-review remediation cases', () => {
     ]);
   });
 
-  // Covers: rem-as-built-rem-asbuilt-d4-legacy-cleanup
+  // Covers: task:12, task:13
   it('adopts and retires flat remediation inputs at BUILD dispatch when adjudication is disabled', async () => {
     const root = await projectRoot();
     const child3 = parseChildId(3)!;
@@ -384,7 +384,7 @@ describe('child-scoped build-review remediation cases', () => {
     ]);
   });
 
-  // Covers: rem-as-built-rem-asbuilt-d3-terminal-stall-retire
+  // Covers: task:10, task:11
   it.each([
     [
       'remediation budget exhaustion',
