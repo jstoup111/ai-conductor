@@ -1023,7 +1023,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     });
   });
 
-  // Covers: task:1, task:13
+  // Covers: task:1, task:13, task:rem-prd-audit-1a
   it('adopts settled leaf evidence before live whole-feature validation after a routed host exits', async () => {
     const { subject, statePath, config, leafHead } = await fixture();
     const git = makeGitRunner(subject.repo);
