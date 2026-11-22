@@ -197,16 +197,11 @@ export type RemediationProjectionResult =
 export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
   requiredReferencesBytes: 3_911,
   tasksBytes: 82_308,
-  pendingAsBuiltFindingsBytes: 9_989,
-  priorLapsBytes: 111,
-  priorAsBuiltCasesBytes: 8_929,
-  refusalsBytes: 0,
 } as const;
 
 /** D7.2/D7.3 floor for the plan-task and criterion-bearing dimensions. */
 export const REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES = 256 * 1024;
 /** Non-empty allowance when a durable optional-history corpus is absent. */
-export const REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES = 4 * 1024;
 /** Covers the version, source, vocabulary, and JSON wrapper outside named dimensions. */
 export const REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
 
@@ -230,36 +225,16 @@ const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
   // `.pipeline/kickback-ledger.json`: 9,989 B for 15 pending findings; D7.2 floor → 262,144 B.
   // Each finding carries its governing clause, so the set is criterion-bearing and the
   // optional-history floor would fault any as-built lap with roughly eight or more findings.
-  pendingAsBuiltFindingsBytes: roundUpPowerOfTwo(Math.max(
-    4 * 1024 * 1024,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes,
-  )),
   // `.pipeline/kickback-ledger.json`: 111 B prior-lap set; optional-history floor → 4,096 B.
-  priorLapsBytes: roundUpPowerOfTwo(Math.max(
-    4 * 1024 * 1024,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes,
-  )),
   // No `.docs/shipped` refusal record at BUILD (0 B); optional-history floor → 4,096 B.
-  refusalsBytes: roundUpPowerOfTwo(Math.max(
-    4 * 1024 * 1024,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes,
-  )),
   // `.pipeline/remediation-cases.json` asBuiltCases: 8,929 B projected for 11 open
   // cases (#3677). Each case carries its source summaries, so the optional-history
   // floor faulted any as-built lap with roughly five or more open cases; D7.2 floor → 262,144 B.
-  priorAsBuiltCasesBytes: roundUpPowerOfTwo(Math.max(
-    4 * 1024 * 1024,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorAsBuiltCasesBytes,
-  )),
 } as const;
 
 const REMEDIATION_PROJECTION_TOTAL_LIMIT_BYTES = roundUpPowerOfTwo(
   REMEDIATION_PROJECTION_COMPONENT_LIMITS.requiredReferencesBytes +
   REMEDIATION_PROJECTION_COMPONENT_LIMITS.tasksBytes +
-  REMEDIATION_PROJECTION_COMPONENT_LIMITS.pendingAsBuiltFindingsBytes +
-  REMEDIATION_PROJECTION_COMPONENT_LIMITS.priorLapsBytes +
-  REMEDIATION_PROJECTION_COMPONENT_LIMITS.refusalsBytes +
-  REMEDIATION_PROJECTION_COMPONENT_LIMITS.priorAsBuiltCasesBytes +
   REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
 );
 
@@ -277,10 +252,6 @@ export const REMEDIATION_PROJECTION_LIMITS = {
 export interface RemediationProjectionLimits extends RemediationEvidenceLimits {
   readonly requiredReferencesBytes: number;
   readonly tasksBytes: number;
-  readonly pendingAsBuiltFindingsBytes: number;
-  readonly priorLapsBytes: number;
-  readonly priorAsBuiltCasesBytes: number;
-  readonly refusalsBytes: number;
   readonly totalBytes: number;
 }
 
@@ -327,11 +298,6 @@ function utf8Bytes(text: string): number {
 
 function serializedBytes(value: unknown): number {
   return utf8Bytes(JSON.stringify(value));
-}
-
-function structuredProjection(projection: RemediationProjection): Omit<RemediationProjection, 'evidence'> {
-  const { evidence: _evidence, ...structured } = projection;
-  return structured;
 }
 
 type RemediationHistoryContents = Pick<
@@ -417,15 +383,9 @@ function projectionLimitFault(
   const dimensions: readonly { readonly dimension: string; readonly actual: number; readonly limit: number }[] = [
     { dimension: 'required-references', actual: serializedBytes(projection.requiredReferences), limit: limits.requiredReferencesBytes },
     { dimension: 'tasks', actual: serializedBytes(projection.tasks), limit: limits.tasksBytes },
-    { dimension: 'pending-as-built-findings', actual: serializedBytes(projection.pendingAsBuiltFindings), limit: limits.pendingAsBuiltFindingsBytes },
-    { dimension: 'prior-laps', actual: serializedBytes(projection.priorLaps), limit: limits.priorLapsBytes },
-    ...(projection.priorAsBuiltCases === undefined ? [] : [{
-      dimension: 'prior-as-built-cases', actual: serializedBytes(projection.priorAsBuiltCases), limit: limits.priorAsBuiltCasesBytes,
-    }]),
-    { dimension: 'refusals', actual: serializedBytes(projection.refusals), limit: limits.refusalsBytes },
     // Evidence is bounded and omitted by its independent as-built caps. The
     // total named bound governs structured remediation input only (D7.3).
-    { dimension: 'total', actual: serializedBytes(structuredProjection(projection)), limit: limits.totalBytes },
+    { dimension: 'total', actual: serializedBytes(renderRemediationPromptProjection(projection)), limit: limits.totalBytes },
   ];
   const overflow = dimensions.find(({ actual, limit }) => actual > limit);
   return overflow === undefined
