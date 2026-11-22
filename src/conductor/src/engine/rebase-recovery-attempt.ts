@@ -77,9 +77,15 @@ export async function persistRebaseRecoveryAttempt(
 }
 
 /** The halt writer must bind its class to exactly the captured replay tuple. */
-export function matchesRebaseRecoveryAttempt(attempt: RebaseRecoveryAttempt | undefined, seed: ReplayIdentitySeed | undefined): boolean {
-  return attempt !== undefined && seed !== undefined &&
-    attempt.preRebaseHead === seed.preRebaseHead &&
-    attempt.mergeBase === seed.mergeBase &&
-    attempt.target === seed.target;
+export function matchesRebaseRecoveryAttempt(
+  live: RebaseRecoveryAttempt | undefined,
+  expected: RebaseRecoveryAttempt | undefined,
+): boolean {
+  return live !== undefined && expected !== undefined &&
+    live.generation === expected.generation &&
+    live.feature === expected.feature &&
+    live.child === expected.child &&
+    live.preRebaseHead === expected.preRebaseHead &&
+    live.mergeBase === expected.mergeBase &&
+    live.target === expected.target;
 }

@@ -907,6 +907,8 @@ export async function resumeRebaseFirst(opts: {
   verifyMergedShipment?: () => Promise<VerifiedMergedPrResult>;
   /** Test seam for the engine-owned rebase adapter. */
   performRebase?: typeof performRebase;
+  /** Test seam; production resolves the current stacked child before replay. */
+  resolveActiveChild?: typeof resolveActiveChild;
   /**
    * Post-rebase mechanical pre-verify capability for the `build` gate
    * (adr-2026-07-08-post-rebase-gate-first-mechanical-reverify). Optional
@@ -1053,8 +1055,17 @@ export async function resumeRebaseFirst(opts: {
     ));
   let outcome: RebaseOutcome;
   try {
+    const activeChild = opts.slug === undefined
+      ? undefined
+      : await (opts.resolveActiveChild ?? resolveActiveChild)(opts.worktreePath, opts.slug).catch(() => undefined);
+    const executionChild = activeChild && (activeChild.kind === 'active' || activeChild.kind === 'repair-pending')
+      ? activeChild.child
+      : undefined;
     outcome = await (opts.performRebase ?? performRebase)(
-      git, opts.worktreePath, opts.localBase, { translateAfterRebase },
+      git, opts.worktreePath, opts.localBase, {
+        translateAfterRebase,
+        ...(executionChild === undefined ? {} : { executionChild }),
+      },
     );
   } catch (err) {
     if (err instanceof ProtectedArtifactSealRejection) {

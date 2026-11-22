@@ -38,6 +38,7 @@ import {
   matchesRebaseRecoveryAttempt,
   persistRebaseRecoveryAttempt,
   readRebaseRecoveryAttempt,
+  type RebaseRecoveryAttempt,
 } from './rebase-recovery-attempt.js';
 import type { ReplayEvidence } from './gate-verdicts.js';
 import {
@@ -792,6 +793,8 @@ type RebaseOutcomeKind =
       reason: string;
       /** Immutable P/B/O captured before replay; not completed replay authority. */
       replaySeed?: ReplayIdentitySeed;
+      /** Durable replay operation captured before Git moved HEAD. */
+      recoveryAttempt?: RebaseRecoveryAttempt;
       /** A completed rebase failed a post-resolution acceptance guard. */
       resumeShape?: RebaseResumeShape;
       /** Git refused before creating rebase state; `--continue` is invalid. */
@@ -1342,7 +1345,7 @@ export async function writeRebaseOutcomeHalt(
   }
   if (!outcome.startFailure) {
     const attempt = await readRebaseRecoveryAttempt(projectRoot);
-    const haltClass = matchesRebaseRecoveryAttempt(attempt, outcome.replaySeed)
+    const haltClass = matchesRebaseRecoveryAttempt(attempt, outcome.recoveryAttempt)
       ? 'rebase-recovery'
       : 'needs-human';
     return writeRebaseHalt(projectRoot, outcome.conflicts, outcome.reason, events, outcome.resumeShape ?? 'paused-rebase', haltClass);
@@ -1681,16 +1684,19 @@ export async function performRebase(
     mergeBase: (await git(['merge-base', 'HEAD', base.ref])).stdout.trim(),
     target: (await git(['rev-parse', base.ref])).stdout.trim(),
   };
-  const recoveryAttempt = await persistRebaseRecoveryAttempt(projectRoot, replaySeed, opts?.executionChild);
-  if (recoveryAttempt.kind === 'failed') {
+  const persistedRecoveryAttempt = await persistRebaseRecoveryAttempt(projectRoot, replaySeed, opts?.executionChild);
+  if (persistedRecoveryAttempt.kind === 'failed') {
     return {
       kind: 'conflict_halt',
       conflicts: [],
-      reason: `could not persist rebase recovery attempt: ${recoveryAttempt.reason}`,
+      reason: `could not persist rebase recovery attempt: ${persistedRecoveryAttempt.reason}`,
       startFailure: true,
       replaySeed,
     };
   }
+  const recoveryAttempt = persistedRecoveryAttempt.kind === 'persisted'
+    ? persistedRecoveryAttempt.attempt
+    : undefined;
   const { preRebaseHead: preTree, mergeBase, target } = replaySeed;
   const attachReplayIdentity = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
     if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;
@@ -1700,6 +1706,7 @@ export async function performRebase(
   const attachReplaySeed = (outcome: Extract<RebaseOutcome, { kind: 'conflict_halt' }>): RebaseOutcome => ({
     ...outcome,
     replaySeed,
+    ...(recoveryAttempt === undefined ? {} : { recoveryAttempt }),
   });
   const translateCompletedRebase = async (flatten?: FlattenedReplayPlan): Promise<void> => {
     if (!opts?.translateAfterRebase) return;
@@ -2615,7 +2622,9 @@ export async function runGatedRebaseResolution(opts: {
       /* best-effort */
     }
   }
-  return resolved;
+  return resolved.kind === 'conflict_halt' && outcome.recoveryAttempt !== undefined
+    ? { ...resolved, recoveryAttempt: outcome.recoveryAttempt }
+    : resolved;
 }
 
 // ── Verdict + event wiring (consumed by the conductor) ───────────────────────

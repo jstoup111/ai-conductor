@@ -1728,6 +1728,25 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(res).toBe('skipped');
   });
 
+  it('Covers: task:1 gives daemon-started replay the current execution child before it can move HEAD', async () => {
+    await initFeatureRepo();
+    await writeSentinel();
+    let seenChild: number | undefined;
+    const result = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      slug: 'feature/foo',
+      resolveActiveChild: async () => ({ kind: 'active', child: 7 }) as never,
+      performRebase: async (_git, _root, _base, options) => {
+        seenChild = options?.executionChild;
+        return { kind: 'conflict_halt', conflicts: [], reason: 'controlled conflict' };
+      },
+    });
+    expect({ result, seenChild }).toEqual({ result: 'halted', seenChild: 7 });
+  });
+
   it('with sentinel + advanced base → rebases the branch onto the base, consumes the sentinel', async () => {
     await initFeatureRepo();
     // Advance base non-conflicting.
