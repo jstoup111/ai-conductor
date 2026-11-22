@@ -135,7 +135,10 @@ describe('operator park boundary contract', () => {
       "await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });",
       prdWideningReconciliationDispatch,
       buildReviewAdjudicationDispatch,
-      /const dispatch = await this\.stepRunner\.run\('remediate', state, \{\s*runId: attemptId,\s*retryReason: dispatchContext,\s*remediationRequest: \{ mode: 'gap-plan', projection: projectionResult\.projection \},\s*\}\);/g,
+      // The bounded gap-plan retry loop. Comment lines may sit between the
+      // option properties; after attempt 0 the retry reason carries the prior
+      // attempt's named fault (#3759).
+      /const dispatch = await this\.stepRunner\.run\('remediate', state, \{\s*runId: attemptId,(?:\s*\/\/[^\n]*)*\s*retryReason: attempt === 0 \? dispatchContext : withPriorRemediationAttemptFault\(dispatchContext, lastFault\),\s*remediationRequest: \{ mode: 'gap-plan', projection: projectionResult\.projection \},\s*\}\);/g,
       // Compatibility and provider-execution dispatches are reached only via
       // runSelfBuildDispatch, whose admission path performs the park check.
       /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*attempt: 1,\s*captureAttempt,\s*escalate: false,\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\.{3}\(abortSignal === undefined \? \{\} : \{ abortSignal \}\),\s*\.\.\.this\.buildReviewCapabilityOption\(name\),\s*\}\);/g,
