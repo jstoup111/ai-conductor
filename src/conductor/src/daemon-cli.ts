@@ -231,6 +231,7 @@ import {
   resolveHaltRetention,
   admitVerifiedRebaseRecoveries,
   evaluateRebaseRecoveryHalt,
+  makeRekickBuildPreVerify,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
@@ -2612,7 +2613,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             const git = makeGitRunner(worktreePath);
             const verdict = await applyRebaseVerdicts(worktreePath, {
               kind: 'changed', changedCodePaths: [], featureSurface: [], replay: result.replay,
-            }, false, undefined, git);
+            }, false, makeRekickBuildPreVerify(worktreePath, slug), git);
             if (!verdict.replay) throw new Error('verified replay produced no transition identity');
             const transition = await applyRebaseTransition({
               projectRoot: worktreePath,
