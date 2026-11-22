@@ -65,8 +65,8 @@ export async function persistFixtureRemediationPlan(
 ): Promise<void> {
   const request = options?.remediationRequest;
   const runId = options?.runId;
-  if (request?.mode !== 'gap-plan' || runId === undefined) {
-    throw new Error('fixture remediation dispatch requires a gap-plan request and run id');
+  if (request?.mode !== 'gap-plan' || runId === undefined || request.history === undefined) {
+    throw new Error('fixture remediation dispatch requires a gap-plan request, history index, and run id');
   }
   const validated = validateRemediationPlan(result, request.projection);
   if (validated.kind === 'rejected') {
@@ -102,8 +102,8 @@ export async function persistFixtureTestRemediationPlan(
   }[],
 ): Promise<void> {
   const request = options?.remediationRequest;
-  if (request?.mode !== 'gap-plan' || request.projection.source !== 'finish-verification') {
-    throw new Error('test remediation fixture requires a finish-verification gap-plan request');
+  if (request?.mode !== 'gap-plan' || request.history === undefined || request.projection.source !== 'finish-verification') {
+    throw new Error('test remediation fixture requires a finish-verification gap-plan request with a history index');
   }
   await persistFixtureRemediationPlan(projectRoot, options, {
     version: 'v1',
@@ -135,7 +135,9 @@ export async function persistFixtureProjectedRemediationPlan(
   }[],
 ): Promise<void> {
   const request = options?.remediationRequest;
-  if (request?.mode !== 'gap-plan') throw new Error('fixture remediation dispatch requires a gap-plan request');
+  if (request?.mode !== 'gap-plan' || request.history === undefined) {
+    throw new Error('fixture remediation dispatch requires a gap-plan request with a history index');
+  }
   const raw = dispositions.map((disposition) => {
     const reference = request.projection.requiredReferences.find((candidate) =>
       candidate.id === disposition.id ||

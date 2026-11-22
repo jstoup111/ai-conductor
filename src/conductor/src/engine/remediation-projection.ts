@@ -148,13 +148,10 @@ export interface RemediationProjectionHistory {
 /** The compact prompt form never embeds the durable history collections. */
 export function renderRemediationPromptProjection(
   projection: RemediationProjection,
-  history?: RemediationProjectionHistory,
-):
-  | RemediationProjection
-  | (Omit<RemediationProjection, 'pendingAsBuiltFindings' | 'priorAsBuiltCases' | 'priorLaps' | 'refusals'> & {
-      readonly history: RemediationProjectionHistory;
-    }) {
-  if (history === undefined) return projection;
+  history: RemediationProjectionHistory,
+): Omit<RemediationProjection, 'pendingAsBuiltFindings' | 'priorAsBuiltCases' | 'priorLaps' | 'refusals'> & {
+  readonly history: RemediationProjectionHistory;
+} {
   const {
     pendingAsBuiltFindings: _pending,
     priorAsBuiltCases: _cases,
@@ -180,6 +177,8 @@ export interface RemediationProjectionRequest {
   readonly featureDesc?: string;
   /** Freshness context for the authoritative PRD-audit verdict reader. */
   readonly attemptRunId?: string;
+  /** A fresh, round-scoped key for durable history snapshots. */
+  readonly historySnapshotId?: string;
   readonly config?: CompletionContext['config'];
   readonly git?: CompletionContext['git'];
   readonly refusals?: readonly RefusalReworkEvidence[];
@@ -326,11 +325,10 @@ async function writeHistoryFile(
 
 async function writeRemediationHistory(
   worktree: string,
-  attemptRunId: string | undefined,
+  attemptId: string,
   projection: RemediationProjection,
   filesystem: NonNullable<RemediationProjectionDependencies['filesystem']>,
 ): Promise<RemediationProjectionHistory> {
-  const attemptId = attemptRunId ?? 'unknown-attempt';
   const relativeDirectory = '.pipeline/remediation-history';
   const directory = join(worktree, relativeDirectory);
   const activePath = join(directory, `${attemptId}.active.json`);
@@ -382,6 +380,7 @@ async function writeRemediationHistory(
 
 function projectionLimitFault(
   projection: RemediationProjection,
+  history: RemediationProjectionHistory,
   source: RemediationProjectionSource,
   limits: RemediationProjectionLimits,
 ): RemediationProjectionResult | undefined {
@@ -396,7 +395,9 @@ function projectionLimitFault(
     // total named bound governs structured remediation input only (D7.3).
     {
       dimension: 'total',
-      actual: serializedBytes(renderRemediationPromptProjection(projection)),
+      actual: serializedBytes(
+        (({ evidence: _evidence, ...prompt }) => prompt)(renderRemediationPromptProjection(projection, history)),
+      ),
       limit: limits.totalBytes,
     },
   ];
@@ -722,12 +723,15 @@ export async function buildRemediationProjection(
       haltCategories: REMEDIATION_HALT_CATEGORIES,
     },
   };
-  const fault = projectionLimitFault(projection, request.source, limits);
-  if (fault !== undefined) return fault;
   const filesystem = dependencies.filesystem ?? { mkdir, writeFile, rename };
   let history: RemediationProjectionHistory;
   try {
-    history = await writeRemediationHistory(worktree, request.attemptRunId, projection, filesystem);
+    history = await writeRemediationHistory(
+      worktree,
+      request.historySnapshotId ?? request.attemptRunId ?? randomUUID(),
+      projection,
+      filesystem,
+    );
   } catch (error) {
     return preparationFault(
       'history snapshot',
@@ -736,5 +740,7 @@ export async function buildRemediationProjection(
       'history-write-failed',
     );
   }
+  const fault = projectionLimitFault(projection, history, request.source, limits);
+  if (fault !== undefined) return fault;
   return { ok: true, projection, history };
 }

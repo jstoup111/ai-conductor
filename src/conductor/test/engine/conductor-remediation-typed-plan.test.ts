@@ -20,6 +20,10 @@ import type {
   RemediationProjectionDependencies,
   RemediationProjectionLimits,
 } from '../../src/engine/remediation-projection.js';
+import {
+  buildRemediationProjection,
+  renderRemediationPromptProjection,
+} from '../../src/engine/remediation-projection.js';
 import type { ConductState } from '../../src/types/index.js';
 import { createRemediationPlanProviderFixture } from './remediation-plan-fixtures.js';
 
@@ -698,7 +702,10 @@ describe('Conductor typed remediation-plan admission', () => {
   });
 
   // Covers: task:3
-  it('leaves an earlier attempt history intact when a new remediation attempt is prepared', async () => {
+  it.each([
+    ['the same run id', 'attempt-one'],
+    ['no run id', undefined],
+  ] as const)('leaves an earlier round history intact when a new remediation round is prepared with %s', async (_label, runId) => {
     const result = await fixture(
       'codex',
       [
@@ -706,7 +713,7 @@ describe('Conductor typed remediation-plan admission', () => {
         { kind: 'structured', finalStructuredResult: output() },
       ],
       1,
-      { attemptRunId: 'attempt-one' },
+      runId === undefined ? {} : { attemptRunId: runId },
     );
     const directory = join(result.root, '.pipeline', 'remediation-history');
     const firstFiles = (await readdir(directory)).sort();
@@ -741,7 +748,7 @@ describe('Conductor typed remediation-plan admission', () => {
         diagnostics: [],
         recordedDispositions: [],
       },
-      { attemptId: 'attempt-two', codeStamp: null },
+      { attemptId: runId ?? 'attempt-two', codeStamp: null },
     );
     const next = new Conductor({
       stateFilePath: join(result.root, '.pipeline', 'conduct-state.json'),
@@ -754,7 +761,7 @@ describe('Conductor typed remediation-plan admission', () => {
       config: result.config,
     });
     (next as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...result.state };
-    (next as unknown as { currentRunId: string }).currentRunId = 'attempt-two';
+    if (runId !== undefined) (next as unknown as { currentRunId: string }).currentRunId = runId;
     await (
       next as unknown as {
         planRemediation(
@@ -939,9 +946,19 @@ describe('Conductor typed remediation-plan admission', () => {
 
     expect(result.outcome).toMatchObject({ kind: 'halt' });
     expect(result.provider.invocationCount).toBe(0);
-    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(
-      /dimension total \(actual \d+, limit 1\)/,
+    const projected = await buildRemediationProjection(result.root, {
+      source: 'prd-audit',
+      activePlanPath: result.planPath,
+      config: result.config,
+    });
+    if (!projected.ok) throw new Error(projected.fault.detail);
+    const { evidence: _evidence, ...compactPrompt } = renderRemediationPromptProjection(
+      projected.projection,
+      projected.history,
     );
+    const halt = await readFile(join(result.root, '.pipeline', 'HALT'), 'utf8');
+    const actual = /dimension total \(actual (\d+), limit 1\)/.exec(halt)?.[1];
+    expect(actual).toBe(String(Buffer.byteLength(JSON.stringify(compactPrompt), 'utf8')));
   });
 
   // Covers: task:4

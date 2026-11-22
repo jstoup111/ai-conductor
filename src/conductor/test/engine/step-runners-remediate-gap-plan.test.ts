@@ -227,7 +227,7 @@ describe('remediate gap-plan native-schema dispatch', () => {
         'remediate',
         {},
         {
-          remediationRequest: { mode: 'gap-plan', projection },
+          remediationRequest: { mode: 'gap-plan', projection, history },
         },
       );
 
@@ -237,7 +237,7 @@ describe('remediate gap-plan native-schema dispatch', () => {
       expect(options.nativeSchema).toBe(REMEDIATION_PLAN_SCHEMA);
       expect(options.sessionId).not.toBe('runner-session');
       expect(options.prompt).toContain(renderRemediationPlanShape());
-      expect(options.prompt).toContain(JSON.stringify(projection));
+      expect(options.prompt).toContain(JSON.stringify(renderRemediationPromptProjection(projection, history)));
     },
   );
 
@@ -250,7 +250,7 @@ describe('remediate gap-plan native-schema dispatch', () => {
       'remediate',
       {},
       {
-        remediationRequest: { mode: 'gap-plan', projection },
+        remediationRequest: { mode: 'gap-plan', projection, history },
       },
     );
 
@@ -275,7 +275,7 @@ describe('remediate gap-plan native-schema dispatch', () => {
       'remediate',
       {},
       {
-        remediationRequest: { mode: 'gap-plan', projection },
+        remediationRequest: { mode: 'gap-plan', projection, history },
       },
     );
 
@@ -301,7 +301,7 @@ describe('remediate gap-plan native-schema dispatch', () => {
       {},
       {
         runId: 'gap-plan-attempt',
-        remediationRequest: { mode: 'gap-plan', projection },
+        remediationRequest: { mode: 'gap-plan', projection, history },
       },
     );
 
@@ -343,7 +343,7 @@ describe('remediate gap-plan native-schema dispatch', () => {
       {},
       {
         runId: 'rejected-gap-plan-attempt',
-        remediationRequest: { mode: 'gap-plan', projection },
+        remediationRequest: { mode: 'gap-plan', projection, history },
       },
     );
 
@@ -452,7 +452,7 @@ describe('remediate gap-plan native-schema dispatch', () => {
       {},
       {
         runId: 'persistence-fault-attempt',
-        remediationRequest: { mode: 'gap-plan', projection },
+        remediationRequest: { mode: 'gap-plan', projection, history },
       },
     );
 

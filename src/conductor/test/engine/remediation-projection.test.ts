@@ -8,6 +8,7 @@ import {
   buildRemediationProjection,
   REMEDIATION_PROJECTION_LIMITS,
   REMEDIATION_PROJECTION_VERSION,
+  renderRemediationPromptProjection,
 } from '../../src/engine/remediation-projection.js';
 import { readPendingAsBuiltRemediationFindings } from '../../src/engine/kickback-ledger.js';
 import {
@@ -443,9 +444,9 @@ describe('remediation projection', () => {
   });
 
   // Covers: task:1
-  it('writes complete large as-built history to the attempt snapshot before gap planning', async () => {
+  it('keeps oversized as-built history out of the total prompt limit while snapshotting every history dimension', async () => {
     const root = await fixture();
-    const cases = Array.from({ length: 11 }, (_, index) => ({
+    const cases = Array.from({ length: 100 }, (_, index) => ({
       id: `case-${index + 1}`,
       domain: 'as_built',
       status: 'open',
@@ -457,7 +458,7 @@ describe('remediation projection', () => {
           attemptId: 'prior',
           class: 'REMEDIABLE',
           reference: { kind: 'plan-task', taskId: '7' },
-          summary: `Case ${index + 1}: ${'full durable source text '.repeat(40)}`,
+          summary: `Case ${index + 1}: ${'full durable source text '.repeat(100)}`,
           relation: 'new',
           reason: 'Captured by the prior as-built review.',
         },
@@ -516,17 +517,12 @@ describe('remediation projection', () => {
       join(root, '.pipeline', 'kickback-ledger.json'),
       JSON.stringify({
         version: 1,
-        gates: {
-          architecture_review_as_built: {
-            count: 1,
-            cumulative: 1,
-            laps: 1,
-            treeHash: null,
-            lastReason: 'prior',
-            priorVerdict: true,
-            resolvedBefore: 0,
-          },
-        },
+        gates: Object.fromEntries(
+          Array.from({ length: 4_000 }, (_, index) => [
+            `gate-${index}`,
+            { count: 1, cumulative: 1, laps: 1, treeHash: null, lastReason: 'prior', priorVerdict: true, resolvedBefore: 0 },
+          ]),
+        ),
         pendingAsBuiltRemediationFindings: largePending,
       }),
     );
@@ -534,15 +530,19 @@ describe('remediation projection', () => {
       key: `S1.${index + 1}`,
       decisionId: `refusal-${index + 1}`,
       revision: 1,
-      rationale: `Refusal ${index + 1}: complete refusal evidence.`,
+      rationale: `Refusal ${index + 1}: ${'complete refusal evidence. '.repeat(3_000)}`,
     }));
 
-    const result = await buildRemediationProjection(root, {
-      source: 'as-built',
-      activePlanPath: '.docs/plans/active.md',
-      attemptRunId: 'large-attempt',
-      refusals,
-    });
+    const result = await buildRemediationProjection(
+      root,
+      {
+        source: 'as-built',
+        activePlanPath: '.docs/plans/active.md',
+        attemptRunId: 'large-attempt',
+        refusals,
+      },
+      { totalBytes: 1024 * 1024 },
+    );
     if (!result.ok) throw new Error(result.fault.detail);
 
     const activePath = join(root, '.pipeline', 'remediation-history', 'large-attempt.active.json');
@@ -551,8 +551,10 @@ describe('remediation projection', () => {
       readFile(activePath, 'utf8').then(JSON.parse),
       readFile(resolvedPath, 'utf8').then(JSON.parse),
     ]);
-    expect(Buffer.byteLength(JSON.stringify(result.projection.priorAsBuiltCases), 'utf8')).toBeGreaterThan(8 * 1024);
-    expect(Buffer.byteLength(JSON.stringify({ largePending, refusals }), 'utf8')).toBeGreaterThan(512 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(result.projection.priorAsBuiltCases), 'utf8')).toBeGreaterThan(200 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(result.projection.pendingAsBuiltFindings), 'utf8')).toBeGreaterThan(200 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(result.projection.priorLaps), 'utf8')).toBeGreaterThan(100 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(result.projection.refusals), 'utf8')).toBeGreaterThan(200 * 1024);
     expect(active.priorAsBuiltCases).toEqual(result.projection.priorAsBuiltCases);
     expect(active.pendingAsBuiltFindings).toEqual(result.projection.pendingAsBuiltFindings);
     expect(active.priorLaps).toEqual(result.projection.priorLaps);
@@ -570,11 +572,53 @@ describe('remediation projection', () => {
         ids: result.projection.pendingAsBuiltFindings.map((finding) => finding.finding),
         count: 3,
       },
-      priorAsBuiltCases: { ids: result.projection.priorAsBuiltCases?.map((entry) => entry.id), count: 11 },
-      priorLaps: { ids: ['architecture_review_as_built'], count: 1 },
+      priorAsBuiltCases: { ids: result.projection.priorAsBuiltCases?.map((entry) => entry.id), count: 100 },
+      priorLaps: { count: 4_000 },
       refusals: { ids: refusals.map((refusal) => refusal.decisionId), count: 3 },
     });
     expect(resolved).toEqual({ pendingAsBuiltFindings: [], priorAsBuiltCases: [], priorLaps: [], refusals: [] });
+
+    const { evidence: _evidence, ...compactPrompt } = renderRemediationPromptProjection(
+      result.projection,
+      result.history,
+    );
+    const compactBytes = Buffer.byteLength(JSON.stringify(compactPrompt), 'utf8');
+    const bounded = await buildRemediationProjection(
+      root,
+      {
+        source: 'as-built',
+        activePlanPath: '.docs/plans/active.md',
+        attemptRunId: 'large-attempt',
+        refusals,
+      },
+      { totalBytes: compactBytes },
+    );
+    expect(bounded).toMatchObject({ ok: true });
+  });
+
+  // Covers: task:8
+  it('reports the compact prompt projection size, excluding evidence, for a total-limit fault', async () => {
+    const root = await fixture();
+    const request = {
+      source: 'build-stall' as const,
+      activePlanPath: '.docs/plans/active.md',
+      featureDesc: 'A bounded build stall.',
+      historySnapshotId: 'total-limit',
+    };
+    const admitted = await buildRemediationProjection(root, request, { totalBytes: 1024 * 1024 });
+    if (!admitted.ok) throw new Error(admitted.fault.detail);
+    const { evidence: _evidence, ...compactPrompt } = renderRemediationPromptProjection(
+      admitted.projection,
+      admitted.history,
+    );
+
+    const rejected = await buildRemediationProjection(root, request, { totalBytes: 1 });
+    await expectPreparationFault(rejected, {
+      source: 'build-stall',
+      dimension: 'total',
+      actual: Buffer.byteLength(JSON.stringify(compactPrompt), 'utf8'),
+      limit: 1,
+    });
   });
 
   // Covers: task:7

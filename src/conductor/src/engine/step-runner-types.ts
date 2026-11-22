@@ -279,7 +279,7 @@ export interface StepRunOptions {
         /** Engine-owned input for a provider-native remediation disposition plan. */
         readonly mode: 'gap-plan';
         readonly projection: RemediationProjection;
-        readonly history?: import('./remediation-projection.js').RemediationProjectionHistory;
+        readonly history: import('./remediation-projection.js').RemediationProjectionHistory;
       };
   /**
    * This dispatch's engine-owned run identity, passed INTO the provider

@@ -4929,6 +4929,7 @@ export class Conductor {
         await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
       }
     }
+    const historySnapshotId = randomUUID();
     const projectionResult = await buildRemediationProjection(
       this.projectRoot,
       {
@@ -4936,6 +4937,7 @@ export class Conductor {
         activePlanPath: (await this.getActivePlanPath()) ?? undefined,
         featureDesc: state.feature_desc,
         attemptRunId,
+        historySnapshotId,
         config: this.config,
         git: this.prdAuditGit(),
         includedGates: remediationEvidenceSources.map((evidence) => evidence.gate),
