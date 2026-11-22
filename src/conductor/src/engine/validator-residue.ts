@@ -15,6 +15,7 @@ export interface QuarantineValidatorResidueInput {
   readonly git: GitRunner;
   readonly baseline: readonly string[];
   readonly source: string;
+  readonly now: Date;
 }
 
 /** List Git's non-ignored untracked paths using its NUL-delimited path listing. */
@@ -60,7 +61,7 @@ export async function quarantineValidatorResidue(
     const paths = current.filter((path) => !isBaselinePath(path, baseline));
     if (paths.length === 0) return { kind: 'none' };
 
-    const directory = `${VALIDATOR_RESIDUE_DIRECTORY}/${input.source}-${new Date().toISOString().replaceAll(':', '-')}`;
+    const directory = `${VALIDATOR_RESIDUE_DIRECTORY}/${input.source}-${input.now.toISOString().replaceAll(':', '-')}`;
     const ignored = await input.git(['check-ignore', '--quiet', '--', directory]);
     if (ignored.exitCode !== 0) {
       throw new Error(`validator residue destination is not ignored: ${directory}`);

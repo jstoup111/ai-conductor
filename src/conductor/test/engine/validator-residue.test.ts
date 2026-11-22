@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -21,6 +21,7 @@ describe('validator residue quarantine', () => {
   const runGit = async (args: string[]) => execa('git', args, { cwd: repository });
   const child = { child: parseChildId(1)!, position: parseChildId(1)!, branch: 'validator-child' };
   const refusalReport = 'docs/reports/manual-test-step17/report.html';
+  const residueNow = new Date('2026-11-15T12:34:56.789Z');
 
   beforeEach(async () => {
     repository = await mkdtemp(join(tmpdir(), 'validator-residue-'));
@@ -38,7 +39,6 @@ describe('validator residue quarantine', () => {
   });
 
   afterEach(async () => {
-    vi.useRealTimers();
     await rm(repository, { recursive: true, force: true });
   });
 
@@ -49,12 +49,18 @@ describe('validator residue quarantine', () => {
     await mkdir(join(repository, 'docs/reports/manual-test-step17'), { recursive: true });
     await writeFile(join(repository, relativePath), contents);
 
-    const result = await quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' });
+    const result = await quarantineValidatorResidue({
+      projectRoot: repository,
+      git,
+      baseline,
+      source: 'manual_test',
+      now: residueNow,
+    });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       kind: 'moved',
       paths: [relativePath],
-      directory: expect.stringMatching(/^\.pipeline\/validator-residue\/manual_test-/),
+      directory: '.pipeline/validator-residue/manual_test-2026-11-15T12-34-56.789Z',
     });
     if (result.kind !== 'moved') throw new Error('expected residue to move');
     await expect(readFile(join(repository, result.directory, relativePath), 'utf8')).resolves.toBe(contents);
@@ -68,7 +74,13 @@ describe('validator residue quarantine', () => {
     await mkdir(join(repository, 'docs/reports/manual-test-step17'), { recursive: true });
     await writeFile(join(repository, 'docs/reports/manual-test-step17/report.html'), 'new report\n');
 
-    const result = await quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' });
+    const result = await quarantineValidatorResidue({
+      projectRoot: repository,
+      git,
+      baseline,
+      source: 'manual_test',
+      now: residueNow,
+    });
 
     expect(result).toMatchObject({ kind: 'moved', paths: ['docs/reports/manual-test-step17/report.html'] });
     await expect(readFile(join(repository, 'notes.txt'), 'utf8')).resolves.toBe('already here\n');
@@ -90,7 +102,7 @@ describe('validator residue quarantine', () => {
     await runGit(['init', '-q', 'existing']);
 
     await expect(
-      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' }),
+      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test', now: residueNow }),
     ).resolves.toEqual({ kind: 'none' });
     await expect(readFile(join(repository, 'existing/notes.txt'), 'utf8')).resolves.toBe('already here\n');
     await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject(
@@ -111,7 +123,7 @@ describe('validator residue quarantine', () => {
     await writeFile(join(repository, 'docs/reports/report.html'), 'report\n');
 
     await expect(
-      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' }),
+      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test', now: residueNow }),
     ).resolves.toMatchObject({ kind: 'moved', paths: ['docs/reports/report.html'] });
     await expect(git(['status', '--porcelain'])).resolves.toMatchObject({ stdout: 'R  old.txt -> renamed.txt' });
   });
@@ -122,7 +134,13 @@ describe('validator residue quarantine', () => {
     await writeFile(join(repository, 'docs/reports/report[1].html'), 'bracket\n');
     await writeFile(join(repository, 'docs/reports/report1.html'), 'plain\n');
 
-    const result = await quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' });
+    const result = await quarantineValidatorResidue({
+      projectRoot: repository,
+      git,
+      baseline,
+      source: 'manual_test',
+      now: residueNow,
+    });
 
     expect(result).toMatchObject({
       kind: 'moved',
@@ -139,7 +157,7 @@ describe('validator residue quarantine', () => {
 
     try {
       await expect(
-        quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' }),
+        quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test', now: residueNow }),
       ).resolves.toMatchObject({ kind: 'refused', reason: expect.any(String) });
       await expect(readFile(join(repository, 'a-first.txt'), 'utf8')).resolves.toBe('first\n');
       await expect(readFile(join(repository, 'z-locked', 'second.txt'), 'utf8')).resolves.toBe('second\n');
@@ -152,8 +170,6 @@ describe('validator residue quarantine', () => {
     {
       name: 'a destination already exists',
       setup: async () => {
-        vi.useFakeTimers();
-        vi.setSystemTime(new Date('2026-11-15T12:34:56.789Z'));
         await mkdir(
           join(
             repository,
@@ -201,6 +217,7 @@ describe('validator residue quarantine', () => {
       git: runner,
       baseline,
       source: 'manual_test',
+      now: residueNow,
     });
 
     expect(result).toMatchObject({ kind: 'refused', reason: expect.any(String) });
@@ -222,7 +239,7 @@ describe('validator residue quarantine', () => {
     await writeFile(join(repository, '.pipeline/manual-test-results.md'), 'ignored evidence\n');
 
     await expect(
-      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' }),
+      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test', now: residueNow }),
     ).resolves.toEqual({ kind: 'none' });
     await expect(access(join(repository, '.pipeline/validator-residue'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -234,7 +251,7 @@ describe('validator residue quarantine', () => {
     await writeFile(join(repository, '.pipeline/prd-audit.json'), '{"complete":true}\n');
 
     await expect(
-      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'prd_audit' }),
+      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'prd_audit', now: residueNow }),
     ).resolves.toMatchObject({ kind: 'refused', reason: expect.any(String) });
     await expect(readFile(join(repository, '.pipeline/prd-audit.json'), 'utf8')).resolves.toBe('{"complete":true}\n');
     await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject(

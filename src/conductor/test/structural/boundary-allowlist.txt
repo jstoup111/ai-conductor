@@ -447,7 +447,6 @@ engine/unpark-halt-warning.ts -> filesystem
 engine/update-cli.ts -> filesystem
 engine/update-cli.ts -> process
 engine/user-config.ts -> filesystem
-engine/validator-residue.ts -> clock
 engine/version-report.ts -> filesystem
 engine/worktree-prepare.ts -> clock
 engine/worktree-prepare.ts -> filesystem

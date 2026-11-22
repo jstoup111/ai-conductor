@@ -9200,6 +9200,7 @@ export class Conductor {
         git: makeGitRunner(this.projectRoot),
         baseline,
         source,
+        now: new Date(),
       });
       if (residue.kind === 'moved') {
         await emitTracked({
