@@ -195,6 +195,30 @@ async function tasklessExitFixture(withCommit: boolean): Promise<{
   return { subject, git, host, leafHead, ...(repair === undefined ? {} : { repair }) };
 }
 
+/** Put the fixture's sole routed round into the durable settled-leaf state. */
+async function settleFixtureLeafReturn(subject: SweepRepository, reason: string): Promise<void> {
+  const git = makeGitRunner(subject.repo);
+  const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+  if (stored.kind !== 'record') throw new Error('sole routed round is unavailable');
+  await git([
+    'update-ref',
+    routeRecordRefFor('demo', roundId),
+    await writeBlob(git, { ...stored.record, hosts: { [host]: 'admitted' } }),
+  ]);
+  const checked = await checkRoundSupersession(subject.repo, 'demo', roundId, { git });
+  if (checked.kind !== 'leaf-return') throw new Error('sole routed round was not eligible for a leaf return');
+  await expect(
+    supersedeRound({
+      worktree: subject.repo,
+      slug: 'demo',
+      checked,
+      reason,
+      operator: 'operator@example.test',
+      git,
+    }),
+  ).resolves.toMatchObject({ kind: 'superseded', event: { disposition: 'leaf-return' } });
+}
+
 describe('Conductor routed final leaf return (real local Git)', () => {
   // Covers: task:13
   it.each([
@@ -436,23 +460,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
   it('keeps a newer open round ahead of an older leaf return on resume', async () => {
     const { subject, statePath, config } = await fixture();
     const git = makeGitRunner(subject.repo);
-    const initial = await readRouteRecord(subject.repo, 'demo', roundId, { git });
-    if (initial.kind !== 'record') throw new Error('older routed round is unavailable');
-    await git([
-      'update-ref',
-      routeRecordRefFor('demo', roundId),
-      await writeBlob(git, { ...initial.record, hosts: { [host]: 'admitted' } }),
-    ]);
-    const checked = await checkRoundSupersession(subject.repo, 'demo', roundId, { git });
-    if (checked.kind !== 'leaf-return') throw new Error('older routed round was not eligible for a leaf return');
-    await supersedeRound({
-      worktree: subject.repo,
-      slug: 'demo',
-      checked,
-      reason: 'close older round before a newer repair opens',
-      operator: 'operator@example.test',
-      git,
-    });
+    await settleFixtureLeafReturn(subject, 'close older round before a newer repair opens');
     const closed = await readRouteRecord(subject.repo, 'demo', roundId, { git });
     if (closed.kind !== 'record') throw new Error('closed older routed round is unavailable');
     const { leafReturn: _leafReturn, ...newerBase } = closed.record;
@@ -518,24 +526,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
   // Covers: task:2, task:13
   it('resumes a settled leaf return through its child overlay before whole-feature validation', async () => {
     const { subject, statePath, config } = await fixture();
-    const git = makeGitRunner(subject.repo);
-    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
-    if (stored.kind !== 'record') throw new Error('sole routed round is unavailable');
-    const admitted: RouteRecord = { ...stored.record, hosts: { [host]: 'admitted' } };
-    await git(['update-ref', routeRecordRefFor('demo', roundId), await writeBlob(git, admitted)]);
-
-    const checked = await checkRoundSupersession(subject.repo, 'demo', roundId, { git });
-    if (checked.kind !== 'leaf-return') throw new Error('sole routed round was not eligible for a leaf return');
-    await expect(
-      supersedeRound({
-        worktree: subject.repo,
-        slug: 'demo',
-        checked,
-        reason: 'manual test repair lands on leaf',
-        operator: 'operator@example.test',
-        git,
-      }),
-    ).resolves.toMatchObject({ kind: 'superseded', event: { disposition: 'leaf-return' } });
+    await settleFixtureLeafReturn(subject, 'manual test repair lands on leaf');
 
     await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'manual-test failure\n');
     await rm(join(subject.repo, '.pipeline', 'HALT'));
@@ -645,6 +636,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
 
     expect(run).not.toHaveBeenCalled();
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(unreadableRef);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('undefined');
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     const onDisk = await readState(statePath);
     if (!onDisk.ok) throw new Error('root state is unreadable');
@@ -702,27 +694,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     readonly leaf: number;
   }> {
     const { subject, statePath, config } = await fixture();
-    const git = makeGitRunner(subject.repo);
-    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
-    if (stored.kind !== 'record') throw new Error('sole routed round is unavailable');
-    await git([
-      'update-ref',
-      routeRecordRefFor('demo', roundId),
-      await writeBlob(git, {
-        ...stored.record,
-        hosts: { [host]: 'admitted' },
-      }),
-    ]);
-    const checked = await checkRoundSupersession(subject.repo, 'demo', roundId, { git });
-    if (checked.kind !== 'leaf-return') throw new Error('sole routed round was not eligible for a leaf return');
-    await supersedeRound({
-      worktree: subject.repo,
-      slug: 'demo',
-      checked,
-      reason: 'prepare leaf validation selection',
-      operator: 'operator@example.test',
-      git,
-    });
+    await settleFixtureLeafReturn(subject, 'prepare leaf validation selection');
 
     const root = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
     Object.assign(root, { feature_desc: 'demo', complexity_tier: 'M', manual_test: 'pending' });

@@ -1197,6 +1197,7 @@ export class Conductor {
           : `cannot read ${cursor.unreadableRef} while resolving the active child cursor`;
       }
     }
+    return assertNever(cursor);
   }
 
   /** Delegate conductor lifecycle delivery to the shared engine owner. */
@@ -3398,6 +3399,57 @@ export class Conductor {
     this.activeRegionChild = undefined;
     this.activeRegionIsLeaf = undefined;
     this.persistedStateSnapshot = { ...state };
+  }
+
+  /**
+   * A settled routed round returns ownership to the sealed leaf.  Every
+   * caller (live exit, markerless reconciliation, and resume) must reload
+   * root state before binding that leaf, then choose its first unmet region
+   * gate before a whole-feature consumer can run.
+   */
+  private async prepareSettledLeafHandoff(
+    state: ConductState,
+    slug: string,
+    indexOf: (name: StepName) => number,
+  ): Promise<{ readonly kind: 'ready'; readonly index: number; readonly activeChild: ActiveChildLifecycleTarget } | 'halt'> {
+    await this.restoreWholeFeatureState(state);
+    const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+    switch (cursor.kind) {
+      case 'active':
+      case 'repair-pending': {
+        const execution = resolveExecutionChild(cursor, slug);
+        if (execution.source === 'cursor' && execution.target.isLeaf) {
+          await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
+          const verdicts = await this.readGateVerdictOverlay();
+          const firstUnsatisfied = CHILD_REGION_STEPS.find((step) => !gateSatisfied(step, state, verdicts));
+          return {
+            kind: 'ready',
+            index: indexOf(firstUnsatisfied ?? 'manual_test'),
+            activeChild: execution.target,
+          };
+        }
+        const owner =
+          execution.source === 'routed-host' || execution.source === 'revalidating'
+            ? `cursor remains owned by ${execution.source}`
+            : execution.source === 'none'
+              ? 'cursor returned no child'
+              : execution.source === 'refused'
+                ? 'cursor could not resolve an executable leaf target'
+                : 'cursor selected a non-leaf child';
+        await this.haltChildRegionRefusal(`cannot prepare settled routed leaf handoff: ${owner}`);
+        return 'halt';
+      }
+      case 'no-child':
+        await this.haltChildRegionRefusal('cannot prepare settled routed leaf handoff: cursor returned no-child');
+        return 'halt';
+      case 'topology-unavailable':
+      case 'detached-head':
+      case 'git-error':
+      case 'divergent':
+        await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor));
+        return 'halt';
+    }
+    return assertNever(cursor);
   }
 
   /**
@@ -6928,28 +6980,8 @@ export class Conductor {
             continued.next.kind === 'quiescent') &&
           !(await routedRoundOpen(this.projectRoot, slug))
         ) {
-          // returnToLeaf re-pends whole-feature gates in the root state file.
-          // Refresh feature-owned fields, then adopt the settled leaf's
-          // region evidence. The root deliberately holds no synthetic
-          // region completion after returnToLeaf.
-          await this.restoreWholeFeatureState(state);
-          const leafCursor = await this.resolveActiveChild(this.projectRoot, slug);
-          const leaf = resolveExecutionChild(leafCursor, slug);
-          if (leaf.source !== 'cursor' || !leaf.target.isLeaf) {
-            await this.haltChildRegionRefusal(
-              await this.renderChildCursorRefusal(
-                leafCursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>,
-              ),
-            );
-            return 'halt';
-          }
-          await this.activateChildRegionState(state, leaf.target.child, leaf.target.isLeaf);
-          // A settled return may still leave a leaf-owned region validator
-          // pending.  Re-enter it at its owner before whole-feature gates;
-          // absent root region fields are not a reason to skip that work.
-          const verdicts = await this.readGateVerdictOverlay();
-          const firstUnsatisfied = CHILD_REGION_STEPS.find((step) => !gateSatisfied(step, state, verdicts));
-          return { index: indexOf(firstUnsatisfied ?? 'manual_test') };
+          const handoff = await this.prepareSettledLeafHandoff(state, slug, indexOf);
+          return handoff === 'halt' ? 'halt' : handoff;
         }
         break;
       case 'busy':
@@ -7038,24 +7070,10 @@ export class Conductor {
       !(await routedRoundOpen(this.projectRoot, slug))
     ) {
       // Reconciliation can close the final markerless round before this
-      // guard selects a host. Restore the same root state and leaf overlay
-      // that a live routed exit uses. A leaf-owned region gate can still be
-      // pending, so never jump directly to whole-feature validation.
-      await this.restoreWholeFeatureState(state);
-      const leafCursor = await this.resolveActiveChild(this.projectRoot, slug);
-      const leaf = resolveExecutionChild(leafCursor, slug);
-      if (leaf.source !== 'cursor' || !leaf.target.isLeaf) {
-        await this.haltChildRegionRefusal(
-          await this.renderChildCursorRefusal(
-            leafCursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>,
-          ),
-        );
-        return 'halt';
-      }
-      await this.activateChildRegionState(state, leaf.target.child, leaf.target.isLeaf);
-      const verdicts = await this.readGateVerdictOverlay();
-      const firstUnsatisfied = CHILD_REGION_STEPS.find((step) => !gateSatisfied(step, state, verdicts));
-      return { index: indexOf(firstUnsatisfied ?? 'manual_test'), activeChild: leaf.target };
+      // guard selects a host. Use the live-exit transition so root reload,
+      // leaf binding, and selection cannot drift across the two paths.
+      const handoff = await this.prepareSettledLeafHandoff(state, slug, indexOf);
+      return handoff === 'halt' ? 'halt' : handoff;
     }
     if (admission.kind === 'admitted' || admission.kind === 'continue' || admission.kind === 'busy') {
       const cursor = await this.resolveActiveChild(this.projectRoot, slug);
@@ -8258,6 +8276,7 @@ export class Conductor {
       const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
       let routedLeafBuildResume = false;
       let resumedAtWholeFeature = false;
+      let settledLeafHandoffIndex: number | undefined;
       let routedHostEntryStep: RegionGate | undefined;
       if (resumeSlug) {
         // Preflight owns durable routing reconciliation, including draining a
@@ -8295,12 +8314,12 @@ export class Conductor {
         const hasChildren = routingEnabled && (await hasDurableChildState(this.projectRoot, resumeSlug));
         const roundIsOpen = hasChildren ? await routedRoundOpen(this.projectRoot, resumeSlug) : false;
         if (hasChildren && !roundIsOpen && (await this.hasSettledRoutedLeafReturn(resumeSlug))) {
-          await this.restoreWholeFeatureState(state);
-          // Resume derives its entry index and prerequisite clamp before the
-          // ordinary loop can bind a child. Restore the settled leaf overlay
-          // now, matching the live routed-return transition, so those readers
-          // cannot mistake absent root region fields for pending BUILD work.
-          if (!(await this.activateChildRegionStateForResume(state))) return;
+          // Resume derives its entry index before the ordinary loop can bind
+          // a child. Use the same settled-leaf transition as the live exit
+          // and markerless reconciliation, including its selected target.
+          const handoff = await this.prepareSettledLeafHandoff(state, resumeSlug, indexOf);
+          if (handoff === 'halt') return;
+          settledLeafHandoffIndex = handoff.index;
           resumedAtWholeFeature = true;
         }
         // Receipt recovery is meaningful only for a routed stack.  Resolve
@@ -8535,6 +8554,7 @@ export class Conductor {
         }
       }
       startIndex = resolvedIndex;
+      if (settledLeafHandoffIndex !== undefined) startIndex = settledLeafHandoffIndex;
       // An operator round has already selected and restaged the host region
       // durably.  Its admission record, not the leaf's old resume state,
       // decides the first region gate after a restart.
