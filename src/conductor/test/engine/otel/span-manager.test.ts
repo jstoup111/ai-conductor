@@ -18,6 +18,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import type { StepName } from '../../../src/types/steps.js';
+import type { RestackOpId } from '../../../src/engine/restack/restack-types.js';
+import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
 import { CapturingSpanExporter as InMemorySpanExporter } from '../../fixtures/capturing-span-exporter.js';
@@ -32,10 +34,7 @@ function makeVisualizer(
   onWarning?: (msg: string) => void,
   now?: () => number,
 ): OtelVisualizer {
-  const resolved = resolveOtelConfig(
-    { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
-    pipelineDir,
-  );
+  const resolved = resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, pipelineDir);
   return new OtelVisualizer(resolved, {
     runId: `test-${Date.now()}`,
     feature: 'test-feature',
@@ -89,9 +88,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
       const finishedSpans = spanExporter.getFinishedSpans();
       expect(finishedSpans.filter((span) => span.parentSpanContext)).toHaveLength(2);
       expect(finishedSpans.filter((span) => span.name === 'conductor.run')).toHaveLength(0);
-      expect(
-        finishedSpans.filter((span) => 'conductor.run.outcome' in span.attributes),
-      ).toHaveLength(0);
+      expect(finishedSpans.filter((span) => 'conductor.run.outcome' in span.attributes)).toHaveLength(0);
     } finally {
       await vis.stop();
     }
@@ -194,9 +191,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
 
   it('orphan loop_halt warns once, returns safely, and exports no spans', async () => {
     const warnings: string[] = [];
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) =>
-      warnings.push(message),
-    );
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) => warnings.push(message));
     vis.start(emitter);
     const { spanManager } = vis as unknown as {
       spanManager: {
@@ -204,9 +199,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
       };
     };
 
-    expect(() =>
-      spanManager.onLoopHalt({ type: 'loop_halt', reason: 'missing task evidence' }),
-    ).not.toThrow();
+    expect(() => spanManager.onLoopHalt({ type: 'loop_halt', reason: 'missing task evidence' })).not.toThrow();
     await vis.stop();
 
     expect(warnings).toHaveLength(1);
@@ -215,9 +208,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
 
   it('late loop_halt after feature_complete preserves the complete root span', async () => {
     const warnings: string[] = [];
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) =>
-      warnings.push(message),
-    );
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) => warnings.push(message));
     vis.start(emitter);
     const { spanManager } = vis as unknown as {
       spanManager: {
@@ -425,15 +416,11 @@ describe('T11: step spans — duration and status', () => {
 describe('T12: step span negatives — orphan and re-run', () => {
   it('orphan step_completed (no open span) → no span added + one warning, no throw', async () => {
     const warnings: string[] = [];
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (msg) =>
-      warnings.push(msg),
-    );
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (msg) => warnings.push(msg));
     vis.start(emitter);
 
     // No step_started — orphan completion
-    await expect(
-      emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' }),
-    ).resolves.toBeUndefined();
+    await expect(emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' })).resolves.toBeUndefined();
 
     await vis.stop();
 
@@ -461,9 +448,7 @@ describe('T12: step span negatives — orphan and re-run', () => {
 
   it('orphan step_failed → one warning, no throw', async () => {
     const warnings: string[] = [];
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (msg) =>
-      warnings.push(msg),
-    );
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (msg) => warnings.push(msg));
     vis.start(emitter);
 
     await expect(
@@ -523,7 +508,11 @@ describe('T13: step span attributes', () => {
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
     await emitter.emit({
-      type: 'provider_attempt', step: 'build', provider: 'claude', invoked: true, outcome: 'success',
+      type: 'provider_attempt',
+      step: 'build',
+      provider: 'claude',
+      invoked: true,
+      outcome: 'success',
     });
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
@@ -539,12 +528,22 @@ describe('T13: step span attributes', () => {
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
     await emitter.emit({
-      type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
-      model: 'sonnet', effort: 'medium', tier: 'S', fallbackReason: 'codex unavailable',
-      invoked: true, outcome: 'failure',
+      type: 'provider_attempt',
+      step: 'build',
+      provider: 'claude',
+      preferredProvider: 'codex',
+      model: 'sonnet',
+      effort: 'medium',
+      tier: 'S',
+      fallbackReason: 'codex unavailable',
+      invoked: true,
+      outcome: 'failure',
     });
     await emitter.emit({
-      type: 'step_failed', step: 'build', error: 'provider failed', retryCount: 1,
+      type: 'step_failed',
+      step: 'build',
+      error: 'provider failed',
+      retryCount: 1,
     });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
@@ -567,15 +566,28 @@ describe('T13: step span attributes', () => {
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
     await emitter.emit({
-      type: 'provider_attempt', step: 'build', provider: 'codex', preferredProvider: 'codex',
-      fallbackReason: 'codex unavailable', invoked: true, outcome: 'unavailable',
+      type: 'provider_attempt',
+      step: 'build',
+      provider: 'codex',
+      preferredProvider: 'codex',
+      fallbackReason: 'codex unavailable',
+      invoked: true,
+      outcome: 'unavailable',
     });
     await emitter.emit({
-      type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
-      invoked: true, outcome: 'success',
+      type: 'provider_attempt',
+      step: 'build',
+      provider: 'claude',
+      preferredProvider: 'codex',
+      invoked: true,
+      outcome: 'success',
     });
     await emitter.emit({
-      type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude' });
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      actualProvider: 'claude',
+    });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
@@ -585,14 +597,18 @@ describe('T13: step span attributes', () => {
 
   it('warns and does not create a span for an attempt without an open step', async () => {
     const warnings: string[] = [];
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) =>
-      warnings.push(message),
-    );
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) => warnings.push(message));
     vis.start(emitter);
 
-    await expect(emitter.emit({
-      type: 'provider_attempt', step: 'build', provider: 'claude', invoked: true, outcome: 'success',
-    })).resolves.toBeUndefined();
+    await expect(
+      emitter.emit({
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'claude',
+        invoked: true,
+        outcome: 'success',
+      }),
+    ).resolves.toBeUndefined();
     await vis.stop();
 
     expect({ warnings, spans: spanExporter.getFinishedSpans() }).toEqual({
@@ -670,7 +686,10 @@ describe('Task 8: TokenUsage detail on step spans', () => {
     const complete = async (
       step: StepName,
       index: number,
-      tokenUsage?: Extract<import('../../../src/types/events.js').ConductorEvent, { type: 'step_completed' }>['tokenUsage'],
+      tokenUsage?: Extract<
+        import('../../../src/types/events.js').ConductorEvent,
+        { type: 'step_completed' }
+      >['tokenUsage'],
     ) => {
       await emitter.emit({ type: 'step_started', step, index });
       await emitter.emit({ type: 'step_completed', step, status: 'done', tokenUsage });
@@ -697,9 +716,11 @@ describe('Task 8: TokenUsage detail on step spans', () => {
 
     const usageAttributes = (step: string) => {
       const attributes = spanExporter.getFinishedSpans().find((span) => span.name === step)!.attributes;
-      return Object.fromEntries(Object.entries(attributes).filter(([key]) => (
-        key.startsWith('conductor.usage.') || key === 'conductor.cost.source'
-      )));
+      return Object.fromEntries(
+        Object.entries(attributes).filter(
+          ([key]) => key.startsWith('conductor.usage.') || key === 'conductor.cost.source',
+        ),
+      );
     };
 
     expect({
@@ -736,7 +757,10 @@ describe('T14: span events for retries / gate verdicts / kickbacks', () => {
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
     await emitter.emit({ type: 'gate_verdict', step: 'build', satisfied: true });
     await emitter.emit({
-      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+      type: 'build_review_outer_verdict',
+      lapId: 'lap-1',
+      rawVerdict: 'PASS',
+      effectiveVerdict: 'PASS',
     });
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
@@ -835,9 +859,7 @@ describe('T14: span events for retries / gate verdicts / kickbacks', () => {
     await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
     await emitter.emit({ type: 'step_completed', step: 'plan', status: 'done' });
     // Out-of-band gate_verdict — plan span is already closed
-    await expect(
-      emitter.emit({ type: 'gate_verdict', step: 'plan', satisfied: false }),
-    ).resolves.toBeUndefined(); // must not throw
+    await expect(emitter.emit({ type: 'gate_verdict', step: 'plan', satisfied: false })).resolves.toBeUndefined(); // must not throw
 
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
@@ -886,7 +908,9 @@ describe('Task 9: execution-correlated spans', () => {
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    expect(spanExporter.getFinishedSpans().filter((span) => span.name === 'configured:validation/review')).toHaveLength(2);
+    expect(spanExporter.getFinishedSpans().filter((span) => span.name === 'configured:validation/review')).toHaveLength(
+      2,
+    );
   });
 
   it('keeps fallback provider attribution on its owning configured member', async () => {
@@ -903,14 +927,29 @@ describe('Task 9: execution-correlated spans', () => {
     await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: alpha });
     await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: beta });
     await emitter.emit({
-      type: 'provider_attempt', step: 'build', executionContext: alpha,
-      provider: 'claude', preferredProvider: 'codex', fallbackReason: 'codex unavailable',
-      model: 'sonnet', effort: 'high', tier: 'L', invoked: true, outcome: 'success',
+      type: 'provider_attempt',
+      step: 'build',
+      executionContext: alpha,
+      provider: 'claude',
+      preferredProvider: 'codex',
+      fallbackReason: 'codex unavailable',
+      model: 'sonnet',
+      effort: 'high',
+      tier: 'L',
+      invoked: true,
+      outcome: 'success',
     });
     await emitter.emit({
-      type: 'provider_attempt', step: 'build', executionContext: beta,
-      provider: 'codex', preferredProvider: 'codex', model: 'gpt-5.6', effort: 'medium', tier: 'M',
-      invoked: true, outcome: 'success',
+      type: 'provider_attempt',
+      step: 'build',
+      executionContext: beta,
+      provider: 'codex',
+      preferredProvider: 'codex',
+      model: 'gpt-5.6',
+      effort: 'medium',
+      tier: 'M',
+      invoked: true,
+      outcome: 'success',
     });
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: beta });
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: alpha });
@@ -950,18 +989,32 @@ describe('Task 9: execution-correlated spans', () => {
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: earlier });
     await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: later });
     await emitter.emit({
-      type: 'provider_attempt', step: 'build', executionContext: earlier,
-      provider: 'claude', invoked: true, outcome: 'success', model: 'sonnet',
+      type: 'provider_attempt',
+      step: 'build',
+      executionContext: earlier,
+      provider: 'claude',
+      invoked: true,
+      outcome: 'success',
+      model: 'sonnet',
     });
     await emitter.emit({
-      type: 'provider_attempt', step: 'build', executionContext: later,
-      provider: 'codex', invoked: true, outcome: 'success', model: 'gpt-5.6',
+      type: 'provider_attempt',
+      step: 'build',
+      executionContext: later,
+      provider: 'codex',
+      invoked: true,
+      outcome: 'success',
+      model: 'gpt-5.6',
     });
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: later });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    expect(spanExporter.getFinishedSpans().filter((span) => span.name === 'build' && span.attributes['conductor.provider'] === 'codex')).toHaveLength(1);
+    expect(
+      spanExporter
+        .getFinishedSpans()
+        .filter((span) => span.name === 'build' && span.attributes['conductor.provider'] === 'codex'),
+    ).toHaveLength(1);
   });
 
   it('omits execution identifiers and absent provider dimensions from spans', async () => {
@@ -976,7 +1029,9 @@ describe('Task 9: execution-correlated spans', () => {
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const attributes = spanExporter.getFinishedSpans().find((span) => span.name === 'configured:validation/no-provider')!.attributes;
+    const attributes = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === 'configured:validation/no-provider')!.attributes;
     expect(attributes).not.toMatchObject({
       'conductor.execution.id': 'not-an-attribute',
       'conductor.provider': expect.anything(),
@@ -998,20 +1053,36 @@ describe('Task 9: execution-correlated spans', () => {
     await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
     vi.spyOn(Date, 'now').mockReturnValue(1_500);
     await emitter.emit({
-      type: 'provider_attempt', step: 'build', executionContext: execution,
-      provider: 'codex', invoked: true, outcome: 'success',
+      type: 'provider_attempt',
+      step: 'build',
+      executionContext: execution,
+      provider: 'codex',
+      invoked: true,
+      outcome: 'success',
       observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }],
     });
-    await emitter.emit({ type: 'group_member_step', member: 'settled', skill: 'settled', phase: 'result', outcome: 'verdict:pass', executionContext: execution });
+    await emitter.emit({
+      type: 'group_member_step',
+      member: 'settled',
+      skill: 'settled',
+      phase: 'result',
+      outcome: 'verdict:pass',
+      executionContext: execution,
+    });
     vi.spyOn(Date, 'now').mockReturnValue(2_000);
     await emitter.emit({
-      type: 'step_completed', step: 'build', status: 'done', executionContext: execution,
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      executionContext: execution,
       observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }],
     });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/settled')!;
+    const span = spanExporter
+      .getFinishedSpans()
+      .find((candidate) => candidate.name === 'configured:validation/settled')!;
     expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(1_500);
   });
 
@@ -1019,12 +1090,29 @@ describe('Task 9: execution-correlated spans', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
     vi.spyOn(Date, 'now').mockReturnValue(1_000);
-    const execution = { executionId: 'serial-terminal', subject: { kind: 'lifecycle-step' as const, step: 'build' as StepName } };
+    const execution = {
+      executionId: 'serial-terminal',
+      subject: { kind: 'lifecycle-step' as const, step: 'build' as StepName },
+    };
     await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
     vi.spyOn(Date, 'now').mockReturnValue(1_500);
-    await emitter.emit({ type: 'provider_attempt', step: 'build', executionContext: execution, provider: 'codex', invoked: true, outcome: 'success', observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }] });
+    await emitter.emit({
+      type: 'provider_attempt',
+      step: 'build',
+      executionContext: execution,
+      provider: 'codex',
+      invoked: true,
+      outcome: 'success',
+      observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }],
+    });
     vi.spyOn(Date, 'now').mockReturnValue(2_000);
-    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: execution, observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }] });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      executionContext: execution,
+      observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }],
+    });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
@@ -1034,13 +1122,13 @@ describe('Task 9: execution-correlated spans', () => {
 
   it('treats small injected event-clock values as epoch timestamps', async () => {
     let now = 1_000;
-    const resolved = resolveOtelConfig(
-      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
-      pipelineDir,
-    );
+    const resolved = resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, pipelineDir);
     const vis = new OtelVisualizer(resolved, {
-      runId: 'small-event-clock', feature: 'test-feature', project: 'test-project',
-      spanExporter, now: () => now,
+      runId: 'small-event-clock',
+      feature: 'test-feature',
+      project: 'test-project',
+      spanExporter,
+      now: () => now,
     });
     const execution = {
       executionId: 'small-event-clock',
@@ -1089,8 +1177,7 @@ describe('Task 10: truthful refusal span closure', () => {
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const spans = spanExporter.getFinishedSpans()
-      .filter((span) => span.name === 'configured:validation/review');
+    const spans = spanExporter.getFinishedSpans().filter((span) => span.name === 'configured:validation/review');
     expect(spans).toHaveLength(1);
     expect(spans[0].status.code).toBe(0 /* UNSET: refused, not success or error */);
     expect(spans[0].attributes).toMatchObject({
@@ -1114,18 +1201,27 @@ describe('Task 10: truthful refusal span closure', () => {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
       now = base + 100;
       await emitter.emit({
-        type: 'group_member_step', member: 'review', skill: 'build', phase: 'result',
-        outcome: 'refused', executionContext: execution,
+        type: 'group_member_step',
+        member: 'review',
+        skill: 'build',
+        phase: 'result',
+        outcome: 'refused',
+        executionContext: execution,
       });
       now = base + 10_000;
       await emitter.emit({
-        type: 'step_refused', step: 'build', kind: 'validation-verdict',
-        reason: 'authoritative delayed refusal', executionContext: execution,
+        type: 'step_refused',
+        step: 'build',
+        kind: 'validation-verdict',
+        reason: 'authoritative delayed refusal',
+        executionContext: execution,
       });
       await emitter.emit({ type: 'feature_complete' });
       await vis.stop();
 
-      const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/review')!;
+      const span = spanExporter
+        .getFinishedSpans()
+        .find((candidate) => candidate.name === 'configured:validation/review')!;
       expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(base + 100);
     } finally {
       dateNow.mockRestore();
@@ -1146,8 +1242,12 @@ describe('Task 10: truthful refusal span closure', () => {
       await emitter.emit({ type: 'step_started', step: 'prd_audit', index: 0, executionContext: execution });
       now = base + 100;
       await emitter.emit({
-        type: 'group_member_step', member: 'prd_audit', skill: 'prd-audit', phase: 'result',
-        outcome: 'verdict:pass', executionContext: execution,
+        type: 'group_member_step',
+        member: 'prd_audit',
+        skill: 'prd-audit',
+        phase: 'result',
+        outcome: 'verdict:pass',
+        executionContext: execution,
       });
       now = base + 10_000;
       await emitter.emit({ type: 'step_completed', step: 'prd_audit', status: 'done', executionContext: execution });
@@ -1188,17 +1288,26 @@ describe('Task 10: truthful refusal span closure', () => {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
       now = base + 100;
       await emitter.emit({
-        type: 'group_member_step', member: 'review', skill: 'build', phase: 'result',
-        outcome: 'interrupted', executionContext: execution,
+        type: 'group_member_step',
+        member: 'review',
+        skill: 'build',
+        phase: 'result',
+        outcome: 'interrupted',
+        executionContext: execution,
       });
       now = base + 10_000;
       await emitter.emit({
-        type: 'step_interrupted', step: 'build', reason: 'controlled shutdown', executionContext: execution,
+        type: 'step_interrupted',
+        step: 'build',
+        reason: 'controlled shutdown',
+        executionContext: execution,
       });
       await emitter.emit({ type: 'feature_complete' });
       await vis.stop();
 
-      const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/review')!;
+      const span = spanExporter
+        .getFinishedSpans()
+        .find((candidate) => candidate.name === 'configured:validation/review')!;
       expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(base + 100);
     } finally {
       dateNow.mockRestore();
@@ -1301,16 +1410,30 @@ describe('context-free provider attempts within an explicit execution', () => {
 
     await emitter.emit({ type: 'step_started', step: 'rebase', index: 19, executionContext: rebase });
     await emitter.emit({
-      type: 'provider_attempt', step: 'rebase', provider: 'provider-lifecycle', outcome: 'success', invoked: false,
+      type: 'provider_attempt',
+      step: 'rebase',
+      provider: 'provider-lifecycle',
+      outcome: 'success',
+      invoked: false,
       lifecycle: { phase: 'preparing', attemptId: 'run:rebase:10', recoveryCount: 0 },
     });
     await emitter.emit({
-      type: 'provider_attempt', step: 'rebase', provider: 'claude', preferredProvider: 'claude',
-      model: 'opus', effort: 'high', outcome: 'success', invoked: true,
+      type: 'provider_attempt',
+      step: 'rebase',
+      provider: 'claude',
+      preferredProvider: 'claude',
+      model: 'opus',
+      effort: 'high',
+      outcome: 'success',
+      invoked: true,
       observedIntervals: [{ startedAtMs: 1_790_686_154_170, durationMs: 79_779 }],
     });
     await emitter.emit({
-      type: 'provider_attempt', step: 'rebase', provider: 'provider-lifecycle', outcome: 'success', invoked: false,
+      type: 'provider_attempt',
+      step: 'rebase',
+      provider: 'provider-lifecycle',
+      outcome: 'success',
+      invoked: false,
       lifecycle: { phase: 'settled', attemptId: 'run:rebase:10', recoveryCount: 0, outcome: 'completed' },
     });
     await emitter.emit({ type: 'step_completed', step: 'rebase', status: 'done', executionContext: rebase });
@@ -1335,7 +1458,7 @@ describe('context-free provider attempts within an explicit execution', () => {
       provider: 'claude',
       outcome: 'success',
       invoked: true,
-      restack: { opId: 'fold-op', cause: 'fold', roundId: 'r7' },
+      restack: { opId: 'fold-op' as RestackOpId, cause: 'fold', roundId: parseRoundId('r7')! },
     });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
@@ -1356,12 +1479,27 @@ describe('context-free provider attempts within an explicit execution', () => {
 
     await emitter.emit({ type: 'step_started', step: 'build_review', index: 16, executionContext: review });
     await emitter.emit({
-      type: 'provider_attempt', step: 'build_review', executionContext: review, provider: 'claude',
-      preferredProvider: 'claude', model: 'opus', effort: 'high', tier: 'M', outcome: 'success', invoked: true,
+      type: 'provider_attempt',
+      step: 'build_review',
+      executionContext: review,
+      provider: 'claude',
+      preferredProvider: 'claude',
+      model: 'opus',
+      effort: 'high',
+      tier: 'M',
+      outcome: 'success',
+      invoked: true,
     });
     await emitter.emit({
-      type: 'provider_attempt', step: 'build_review', provider: 'claude', preferredProvider: 'claude',
-      model: 'sonnet', effort: 'low', tier: 'M', outcome: 'success', invoked: true,
+      type: 'provider_attempt',
+      step: 'build_review',
+      provider: 'claude',
+      preferredProvider: 'claude',
+      model: 'sonnet',
+      effort: 'low',
+      tier: 'M',
+      outcome: 'success',
+      invoked: true,
     });
     await emitter.emit({ type: 'step_completed', step: 'build_review', status: 'done', executionContext: review });
     await emitter.emit({ type: 'feature_complete' });
@@ -1382,8 +1520,15 @@ describe('context-free provider attempts within an explicit execution', () => {
 
     await emitter.emit({ type: 'step_started', step: 'prd_audit', index: 17, executionContext: audit });
     await emitter.emit({
-      type: 'provider_attempt', step: 'remediate', provider: 'claude', preferredProvider: 'claude',
-      model: 'opus', effort: 'medium', tier: 'M', outcome: 'success', invoked: true,
+      type: 'provider_attempt',
+      step: 'remediate',
+      provider: 'claude',
+      preferredProvider: 'claude',
+      model: 'opus',
+      effort: 'medium',
+      tier: 'M',
+      outcome: 'success',
+      invoked: true,
     });
     await emitter.emit({ type: 'step_completed', step: 'prd_audit', status: 'done', executionContext: audit });
     await emitter.emit({ type: 'feature_complete' });
@@ -1397,13 +1542,20 @@ describe('context-free provider attempts within an explicit execution', () => {
       auditModel: audited.attributes['conductor.model'],
     }).toEqual({
       warnings: [],
-      runEvents: [{
-        name: 'provider_attempt',
-        attributes: {
-          step: 'remediate', provider: 'claude', preferredProvider: 'claude',
-          model: 'opus', effort: 'medium', tier: 'M', outcome: 'success',
+      runEvents: [
+        {
+          name: 'provider_attempt',
+          attributes: {
+            step: 'remediate',
+            provider: 'claude',
+            preferredProvider: 'claude',
+            model: 'opus',
+            effort: 'medium',
+            tier: 'M',
+            outcome: 'success',
+          },
         },
-      }],
+      ],
       auditModel: undefined,
     });
   });
@@ -1416,7 +1568,12 @@ describe('context-free provider attempts within an explicit execution', () => {
     await emitter.emit({ type: 'step_started', step: 'rebase', index: 19, executionContext: lifecycle('a', 'rebase') });
     await emitter.emit({ type: 'step_started', step: 'rebase', index: 19, executionContext: lifecycle('b', 'rebase') });
     await emitter.emit({
-      type: 'provider_attempt', step: 'rebase', provider: 'claude', model: 'opus', outcome: 'success', invoked: true,
+      type: 'provider_attempt',
+      step: 'rebase',
+      provider: 'claude',
+      model: 'opus',
+      outcome: 'success',
+      invoked: true,
     });
     await vis.stop();
 

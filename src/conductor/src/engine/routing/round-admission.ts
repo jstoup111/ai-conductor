@@ -308,7 +308,7 @@ export type ReconcileRoundsResult =
   | { readonly kind: 'resume-exit'; readonly roundId: RoundId; readonly host: ChildId }
   | { readonly kind: 'navigate-host'; readonly roundId: RoundId; readonly host: ChildId }
   /** The current call durably returned from the last host to the leaf. */
-  | { readonly kind: 'leaf-returned'; readonly roundId: RoundId }
+  | { readonly kind: 'leaf-returned'; readonly roundId: RoundId; readonly mode?: 'fold' }
   /** Route records remain only as closed history; no marker or queue work remains. */
   | { readonly kind: 'quiescent' }
   | { readonly kind: 'deferred' }
@@ -629,7 +629,11 @@ export async function reconcileRounds(
         case 'admitted':
           return { kind: 'navigate-host', roundId: id, host: advanced.host };
         case 'leaf-returned':
-          return { kind: 'leaf-returned', roundId: id };
+          return {
+            kind: 'leaf-returned',
+            roundId: id,
+            ...(advanced.mode === 'fold' ? { mode: 'fold' as const } : {}),
+          };
         case 'unavailable':
           return stalled(id, advanced.detail);
         case 'closed':

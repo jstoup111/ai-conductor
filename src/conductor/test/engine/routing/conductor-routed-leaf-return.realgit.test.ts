@@ -10,9 +10,18 @@ import { EventPersister } from '../../../src/engine/event-persister.js';
 import { readVerdict, writeVerdict } from '../../../src/engine/gate-verdicts.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
-import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import {
+  closureRefFor,
+  repairMarkerRefFor,
+  revalidationQueueRefFor,
+  routeRecordRefFor,
+} from '../../../src/engine/routing/routing-refs.js';
 import { advanceRound, requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
-import { checkRoundSupersession, dispatchStackRoundsCommand, supersedeRound } from '../../../src/engine/stack-rounds-cli.js';
+import {
+  checkRoundSupersession,
+  dispatchStackRoundsCommand,
+  supersedeRound,
+} from '../../../src/engine/stack-rounds-cli.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { readState, writeState } from '../../../src/engine/state.js';
@@ -20,14 +29,21 @@ import { hasDurableChildState } from '../../../src/engine/slice-topology.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import type { ConductState, HarnessConfig, StepName } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
-import { createSweepRepository, removeAll, sealStack, type SweepRepository } from '../restack/restack-sweepG2-fixture.js';
+import {
+  createSweepRepository,
+  removeAll,
+  sealStack,
+  type SweepRepository,
+} from '../restack/restack-sweepG2-fixture.js';
 import { withGitArgvShim } from '../n1-golden-shared.js';
 
 const cleanup: string[] = [];
 const host = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
 
-afterEach(async () => { await removeAll(cleanup); });
+afterEach(async () => {
+  await removeAll(cleanup);
+});
 
 async function writeBlob(git: GitRunner, value: unknown): Promise<string> {
   return (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(value) })).stdout.trim();
@@ -40,18 +56,21 @@ async function fixture(): Promise<{
   readonly leafHead: string;
 }> {
   const subject = await createSweepRepository('conductor-routed-leaf-return-', cleanup);
-  await subject.write('.ai-conductor/config.yml', [
-    'stacked_prs:',
-    '  enabled: true',
-    '  max_slices: 2',
-    '  route_whole_feature_fixes: true',
-    'steps:',
-    '  post_region_check:',
-    '    after: build_review',
-    '    skill: custom/SKILL.md',
-    '    enforcement: gating',
-    '',
-  ].join('\n'));
+  await subject.write(
+    '.ai-conductor/config.yml',
+    [
+      'stacked_prs:',
+      '  enabled: true',
+      '  max_slices: 2',
+      '  route_whole_feature_fixes: true',
+      'steps:',
+      '  post_region_check:',
+      '    after: build_review',
+      '    skill: custom/SKILL.md',
+      '    enforcement: gating',
+      '',
+    ].join('\n'),
+  );
   await subject.write('custom/SKILL.md', '---\nname: custom\n---\n');
   await subject.write('.docs/plans/demo.md', '# Demo plan\n');
   await subject.git(['add', '.ai-conductor/config.yml', 'custom/SKILL.md', '.docs/plans/demo.md']);
@@ -82,11 +101,15 @@ async function fixture(): Promise<{
   await git(['update-ref', repairMarkerRefFor('demo'), await writeBlob(git, { host, roundId })]);
   // Exercise the durable empty-queue path rather than treating a missing ref
   // as the queue-empty proof. `returnToLeaf` must accept this settled state.
-  await git(['update-ref', revalidationQueueRefFor('demo'), await writeBlob(git, {
-    generation: 1,
-    entries: [],
-    outbox: [],
-  })]);
+  await git([
+    'update-ref',
+    revalidationQueueRefFor('demo'),
+    await writeBlob(git, {
+      generation: 1,
+      entries: [],
+      outbox: [],
+    }),
+  ]);
 
   const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
   const root = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
@@ -101,7 +124,11 @@ async function fixture(): Promise<{
   });
   await writeState(statePath, root);
   await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', host), {
-    acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', last_step: 'build_review',
+    acceptance_specs: 'done',
+    build: 'done',
+    test_suite: 'done',
+    build_review: 'done',
+    last_step: 'build_review',
   });
   for (const gate of ['prd_audit', 'architecture_review_as_built', 'manual_test', 'post_region_check'] as StepName[]) {
     await writeVerdict(subject.repo, gate, { satisfied: true, reason: 'stale passing verdict', checkedAt: 1 });
@@ -160,18 +187,31 @@ async function tasklessExitFixture(withCommit: boolean): Promise<{
   };
   await git(['update-ref', routeRecordRefFor('demo', roundId), await writeBlob(git, record)]);
   await git(['update-ref', repairMarkerRefFor('demo'), await writeBlob(git, { host, roundId })]);
-  await git(['update-ref', revalidationQueueRefFor('demo'), await writeBlob(git, { generation: 1, entries: [], outbox: [] })]);
-  await writeState(join(subject.repo, '.pipeline', 'conduct-state.json'), Object.fromEntries(
-    ALL_STEPS.map((step) => [step.name, 'done']),
-  ) as ConductState);
+  await git([
+    'update-ref',
+    revalidationQueueRefFor('demo'),
+    await writeBlob(git, { generation: 1, entries: [], outbox: [] }),
+  ]);
+  await writeState(
+    join(subject.repo, '.pipeline', 'conduct-state.json'),
+    Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState,
+  );
   return { subject, git, host, leafHead, ...(repair === undefined ? {} : { repair }) };
 }
 
 describe('Conductor routed final leaf return (real local Git)', () => {
   // Covers: task:13
   it.each([
-    ['the cursor has no durable children', true, { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }],
-    ['whole-feature routing is off', false, { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: false } }],
+    [
+      'the cursor has no durable children',
+      true,
+      { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+    ],
+    [
+      'whole-feature routing is off',
+      false,
+      { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: false } },
+    ],
   ] as const)('does not read routing refs on resume when %s', async (_caseName, removeChildState, config) => {
     const { subject, statePath } = await fixture();
     if (removeChildState) {
@@ -182,12 +222,15 @@ describe('Conductor routed final leaf return (real local Git)', () => {
         'refs/heads/feat/c2/demo',
         closureRefFor('demo', host),
         'refs/conductor/demo/positions',
-      ]) await git(['update-ref', '-d', ref]);
+      ])
+        await git(['update-ref', '-d', ref]);
       expect(await hasDurableChildState(subject.repo, 'demo')).toBe(false);
     }
     await writeState(statePath, {
       ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
-      feature_desc: 'demo', complexity_tier: 'M', build: 'pending',
+      feature_desc: 'demo',
+      complexity_tier: 'M',
+      build: 'pending',
     } as ConductState);
     let parkAfterDispatch = false;
     const conductor = new Conductor({
@@ -205,13 +248,27 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
       // Stop at the first ordinary dispatch so completion's independent
       // routing fence cannot obscure this resume-boundary assertion.
-      stepRunner: { run: async () => { parkAfterDispatch = true; return { success: true }; } },
+      stepRunner: {
+        run: async () => {
+          parkAfterDispatch = true;
+          return { success: true };
+        },
+      },
     });
     // Stop immediately after the history guard: later whole-feature fences
     // legitimately inspect routing state for their own decisions.
-    (conductor as unknown as { activateChildRegionStateForResume: () => Promise<boolean> }).activateChildRegionStateForResume = async () => false;
-    const gitArgv = await withGitArgvShim(subject.repo, async () => { await conductor.run(); });
-    const routingArgs = gitArgv.filter((args) => args.some((argument) => argument.includes('refs/conductor/demo/routes/') || argument.includes('refs/conductor/demo/revalidate')));
+    (
+      conductor as unknown as { activateChildRegionStateForResume: () => Promise<boolean> }
+    ).activateChildRegionStateForResume = async () => false;
+    const gitArgv = await withGitArgvShim(subject.repo, async () => {
+      await conductor.run();
+    });
+    const routingArgs = gitArgv.filter((args) =>
+      args.some(
+        (argument) =>
+          argument.includes('refs/conductor/demo/routes/') || argument.includes('refs/conductor/demo/revalidate'),
+      ),
+    );
     expect(routingArgs).toEqual([]);
   });
 
@@ -229,7 +286,11 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       complexity_tier: 'M',
     } as ConductState);
     await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', leaf), {
-      acceptance_specs: 'done', build: 'pending', test_suite: 'pending', build_review: 'pending', last_step: 'acceptance_specs',
+      acceptance_specs: 'done',
+      build: 'pending',
+      test_suite: 'pending',
+      build_review: 'pending',
+      last_step: 'acceptance_specs',
     });
 
     const dispatched: StepName[] = [];
@@ -253,11 +314,15 @@ describe('Conductor routed final leaf return (real local Git)', () => {
         },
       },
     });
-    const originalActivate = (conductor as unknown as {
-      activateChildRegionStateForResume(state: ConductState): Promise<boolean>;
-    }).activateChildRegionStateForResume.bind(conductor);
+    const originalActivate = (
+      conductor as unknown as {
+        activateChildRegionStateForResume(state: ConductState): Promise<boolean>;
+      }
+    ).activateChildRegionStateForResume.bind(conductor);
     const activateSpy = vi.fn((state: ConductState) => originalActivate(state));
-    (conductor as unknown as { activateChildRegionStateForResume: typeof activateSpy }).activateChildRegionStateForResume = activateSpy;
+    (
+      conductor as unknown as { activateChildRegionStateForResume: typeof activateSpy }
+    ).activateChildRegionStateForResume = activateSpy;
 
     await conductor.run();
 
@@ -277,27 +342,48 @@ describe('Conductor routed final leaf return (real local Git)', () => {
 
     const checked = await checkRoundSupersession(subject.repo, 'demo', roundId, { git });
     if (checked.kind !== 'leaf-return') throw new Error('sole routed round was not eligible for a leaf return');
-    await expect(supersedeRound({
-      worktree: subject.repo, slug: 'demo', checked, reason: 'manual test repair lands on leaf', operator: 'operator@example.test', git,
-    })).resolves.toMatchObject({ kind: 'superseded', event: { disposition: 'leaf-return' } });
+    await expect(
+      supersedeRound({
+        worktree: subject.repo,
+        slug: 'demo',
+        checked,
+        reason: 'manual test repair lands on leaf',
+        operator: 'operator@example.test',
+        git,
+      }),
+    ).resolves.toMatchObject({ kind: 'superseded', event: { disposition: 'leaf-return' } });
 
     await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'manual-test failure\n');
     await rm(join(subject.repo, '.pipeline', 'HALT'));
     const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
     Object.assign(state, {
-      feature_desc: 'demo', complexity_tier: 'M', acceptance_specs: 'pending', build: 'pending', build_review: 'pending', manual_test: 'pending',
+      feature_desc: 'demo',
+      complexity_tier: 'M',
+      acceptance_specs: 'pending',
+      build: 'pending',
+      build_review: 'pending',
+      manual_test: 'pending',
     });
     await writeState(statePath, state);
     const events = new ConductorEventEmitter();
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events })).resolves.toEqual({ kind: 'clear' });
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events })).resolves.toEqual({ kind: 'clear' });
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events })).resolves.toEqual({
+      kind: 'clear',
+    });
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events })).resolves.toEqual({
+      kind: 'clear',
+    });
 
     const persisted = await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8');
-    const closes = persisted.split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
+    const closes = persisted
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
       .filter((event) => event.type === 'routing_round_superseded' && event.roundId === roundId);
     expect(closes).toHaveLength(1);
     expect(closes[0]).toMatchObject({
-      disposition: 'leaf-return', reason: 'manual test repair lands on leaf', operator: 'operator@example.test',
+      disposition: 'leaf-return',
+      reason: 'manual test repair lands on leaf',
+      operator: 'operator@example.test',
     });
     expect(closes[0]).not.toHaveProperty('supersededBy');
     await expect(readState(statePath)).resolves.toMatchObject({ ok: true, value: { manual_test: 'pending' } });
@@ -336,12 +422,16 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     const { subject, git, host: tasklessHost, repair } = await tasklessExitFixture(true);
     if (repair === undefined) throw new Error('fixture did not create the routed repair commit');
 
-    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host: tasklessHost, git }))
-      .resolves.toEqual({ kind: 'restacked' });
+    await expect(
+      requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host: tasklessHost, git }),
+    ).resolves.toEqual({ kind: 'restacked' });
     await expect(readRouteRecord(subject.repo, 'demo', roundId, { git })).resolves.toMatchObject({
-      kind: 'record', record: { hosts: { 4: 'restacked' } },
+      kind: 'record',
+      record: { hosts: { 4: 'restacked' } },
     });
-    await expect(git(['merge-base', '--is-ancestor', repair, 'feat/daemon-demo'])).resolves.toMatchObject({ exitCode: 0 });
+    await expect(git(['merge-base', '--is-ancestor', repair, 'feat/daemon-demo'])).resolves.toMatchObject({
+      exitCode: 0,
+    });
 
     const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
     if (stored.kind !== 'record') throw new Error('taskless route record is unavailable');
@@ -351,10 +441,12 @@ describe('Conductor routed final leaf return (real local Git)', () => {
   it('takes the taskless no-commit exit without moving the leaf, then refuses a same-HEAD manual-test PASS', async () => {
     const { subject, git, host: tasklessHost, leafHead } = await tasklessExitFixture(false);
 
-    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host: tasklessHost, git }))
-      .resolves.toEqual({ kind: 'no-commit-done' });
+    await expect(
+      requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host: tasklessHost, git }),
+    ).resolves.toEqual({ kind: 'no-commit-done' });
     await expect(readRouteRecord(subject.repo, 'demo', roundId, { git })).resolves.toMatchObject({
-      kind: 'record', record: { hosts: { 4: 'done' } },
+      kind: 'record',
+      record: { hosts: { 4: 'done' } },
     });
     await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toMatchObject({ stdout: leafHead });
 
@@ -364,11 +456,13 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     const resultPath = join(subject.repo, '.pipeline', 'manual-test-results.md');
     await writeFile(resultPath, '| Story | Result |\n|---|---|\n| Story 1 | FAIL |\n');
     await expect(checkStepCompletion(subject.repo, 'manual_test', context)).resolves.toMatchObject({
-      done: false, reason: expect.stringContaining('contains FAIL rows'),
+      done: false,
+      reason: expect.stringContaining('contains FAIL rows'),
     });
     await writeFile(resultPath, '| Story | Result |\n|---|---|\n| Story 1 | PASS |\n');
     await expect(checkStepCompletion(subject.repo, 'manual_test', context)).resolves.toMatchObject({
-      done: false, reason: expect.stringContaining('whitewash guard'),
+      done: false,
+      reason: expect.stringContaining('whitewash guard'),
     });
   });
 
@@ -378,9 +472,14 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     const git = makeGitRunner(subject.repo);
     const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
     if (stored.kind !== 'record') throw new Error('sole routed round is unavailable');
-    await git(['update-ref', routeRecordRefFor('demo', roundId), await writeBlob(git, {
-      ...stored.record, hosts: { [host]: 'admitted' },
-    })]);
+    await git([
+      'update-ref',
+      routeRecordRefFor('demo', roundId),
+      await writeBlob(git, {
+        ...stored.record,
+        hosts: { [host]: 'admitted' },
+      }),
+    ]);
     const kickbackState = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
     Object.assign(kickbackState, {
       feature_desc: 'demo',
@@ -391,7 +490,12 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       post_region_check: 'pending',
     });
     await writeState(statePath, kickbackState);
-    for (const gate of ['prd_audit', 'architecture_review_as_built', 'manual_test', 'post_region_check'] as StepName[]) {
+    for (const gate of [
+      'prd_audit',
+      'architecture_review_as_built',
+      'manual_test',
+      'post_region_check',
+    ] as StepName[]) {
       await writeVerdict(subject.repo, gate, {
         satisfied: false,
         reason: 'routed leaf return requires fresh whole-feature validation',
@@ -400,18 +504,26 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     }
     await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'manual-test failure\n');
 
-    await expect(dispatchStackRoundsCommand({
-      kind: 'stack-rounds-close', slug: 'demo', roundId, reason: 'manual test repair lands on leaf',
-    }, {
-      cwd: subject.repo,
-      resolveMainRoot: async () => subject.repo,
-      resolveWorktree: async () => subject.repo,
-      loadConfig: async () => ({ ok: true, config, warnings: [] }),
-      hasDurableChildState: async () => true,
-      resolveOperator: async () => 'operator@example.test',
-      print: () => undefined,
-      git,
-    } as never)).resolves.toBe(0);
+    await expect(
+      dispatchStackRoundsCommand(
+        {
+          kind: 'stack-rounds-close',
+          slug: 'demo',
+          roundId,
+          reason: 'manual test repair lands on leaf',
+        },
+        {
+          cwd: subject.repo,
+          resolveMainRoot: async () => subject.repo,
+          resolveWorktree: async () => subject.repo,
+          loadConfig: async () => ({ ok: true, config, warnings: [] }),
+          hasDurableChildState: async () => true,
+          resolveOperator: async () => 'operator@example.test',
+          print: () => undefined,
+          git,
+        } as never,
+      ),
+    ).resolves.toBe(0);
     await subject.git(['checkout', '-q', 'feat/daemon-demo']);
     const operatorCommit = await subject.commit('operator leaf repair', 'operator-leaf.txt', 'fixed\n');
     await rm(join(subject.repo, '.pipeline', 'HALT'));
@@ -427,7 +539,9 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     let parkAfterValidationGroup = false;
     let preflightCalls = 0;
     const events = new ConductorEventEmitter();
-    events.on('routed_repair_phase', (event) => { routedRepairPhases.push(event); });
+    events.on('routed_repair_phase', (event) => {
+      routedRepairPhases.push(event);
+    });
     const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
     persister.start();
     const conductor = new Conductor({
@@ -472,11 +586,16 @@ describe('Conductor routed final leaf return (real local Git)', () => {
             expect((conductor as unknown as { activeRegionChild?: number }).activeRegionChild).toBeUndefined();
             expect(stores.stateStore).toBe(stores.rootStateStore);
             persistedRootState = (await stores.stateStore.read()).value;
-            leafVerdicts = Object.fromEntries(await Promise.all(
-              (['prd_audit', 'architecture_review_as_built', 'manual_test', 'post_region_check'] as StepName[])
-                .map(async (gate) => [gate, (await readVerdict(subject.repo, gate))?.satisfied] as const),
-            ));
-            await stores.commitStateChanges(state, 'record first post-return state change', { routed_return_probe: 'recorded' });
+            leafVerdicts = Object.fromEntries(
+              await Promise.all(
+                (['prd_audit', 'architecture_review_as_built', 'manual_test', 'post_region_check'] as StepName[]).map(
+                  async (gate) => [gate, (await readVerdict(subject.repo, gate))?.satisfied] as const,
+                ),
+              ),
+            );
+            await stores.commitStateChanges(state, 'record first post-return state change', {
+              routed_return_probe: 'recorded',
+            });
             // The observation boundary is the resumed leaf dispatch. Stop
             // before mocked-success validation can reach unrelated FINISH.
             parkAfterValidationGroup = true;
@@ -486,15 +605,20 @@ describe('Conductor routed final leaf return (real local Git)', () => {
         },
       },
     });
-    const originalLeafReturnCheck = (conductor as unknown as {
-      hasSettledRoutedLeafReturn(slug: string): Promise<boolean>;
-    }).hasSettledRoutedLeafReturn.bind(conductor);
+    const originalLeafReturnCheck = (
+      conductor as unknown as {
+        hasSettledRoutedLeafReturn(slug: string): Promise<boolean>;
+      }
+    ).hasSettledRoutedLeafReturn.bind(conductor);
     const leafReturnCheckSpy = vi.fn((slug: string) => originalLeafReturnCheck(slug));
-    (conductor as unknown as { hasSettledRoutedLeafReturn: typeof leafReturnCheckSpy }).hasSettledRoutedLeafReturn = leafReturnCheckSpy;
+    (conductor as unknown as { hasSettledRoutedLeafReturn: typeof leafReturnCheckSpy }).hasSettledRoutedLeafReturn =
+      leafReturnCheckSpy;
 
     let gitArgv: string[][];
     try {
-      gitArgv = await withGitArgvShim(subject.repo, async () => { await conductor.run(); });
+      gitArgv = await withGitArgvShim(subject.repo, async () => {
+        await conductor.run();
+      });
     } finally {
       persister.stop();
     }
@@ -507,20 +631,25 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect(gitArgv!).toContainEqual(['rev-parse', 'HEAD']);
     expect(dispatched).toContain('manual_test');
     const persisted = await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8');
-    const closes = persisted.split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
+    const closes = persisted
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
       .filter((event) => event.type === 'routing_round_superseded' && event.roundId === roundId);
     expect(closes).toHaveLength(1);
     expect(closes[0]).toMatchObject({
-      disposition: 'leaf-return', reason: 'manual test repair lands on leaf', operator: 'operator@example.test',
+      disposition: 'leaf-return',
+      reason: 'manual test repair lands on leaf',
+      operator: 'operator@example.test',
     });
     expect(closes[0]).not.toHaveProperty('supersededBy');
     expect(dispatched).toContain('manual_test');
-    const wholeFeatureValidationDispatches = dispatchContexts.filter(({ step }) => [
-      'manual_test', 'prd_audit', 'architecture_review_as_built', 'post_region_check',
-    ].includes(step));
-    expect(wholeFeatureValidationDispatches).toEqual(expect.arrayContaining([
-      expect.objectContaining({ step: 'manual_test', activeChild: undefined }),
-    ]));
+    const wholeFeatureValidationDispatches = dispatchContexts.filter(({ step }) =>
+      ['manual_test', 'prd_audit', 'architecture_review_as_built', 'post_region_check'].includes(step),
+    );
+    expect(wholeFeatureValidationDispatches).toEqual(
+      expect.arrayContaining([expect.objectContaining({ step: 'manual_test', activeChild: undefined })]),
+    );
     expect(dispatchContexts.every(({ activeChild }) => activeChild === undefined)).toBe(true);
     expect(routedRepairPhases).toEqual([]);
     expect(manualTestDispatch).toEqual({ worktree: subject.repo, head: operatorCommit });

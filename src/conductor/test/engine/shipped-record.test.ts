@@ -217,10 +217,11 @@ describe('appendRestackSection', () => {
       tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, costUsd },
       restack: { opId, cause: 'fold' as const },
     });
-    const rendered = appendRestackSection(renderShippedRecord({ slug: 'stack', specHash: 'abc' }), [
-      attempt('fold-one', 0.25),
-      attempt('fold-two', 0.75),
-    ], true);
+    const rendered = appendRestackSection(
+      renderShippedRecord({ slug: 'stack', specHash: 'abc' }),
+      [attempt('fold-one', 0.25), attempt('fold-two', 0.75)],
+      true,
+    );
 
     expect(rendered).toContain('fold:fold-one: runs: 1, cost_usd: $0.25');
     expect(rendered).toContain('fold:fold-two: runs: 1, cost_usd: $0.75');

@@ -6937,8 +6937,7 @@ export class Conductor {
           // Do not keep the former routed host's overlay or its CAS baseline.
           await this.restoreWholeFeatureState(state);
           if (continued.next.kind === 'leaf-returned' && continued.next.mode === 'fold') {
-            state.rebase = 'pending';
-            await this.stateStore.save(state);
+            await this.commitStateChanges(state, 'resume rebase after fold leaf return', { rebase: 'pending' });
             return { index: indexOf('rebase') };
           }
           return { index: indexOf('manual_test') };
@@ -7034,8 +7033,7 @@ export class Conductor {
       // exit uses, then let whole-feature validation resume normally.
       await this.restoreWholeFeatureState(state);
       if (reconciled.mode === 'fold') {
-        state.rebase = 'pending';
-        await this.stateStore.save(state);
+        await this.commitStateChanges(state, 'resume rebase after fold leaf return', { rebase: 'pending' });
         return { index: indexOf('rebase') };
       }
       return { index: indexOf('manual_test') };

@@ -605,6 +605,74 @@ describe('routed round conductor resume', () => {
     expect(childState).toEqual(wholeFeatureState);
   });
 
+  it('resumes rebase after a fold-mode leaf return with no queued admission', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+    const wholeFeatureState: ConductState = {
+      feature_desc: 'demo',
+      complexity_tier: 'M',
+      acceptance_specs: 'done',
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'done',
+      rebase: 'done',
+      manual_test: 'pending',
+    };
+    await writeState(statePath, wholeFeatureState);
+    const childState: ConductState = {
+      ...wholeFeatureState,
+      manual_test: 'done',
+    };
+    const routed = {
+      kind: 'repair-pending' as const,
+      child: host,
+      position: host,
+      isLeaf: true,
+      branch: 'feat/c1/demo',
+      repairChildren: [host],
+      routedRepair: { child: host, roundId },
+    };
+    const admission = vi.fn(async () => ({ kind: 'none' as const }));
+    mocks.routedExit = async () => ({
+      kind: 'exited',
+      next: { kind: 'leaf-returned' as const, roundId, mode: 'fold' as const },
+    });
+    mocks.queueAdmission = admission;
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      resume: true,
+      verifyArtifacts: false,
+      events: new ConductorEventEmitter(),
+      stepRunner: { run: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => routed },
+    }) as unknown as {
+      activeRegionChild: typeof host;
+      continueRoutedHostExit: (
+        candidate: ConductState,
+        indexOf: (step: StepName) => number,
+        requireSatisfiedRegion?: boolean,
+      ) => Promise<unknown>;
+    };
+    conductor.activeRegionChild = host;
+
+    await expect(
+      conductor.continueRoutedHostExit(
+        childState,
+        (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step),
+        true,
+      ),
+    ).resolves.toEqual({ index: ALL_STEPS.findIndex((candidate) => candidate.name === 'rebase') });
+
+    expect(admission).toHaveBeenCalledWith(
+      expect.objectContaining({ reconciled: { kind: 'leaf-returned', roundId, mode: 'fold' } }),
+    );
+    expect(childState).toEqual({ ...wholeFeatureState, rebase: 'pending' });
+  });
+
   it('surfaces a remediation PR when a resumed routed exit halts', async () => {
     const subject = await fixture();
     const host = parseChildId(1)!;

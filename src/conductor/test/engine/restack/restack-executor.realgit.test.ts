@@ -21,7 +21,12 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { collectFoldSet, placeFoldCommits } from '../../../src/engine/restack/fold-plan.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
+import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
+import {
+  createRouteRecord,
+  readRouteRecord,
+  writeRoutingTransaction,
+} from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
@@ -74,15 +79,19 @@ async function fixture() {
   await git(['checkout', '-q', 'main']);
   const advancedDefault = await commit('B-prime', 'base.txt', 'base advanced\n');
   await git(['checkout', '-q', 'feat/daemon-demo']);
-  await writeSliceTopologyFixture(repo, {
-    version: 1,
-    slug: 'demo',
-    runId: 'run-1',
-    status: 'done',
-    entries: [],
-    sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
-    storyOwnership: { S1: 1, S2: 2, S3: 3 },
-  }, envelopeFilesystem);
+  await writeSliceTopologyFixture(
+    repo,
+    {
+      version: 1,
+      slug: 'demo',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
+      storyOwnership: { S1: 1, S2: 2, S3: 3 },
+    },
+    envelopeFilesystem,
+  );
   return { repo, git, base, oldDefault, a1, a2, c1, c2, l1, advancedDefault };
 }
 
@@ -96,44 +105,76 @@ function child(value: number) {
   return parsed;
 }
 
+function commitSha(value: string) {
+  const parsed = parseCommitSha(value);
+  if (!parsed) throw new Error(`invalid commit SHA ${value}`);
+  return parsed;
+}
+
 describe('runRestack (real local Git)', () => {
   it('remaps every deferred placement boundary in the applied feature-repair transaction [late-gate regression]', async () => {
     const subject = await fixture();
     const git = makeGitRunner(subject.repo);
     const roundId = parseRoundId('r1');
     if (!roundId) throw new Error('invalid round id');
-    const created = await createRouteRecord(subject.repo, 'demo', {
-      roundId,
-      kind: 'audit',
-      sealedAuthored: 1,
-      execution: 'leaf',
-      items: [{ findingId: 'deferred', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] }],
-      allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
-    }, { git });
+    const created = await createRouteRecord(
+      subject.repo,
+      'demo',
+      {
+        roundId,
+        kind: 'audit',
+        sealedAuthored: 1,
+        execution: 'leaf',
+        items: [
+          { findingId: 'deferred', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] },
+        ],
+        allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
+      },
+      { git },
+    );
     expect(created.kind).toBe('created');
     const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
     if (stored.kind !== 'record') throw new Error('could not read deferred route');
-    const recorded = await writeRoutingTransaction(subject.repo, 'demo', [{
-      kind: 'update-record', previous: stored,
-      record: {
-        ...stored.record, phase: 'closed', hosts: { [child(1)]: 'done' },
-        placements: { [child(1)]: { state: 'deferred', leafEntryTip: subject.c2, exitTip: subject.l1 } },
-      },
-    }], { git });
+    const recorded = await writeRoutingTransaction(
+      subject.repo,
+      'demo',
+      [
+        {
+          kind: 'update-record',
+          previous: stored,
+          record: {
+            ...stored.record,
+            phase: 'closed',
+            hosts: { [child(1)]: 'done' },
+            placements: {
+              [child(1)]: {
+                state: 'deferred',
+                leafEntryTip: commitSha(subject.c2),
+                exitTip: commitSha(subject.l1),
+              },
+            },
+          },
+        },
+      ],
+      { git },
+    );
     expect(recorded.kind).toBe('updated');
 
-    await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git }))
-      .resolves.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git }),
+    ).resolves.toMatchObject({ kind: 'applied' });
 
     const remapped = await readRouteRecord(subject.repo, 'demo', roundId, { git });
     expect(remapped).toMatchObject({
       kind: 'record',
       record: {
-        placements: { [child(1)]: {
-          state: 'deferred',
-          leafEntryTip: await subject.git(['rev-parse', 'feat/c2/demo']).then((result) => result.stdout.trim()),
-          exitTip: await subject.git(['rev-parse', 'feat/daemon-demo']).then((result) => result.stdout.trim()),
-        } },
+        placements: {
+          [child(1)]: {
+            state: 'deferred',
+            leafEntryTip: await subject.git(['rev-parse', 'feat/c2/demo']).then((result) => result.stdout.trim()),
+            exitTip: await subject.git(['rev-parse', 'feat/daemon-demo']).then((result) => result.stdout.trim()),
+          },
+        },
       },
     });
   });
@@ -146,32 +187,46 @@ describe('runRestack (real local Git)', () => {
     await writeFile(join(subject.repo, 'deferred-repair.txt'), 'repair\n');
     await subject.git(['add', 'deferred-repair.txt']);
     await subject.git(['commit', '-qm', 'deferred repair\n\nRound: r1\nOwner: c1']);
-    const exitTip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    const exitTip = commitSha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
 
-    const created = await createRouteRecord(subject.repo, 'demo', {
-      roundId,
-      kind: 'audit',
-      sealedAuthored: 1,
-      execution: 'leaf',
-      items: [{ findingId: 'deferred', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] }],
-      allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
-    }, { git });
+    const created = await createRouteRecord(
+      subject.repo,
+      'demo',
+      {
+        roundId,
+        kind: 'audit',
+        sealedAuthored: 1,
+        execution: 'leaf',
+        items: [
+          { findingId: 'deferred', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] },
+        ],
+        allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
+      },
+      { git },
+    );
     expect(created.kind).toBe('created');
     const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
     if (stored.kind !== 'record') throw new Error('could not read deferred route');
-    const recorded = await writeRoutingTransaction(subject.repo, 'demo', [{
-      kind: 'update-record',
-      previous: stored,
-      record: {
-        ...stored.record,
-        phase: 'closed',
-        hosts: { [child(1)]: 'done' },
-        placements: { [child(1)]: { state: 'deferred', leafEntryTip: subject.l1, exitTip } },
-      },
-    }], { git });
+    const recorded = await writeRoutingTransaction(
+      subject.repo,
+      'demo',
+      [
+        {
+          kind: 'update-record',
+          previous: stored,
+          record: {
+            ...stored.record,
+            phase: 'closed',
+            hosts: { [child(1)]: 'done' },
+            placements: { [child(1)]: { state: 'deferred', leafEntryTip: commitSha(subject.l1), exitTip } },
+          },
+        },
+      ],
+      { git },
+    );
     expect(recorded.kind).toBe('updated');
 
-    const beforeRange = { host: child(1), roundId, leafEntryTip: subject.l1 as never, exitTip: exitTip as never };
+    const beforeRange = { host: child(1), roundId, leafEntryTip: commitSha(subject.l1), exitTip };
     const beforeCollected = await collectFoldSet({ ranges: [beforeRange], slug: 'demo', git });
     if (beforeCollected.kind !== 'collected') throw new Error('could not collect original deferred range');
     const beforePlan = await placeFoldCommits({
@@ -183,8 +238,9 @@ describe('runRestack (real local Git)', () => {
     });
     if (beforePlan.kind !== 'planned') throw new Error('could not plan original deferred range');
 
-    await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git }))
-      .resolves.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git }),
+    ).resolves.toMatchObject({ kind: 'applied' });
 
     const remapped = await readRouteRecord(subject.repo, 'demo', roundId, { git });
     if (remapped.kind !== 'record') throw new Error('could not read remapped route');
@@ -203,14 +259,15 @@ describe('runRestack (real local Git)', () => {
     });
     if (afterPlan.kind !== 'planned') throw new Error('could not plan remapped deferred range');
 
-    const parts = (plan: typeof beforePlan) => plan.commits.map((commit) => ({
-      owner: commit.owner,
-      parts: commit.parts.map((part) => {
-        if (part.kind !== 'hunks') return part;
-        const { probe: _probe, ...hunk } = part.hunk;
-        return { ...part, hunk };
-      }),
-    }));
+    const parts = (plan: typeof beforePlan) =>
+      plan.commits.map((commit) => ({
+        owner: commit.owner,
+        parts: commit.parts.map((part) => {
+          if (part.kind !== 'hunks') return part;
+          const { probe: _probe, ...hunk } = part.hunk;
+          return { ...part, hunk };
+        }),
+      }));
     expect(parts(afterPlan)).toEqual(parts(beforePlan));
   });
 
@@ -237,13 +294,15 @@ describe('runRestack (real local Git)', () => {
     };
 
     try {
-      await expect(runRestack({
-        worktree: subject.repo,
-        slug: 'demo',
-        cause: 'base-refresh',
-        newDefault: subject.advancedDefault,
-        git: makeGitRunner(subject.repo),
-      })).resolves.toMatchObject({ kind: 'applied' });
+      await expect(
+        runRestack({
+          worktree: subject.repo,
+          slug: 'demo',
+          cause: 'base-refresh',
+          newDefault: subject.advancedDefault,
+          git: makeGitRunner(subject.repo),
+        }),
+      ).resolves.toMatchObject({ kind: 'applied' });
 
       const rewritten = (await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim();
       expect(await rawMessage(rewritten)).toBe(await rawMessage(original));
@@ -284,8 +343,15 @@ describe('runRestack (real local Git)', () => {
       expect((await subject.git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(newLeaf);
       await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
       const eventRecords = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; child?: number; cause?: string });
-      expect(eventRecords.map((event) => event.type)).toEqual(['restack_planned', 'restack_applied', 'restack_applied', 'restack_applied']);
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { type: string; child?: number; cause?: string });
+      expect(eventRecords.map((event) => event.type)).toEqual([
+        'restack_planned',
+        'restack_applied',
+        'restack_applied',
+        'restack_applied',
+      ]);
       expect(eventRecords[0]).toMatchObject({ cause: 'base-refresh' });
       expect(eventRecords.slice(1).map((event) => event.child)).toEqual([1, 2, 3]);
     } finally {
@@ -317,13 +383,27 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'main']);
     const advanced = await commit('advance', 'advance.txt');
     await git(['checkout', '-q', 'feat/c2/demo']);
-    await writeSliceTopologyFixture(repo, {
-      version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
-      storyOwnership: { S1: 1, S2: 2, S3: 3 },
-    }, envelopeFilesystem);
+    await writeSliceTopologyFixture(
+      repo,
+      {
+        version: 1,
+        slug: 'demo',
+        runId: 'run-1',
+        status: 'done',
+        entries: [],
+        sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
+        storyOwnership: { S1: 1, S2: 2, S3: 3 },
+      },
+      envelopeFilesystem,
+    );
 
-    const result = await runRestack({ worktree: repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, git: makeGitRunner(repo) });
+    const result = await runRestack({
+      worktree: repo,
+      slug: 'demo',
+      cause: 'base-refresh',
+      newDefault: advanced,
+      git: makeGitRunner(repo),
+    });
 
     expect(result.kind).toBe('applied');
     await expect(git(['rev-parse', '--verify', 'refs/heads/feat/daemon-demo'])).rejects.toBeDefined();
@@ -361,14 +441,23 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'feat/c2/demo']);
     await mkdir(join(repo, '.pipeline'), { recursive: true });
     await writeFile(join(repo, '.pipeline', 'conduct-state.json'), '{}');
-    await writeSliceTopologyFixture(repo, {
-      version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
-      storyOwnership: { S1: 1, S2: 2, S3: 3 },
-    }, envelopeFilesystem);
+    await writeSliceTopologyFixture(
+      repo,
+      {
+        version: 1,
+        slug: 'demo',
+        runId: 'run-1',
+        status: 'done',
+        entries: [],
+        sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
+        storyOwnership: { S1: 1, S2: 2, S3: 3 },
+      },
+      envelopeFilesystem,
+    );
 
-    await expect(runRestack({ worktree: repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(repo) }))
-      .resolves.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({ worktree: repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(repo) }),
+    ).resolves.toMatchObject({ kind: 'applied' });
 
     const rebase = await readVerdict(repo, 'rebase');
     const completedHead = (await git(['rev-parse', 'HEAD'])).stdout.trim();
@@ -388,13 +477,15 @@ describe('runRestack (real local Git)', () => {
     await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
     await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), '{}');
 
-    await expect(runRestack({
-      worktree: subject.repo,
-      slug: 'demo',
-      cause: 'base-refresh',
-      newDefault: subject.advancedDefault,
-      git: makeGitRunner(subject.repo),
-    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({
+        worktree: subject.repo,
+        slug: 'demo',
+        cause: 'base-refresh',
+        newDefault: subject.advancedDefault,
+        git: makeGitRunner(subject.repo),
+      }),
+    ).resolves.toMatchObject({ kind: 'applied' });
 
     const rebase = await readVerdict(subject.repo, 'rebase');
     const completedHead = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
@@ -427,15 +518,19 @@ describe('runRestack (real local Git)', () => {
     await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
     await git(['add', '.gitignore']);
     await commit('base', 'base.txt', 'base\n');
-    await writeSliceTopologyFixture(repo, {
-      version: 1,
-      slug: 'demo',
-      runId: 'run-1',
-      status: 'done',
-      entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 3, '3': 5 }, titles: ['Child 1', 'Child 3', 'Leaf 5'] },
-      storyOwnership: { S1: 1, S2: 3, S3: 5 },
-    }, envelopeFilesystem);
+    await writeSliceTopologyFixture(
+      repo,
+      {
+        version: 1,
+        slug: 'demo',
+        runId: 'run-1',
+        status: 'done',
+        entries: [],
+        sliceMembership: { taskSlices: { '1': 1, '2': 3, '3': 5 }, titles: ['Child 1', 'Child 3', 'Leaf 5'] },
+        storyOwnership: { S1: 1, S2: 3, S3: 5 },
+      },
+      envelopeFilesystem,
+    );
     await git(['checkout', '-qb', 'feat/daemon-demo']);
     const haltRecord = await commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
     await git(['checkout', '-qb', 'feat/c1/demo']);
@@ -443,16 +538,26 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'main']);
     const advanced = await commit('advance', 'base.txt', 'advanced\n');
     await git(['checkout', '-q', 'feat/daemon-demo']);
-    await writeFile(join(repo, '.pipeline', 'task-evidence.json'), JSON.stringify({
-      evidenceStamps: { halted: { sha: haltRecord } },
-    }));
+    await writeFile(
+      join(repo, '.pipeline', 'task-evidence.json'),
+      JSON.stringify({
+        evidenceStamps: { halted: { sha: haltRecord } },
+      }),
+    );
 
     const events = new ConductorEventEmitter();
     const planned: number[][] = [];
     events.on('restack_planned', (event) => {
       if (event.type === 'restack_planned') planned.push([...event.children]);
     });
-    const result = await runRestack({ worktree: repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: makeGitRunner(repo) });
+    const result = await runRestack({
+      worktree: repo,
+      slug: 'demo',
+      cause: 'base-refresh',
+      newDefault: advanced,
+      events,
+      git: makeGitRunner(repo),
+    });
 
     expect(result.kind).toBe('applied');
     expect(planned).toEqual([[1, 5]]);
@@ -492,39 +597,51 @@ describe('runRestack (real local Git)', () => {
     await git(['update-ref', 'refs/conductor/demo/closed/c1', closure]);
     const repaired = await commit('repair', 'repair.txt', 'repair\n');
     await git(['checkout', '-qb', 'feat/c2/demo', closure]);
-    await writeSliceTopologyFixture(repo, {
-      version: 1,
-      slug: 'demo',
-      runId: 'run-1',
-      status: 'done',
-      entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf 3'] },
-      storyOwnership: { S1: 1, S2: 2, S3: 3 },
-    }, envelopeFilesystem);
-    await writeFile(join(repo, '.pipeline', 'task-evidence.json'), JSON.stringify({
-      evidenceStamps: { halted: { sha: haltRecord } },
-    }));
+    await writeSliceTopologyFixture(
+      repo,
+      {
+        version: 1,
+        slug: 'demo',
+        runId: 'run-1',
+        status: 'done',
+        entries: [],
+        sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf 3'] },
+        storyOwnership: { S1: 1, S2: 2, S3: 3 },
+      },
+      envelopeFilesystem,
+    );
+    await writeFile(
+      join(repo, '.pipeline', 'task-evidence.json'),
+      JSON.stringify({
+        evidenceStamps: { halted: { sha: haltRecord } },
+      }),
+    );
 
-    await expect(runRestack({ worktree: repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(repo) }))
-      .resolves.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({ worktree: repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(repo) }),
+    ).resolves.toMatchObject({ kind: 'applied' });
 
     await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toMatchObject({ stdout: `${haltRecord}\n` });
     await expect(git(['rev-parse', 'feat/c1/demo'])).resolves.toMatchObject({ stdout: `${repaired}\n` });
     await expect(git(['rev-parse', 'feat/c2/demo'])).resolves.toMatchObject({ stdout: `${repaired}\n` });
-    await expect(git(['rev-parse', 'refs/conductor/demo/closed/c1'])).resolves.toMatchObject({ stdout: `${repaired}\n` });
+    await expect(git(['rev-parse', 'refs/conductor/demo/closed/c1'])).resolves.toMatchObject({
+      stdout: `${repaired}\n`,
+    });
     await expect(git(['merge-base', '--is-ancestor', haltRecord, repaired])).resolves.toMatchObject({ stdout: '' });
   });
 
   it('derives a durable child stack from its sealed plan without a cache file', async () => {
     const subject = await fixture();
 
-    await expect(runRestack({
-      worktree: subject.repo,
-      slug: 'demo',
-      cause: 'base-refresh',
-      newDefault: subject.advancedDefault,
-      git: makeGitRunner(subject.repo),
-    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({
+        worktree: subject.repo,
+        slug: 'demo',
+        cause: 'base-refresh',
+        newDefault: subject.advancedDefault,
+        git: makeGitRunner(subject.repo),
+      }),
+    ).resolves.toMatchObject({ kind: 'applied' });
   });
 
   it('persists a merge audit after flattening an uncarried side of a child range', async () => {
@@ -541,17 +658,21 @@ describe('runRestack (real local Git)', () => {
     const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
     persister.start();
     try {
-      await expect(runRestack({
-        worktree: subject.repo,
-        slug: 'demo',
-        cause: 'base-refresh',
-        newDefault: subject.advancedDefault,
-        events,
-        git: makeGitRunner(subject.repo),
-      })).resolves.toMatchObject({ kind: 'applied' });
+      await expect(
+        runRestack({
+          worktree: subject.repo,
+          slug: 'demo',
+          cause: 'base-refresh',
+          newDefault: subject.advancedDefault,
+          events,
+          git: makeGitRunner(subject.repo),
+        }),
+      ).resolves.toMatchObject({ kind: 'applied' });
 
       const records = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; flattenedMerges?: string[] });
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { type: string; flattenedMerges?: string[] });
       expect(records).toContainEqual(expect.objectContaining({ type: 'rebase_merge_audit', flattenedMerges: [merge] }));
     } finally {
       persister.stop();
@@ -580,23 +701,47 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'main']);
     const advanced = await commit('advance', 'advance.txt');
     await git(['checkout', '-q', 'feat/c2/demo']);
-    await writeSliceTopologyFixture(repo, {
-      version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
-      storyOwnership: { S1: 1, S2: 2, S3: 3 },
-    }, envelopeFilesystem);
+    await writeSliceTopologyFixture(
+      repo,
+      {
+        version: 1,
+        slug: 'demo',
+        runId: 'run-1',
+        status: 'done',
+        entries: [],
+        sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
+        storyOwnership: { S1: 1, S2: 2, S3: 3 },
+      },
+      envelopeFilesystem,
+    );
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => { refusals.push(event); });
+    events.on('restack_refused', (event) => {
+      refusals.push(event);
+    });
 
-    const result = await runRestack({ worktree: repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: makeGitRunner(repo) });
+    const result = await runRestack({
+      worktree: repo,
+      slug: 'demo',
+      cause: 'base-refresh',
+      newDefault: advanced,
+      events,
+      git: makeGitRunner(repo),
+    });
 
     // Task 8: a diverged stack halts needs-human through haltRestack naming the child.
     expect(result).toMatchObject({ kind: 'halted' });
-    expect(refusals).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'range-not-ancestor', child: 2 })]);
-    expect((await git(['merge-base', '--is-ancestor', active, 'feat/c2/demo']).then(() => true))).toBe(true);
-    expect((await git(['diff', '--name-only', active, 'feat/c2/demo'])).stdout.trim().split('\n').filter(Boolean)
-      .every((path) => path.startsWith('.docs/halted/'))).toBe(true);
+    expect(refusals).toEqual([
+      expect.objectContaining({ type: 'restack_refused', reason: 'range-not-ancestor', child: 2 }),
+    ]);
+    expect(await git(['merge-base', '--is-ancestor', active, 'feat/c2/demo']).then(() => true)).toBe(true);
+    expect(
+      (await git(['diff', '--name-only', active, 'feat/c2/demo'])).stdout
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .every((path) => path.startsWith('.docs/halted/')),
+    ).toBe(true);
     await expect(git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
     await expect(readFile(join(repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
@@ -611,11 +756,18 @@ describe('runRestack (real local Git)', () => {
     const haltCommit = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
     await subject.git(['checkout', '-q', 'feat/daemon-demo']);
 
-    const result = await runRestack({ worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.advancedDefault, git: makeGitRunner(subject.repo) });
+    const result = await runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'base-refresh',
+      newDefault: subject.advancedDefault,
+      git: makeGitRunner(subject.repo),
+    });
 
     expect(result.kind).toBe('applied');
-    expect((await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim())
-      .toBe((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim());
+    expect((await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim()).toBe(
+      (await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim(),
+    );
     expect(await revList(subject.git, `refs/conductor/demo/closed/c1..feat/c2/demo`)).not.toContain(haltCommit);
     expect((await subject.git(['reflog', 'show', '--format=%H', 'feat/c1/demo'])).stdout).toContain(haltCommit);
   });

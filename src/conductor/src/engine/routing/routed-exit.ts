@@ -507,21 +507,20 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     const unchanged = placement.leafEntryTip === head;
     const done = transitionHost(stored, input.host, 'done', { credit: false });
     if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf-executed host done`);
-    const record =
-      unchanged
-        ? {
-            ...done.record,
-            placements: Object.fromEntries(
-              Object.entries(done.record.placements ?? {}).filter(([key]) => key !== String(input.host)),
-            ),
-          }
-        : {
-            ...done.record,
-            placements: {
-              ...done.record.placements,
-              [input.host]: { state: 'deferred' as const, leafEntryTip: placement.leafEntryTip, exitTip: head },
-            },
-          };
+    const record = unchanged
+      ? {
+          ...done.record,
+          placements: Object.fromEntries(
+            Object.entries(done.record.placements ?? {}).filter(([key]) => key !== String(input.host)),
+          ),
+        }
+      : {
+          ...done.record,
+          placements: {
+            ...done.record.placements,
+            [input.host]: { state: 'deferred' as const, leafEntryTip: placement.leafEntryTip, exitTip: head },
+          },
+        };
     const wrote = await writeRoutingTransaction(
       input.worktree,
       input.slug,

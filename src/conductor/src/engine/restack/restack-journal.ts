@@ -376,7 +376,12 @@ function parseDeferredRoutes(value: unknown): readonly RestackJournalDeferredRou
     if (!isRecord(item) || typeof item.roundId !== 'string' || typeof item.routeOld !== 'string') return undefined;
     const roundId = parseRoundId(item.roundId);
     const routeOld = parseCommitSha(item.routeOld);
-    const routeNew = item.routeNew === undefined ? undefined : typeof item.routeNew === 'string' ? parseCommitSha(item.routeNew) : undefined;
+    const routeNew =
+      item.routeNew === undefined
+        ? undefined
+        : typeof item.routeNew === 'string'
+          ? parseCommitSha(item.routeNew)
+          : undefined;
     if (!roundId || !routeOld || (item.routeNew !== undefined && !routeNew)) return undefined;
     routes.push({ roundId, routeOld, ...(routeNew === undefined ? {} : { routeNew }) });
   }

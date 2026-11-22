@@ -91,7 +91,12 @@ import {
 } from '../routing/routing-refs.js';
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
 import { childRevalidatedEvent } from '../routing/routing-events.js';
-import { parseRevalidationQueueRecord, routingEligible, type RevalidationQueueEntry, type RevalidationQueueRecord } from '../routing/route-types.js';
+import {
+  parseRevalidationQueueRecord,
+  routingEligible,
+  type RevalidationQueueEntry,
+  type RevalidationQueueRecord,
+} from '../routing/route-types.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
@@ -405,7 +410,9 @@ export async function appliedTransactionLines(
     if (routed === 'refused') throw new Error('cannot build routed applied transaction');
     lines.push(...routed);
   }
-  for (const route of (journal.journal.deferredRoutes ?? []).filter((entry) => entry.roundId !== journal.journal.routed?.roundId)) {
+  for (const route of (journal.journal.deferredRoutes ?? []).filter(
+    (entry) => entry.roundId !== journal.journal.routed?.roundId,
+  )) {
     if (route.routeNew === undefined) throw new Error('cannot build deferred placement applied transaction');
     lines.push(`update ${routeRecordRefFor(journal.slug, route.roundId)} ${route.routeNew} ${route.routeOld}`);
   }
@@ -481,9 +488,12 @@ export async function changedRoutedAppliedRef(
     ...(journal.journal.queueTracked === true
       ? [{ ref: revalidationQueueRefFor(journal.slug), old: journal.journal.queueOld }]
       : []),
-    ...(journal.journal.deferredRoutes ?? []).filter((entry) => entry.roundId !== routed?.roundId).map((route) => ({
-      ref: routeRecordRefFor(journal.slug, route.roundId), old: route.routeOld,
-    })),
+    ...(journal.journal.deferredRoutes ?? [])
+      .filter((entry) => entry.roundId !== routed?.roundId)
+      .map((route) => ({
+        ref: routeRecordRefFor(journal.slug, route.roundId),
+        old: route.routeOld,
+      })),
   ];
   for (const entry of expected) {
     const result = await runGit(git, ['rev-parse', '-q', '--verify', entry.ref]);
@@ -559,7 +569,8 @@ async function journalDeferredRouteRemap(
       input: JSON.stringify({ ...stored.record, placements }),
     });
     const routeNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
-    if (routeNew === undefined) return { kind: 'unavailable', detail: `cannot write deferred placement route ${route.roundId}` };
+    if (routeNew === undefined)
+      return { kind: 'unavailable', detail: `cannot write deferred placement route ${route.roundId}` };
     planned.push({ ...route, routeNew });
   }
   const next = { ...journal.journal, deferredRoutes: planned };

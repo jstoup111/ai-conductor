@@ -14,10 +14,7 @@ import type { TokenUsage } from '../execution/llm-provider.js';
 import type { ConductorEvent } from '../types/events.js';
 import type { ComplexityTier } from '../types/steps.js';
 import { classifyMetering } from './metering.js';
-import {
-  DispatchMeteringTracker,
-  type DispatchMeteringObservation,
-} from './dispatch-metering.js';
+import { DispatchMeteringTracker, type DispatchMeteringObservation } from './dispatch-metering.js';
 
 export interface CostRollup {
   tokens: { input: number; output: number; cacheRead: number; cacheCreation: number };
@@ -113,8 +110,9 @@ function addTokenDimensionRollup(
   const tokenUsage = event.tokenUsage;
   if (!tokenUsage) return;
 
-  const finiteTokens = (['input', 'output', 'cacheRead', 'cacheCreation'] as const)
-    .filter((kind) => Number.isFinite(tokenUsage[kind]));
+  const finiteTokens = (['input', 'output', 'cacheRead', 'cacheCreation'] as const).filter((kind) =>
+    Number.isFinite(tokenUsage[kind]),
+  );
   if (finiteTokens.length === 0) return;
 
   const step = event.step ?? 'unknown';
@@ -135,10 +133,7 @@ function addTokenDimensionRollup(
   }
 }
 
-function addDispatch(
-  target: ProviderCostRollup,
-  event: DispatchMeteringObservation,
-): void {
+function addDispatch(target: ProviderCostRollup, event: DispatchMeteringObservation): void {
   target.dispatches += 1;
   const tokenUsage = event.tokenUsage as TokenUsage | undefined;
   const metering = classifyMetering(tokenUsage);
@@ -243,7 +238,7 @@ export async function computeCostRollup(worktreeDir: string): Promise<CostRollup
         addDimensionRollup(rollup, dimensions, dispatch);
         addTokenDimensionRollup(rollup, tokenDimensions, dispatch);
         if (dispatch.provider) {
-          const providerRollup = providers[dispatch.provider] ??= zeroUsageRollup();
+          const providerRollup = (providers[dispatch.provider] ??= zeroUsageRollup());
           addDispatch(providerRollup, dispatch);
         }
       }
