@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -357,6 +357,28 @@ describe('remediation projection', () => {
     await expect(readFile(join(directory, 'empty-attempt.resolved.json'), 'utf8')).resolves.toBe(
       JSON.stringify({ pendingAsBuiltFindings: [], priorAsBuiltCases: [], priorLaps: [], refusals: [] }),
     );
+  });
+
+  // Covers: task:4
+  it('returns a history-write-failed fault naming the resolved snapshot path', async () => {
+    const root = await fixture();
+    await writeAsBuiltVerdict(root);
+    const result = await buildRemediationProjection(root, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md', attemptRunId: 'write-failure',
+    }, undefined, {
+      filesystem: {
+        mkdir,
+        rename,
+        writeFile: async (path, data, options) => {
+          if (String(path).includes('write-failure.resolved.json')) throw new Error(`denied ${path}`);
+          return writeFile(path, data, options);
+        },
+      },
+    });
+    await expectPreparationFault(result, {
+      source: 'history snapshot', cause: 'history-write-failed',
+      detail: expect.stringContaining('write-failure.resolved.json'),
+    });
   });
 
   // Covers: task:2

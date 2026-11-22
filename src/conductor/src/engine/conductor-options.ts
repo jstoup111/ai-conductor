@@ -23,7 +23,7 @@ import type { ShipmentEvidenceInput, ShipmentEvidenceResult } from './shipment-e
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import type { performRebase } from './rebase.js';
-import type { RemediationProjectionLimits } from './remediation-projection.js';
+import type { RemediationProjectionDependencies, RemediationProjectionLimits } from './remediation-projection.js';
 import type { resolveActiveChild } from './child-cursor.js';
 import type { runStackPreflight } from './restack/stack-preflight.js';
 import type { advanceChildRegion, enterChildRegion } from './child-lifecycle.js';
@@ -134,6 +134,8 @@ export interface ConductorOptions {
   buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** Test-only bound override for deterministic remediation projection faults. */
   remediationProjectionLimitOverrides?: Partial<RemediationProjectionLimits>;
+  /** Test seam for remediation projection durable-state dependencies. */
+  remediationProjectionDependencies?: RemediationProjectionDependencies;
   /** Test seam; production resolves fresh committed feature evidence. */
   resolveFeatureCreationMutation?: typeof resolveFeatureRemoteMutation;
   /** Test seam; production resolves fresh guarded publication dependencies. */

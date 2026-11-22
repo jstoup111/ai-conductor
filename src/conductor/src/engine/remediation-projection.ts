@@ -174,6 +174,7 @@ export type RemediationProjectionResult =
       readonly ok: false;
       readonly kind: 'preparation-fault';
       readonly fault: {
+        readonly cause: 'prior-repair-task-missing' | 'case-store-unreadable' | 'history-write-failed' | 'input';
         readonly source: string;
         readonly detail: string;
         readonly dimension?: string;
@@ -305,8 +306,9 @@ function preparationFault(
   source: string,
   detail: string,
   fields: Pick<Extract<RemediationProjectionResult, { readonly ok: false }>['fault'], 'dimension' | 'actual' | 'limit'> = {},
+  cause: Extract<RemediationProjectionResult, { readonly ok: false }>['fault']['cause'] = 'input',
 ): RemediationProjectionResult {
-  return { ok: false, kind: 'preparation-fault', fault: { source, detail, ...fields } };
+  return { ok: false, kind: 'preparation-fault', fault: { source, detail, cause, ...fields } };
 }
 
 function utf8Bytes(text: string): number {
@@ -656,7 +658,7 @@ export async function buildRemediationProjection(
   const priorCases = includesAsBuilt(request)
     ? await projectPriorAsBuiltCases(worktree)
     : undefined;
-  if (priorCases !== undefined && !priorCases.ok) return preparationFault('remediation case store', priorCases.detail);
+  if (priorCases !== undefined && !priorCases.ok) return preparationFault('remediation case store', priorCases.detail, {}, 'case-store-unreadable');
   if (priorCases !== undefined) priorCases.repairTaskIds.forEach((id) => ownerTaskIds.add(id));
   const [pending, ledger, taskContext, evidence] = await Promise.all([
     safelyReadPendingFindings(() => readPending(worktree)),
@@ -676,6 +678,7 @@ export async function buildRemediationProjection(
       'active plan',
       taskContext.detail,
       isMissingPriorAsBuiltRepair ? { dimension: 'prior-as-built-cases' } : {},
+      isMissingPriorAsBuiltRepair ? 'prior-repair-task-missing' : 'input',
     );
   }
   if (!evidence.ok) {
@@ -716,6 +719,11 @@ export async function buildRemediationProjection(
   const fault = projectionLimitFault(projection, request.source, limits);
   if (fault !== undefined) return fault;
   const filesystem = dependencies.filesystem ?? { mkdir, writeFile, rename };
-  const history = await writeRemediationHistory(worktree, request.attemptRunId, projection, filesystem);
+  let history: RemediationProjectionHistory;
+  try {
+    history = await writeRemediationHistory(worktree, request.attemptRunId, projection, filesystem);
+  } catch (error) {
+    return preparationFault('history snapshot', `history snapshot write failed: ${errorDetail(error)}`, {}, 'history-write-failed');
+  }
   return { ok: true, projection, history };
 }

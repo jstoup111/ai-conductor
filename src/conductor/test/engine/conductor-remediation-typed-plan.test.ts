@@ -1,6 +1,6 @@
 // Covers: task:19, task:20
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,7 +16,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { RemediationPlanProviderOutcome } from './remediation-plan-fixtures.js';
-import type { RemediationProjectionLimits } from '../../src/engine/remediation-projection.js';
+import type { RemediationProjectionDependencies, RemediationProjectionLimits } from '../../src/engine/remediation-projection.js';
 import type { ConductState } from '../../src/types/index.js';
 import { createRemediationPlanProviderFixture } from './remediation-plan-fixtures.js';
 
@@ -150,7 +150,9 @@ async function fixture(
     asBuiltRound?: boolean;
     asBuiltCases?: readonly Record<string, unknown>[];
     attemptRunId?: string;
+    corruptKickbackLedger?: boolean;
     remediationProjectionLimitOverrides?: Partial<RemediationProjectionLimits>;
+    remediationProjectionDependencies?: RemediationProjectionDependencies;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-remediation-typed-plan-'));
@@ -244,6 +246,7 @@ async function fixture(
     verifyArtifacts: false,
     config,
     remediationProjectionLimitOverrides: options.remediationProjectionLimitOverrides,
+    remediationProjectionDependencies: options.remediationProjectionDependencies,
   });
   if (options.attemptRunId !== undefined) {
     (conductor as unknown as { currentRunId: string }).currentRunId = options.attemptRunId;
@@ -255,6 +258,7 @@ async function fixture(
   } else if (options.stallQuestion !== undefined) {
     await writeFile(join(root, evidenceFile), options.stallQuestion, 'utf8');
   }
+  if (options.corruptKickbackLedger) await writeFile(join(root, '.pipeline', 'kickback-ledger.json'), '{', 'utf8');
   const state = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
   // This focused planner seam normally runs after Conductor.run has captured
   // the mutation baseline. Seed that lifecycle-owned baseline so a mechanical
@@ -741,6 +745,44 @@ describe('Conductor typed remediation-plan admission', () => {
       /source prd-audit, dimension tasks \(actual \d+, limit \d+\)/,
     );
     await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:4
+  it('halts mechanically without invoking remediate when every history write fails', async () => {
+    const result = await fixture('codex', undefined, 2, {
+      remediationProjectionDependencies: {
+        filesystem: { mkdir, rename, writeFile: async () => { throw new Error('fixture history writer failed'); } },
+      },
+    });
+    expect(result.outcome).toMatchObject({ kind: 'halt' });
+    expect(result.provider.invocationCount).toBe(0);
+    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/history snapshot.*fixture history writer failed/);
+  });
+
+  // Covers: task:4
+  it('does not invoke remediate when the resolved history write fails', async () => {
+    const result = await fixture('codex', undefined, 2, {
+      remediationProjectionDependencies: {
+        filesystem: {
+          mkdir, rename,
+          writeFile: async (path, data, options) => {
+            if (String(path).includes('.resolved.json')) throw new Error(`fixture denied ${path}`);
+            return writeFile(path, data, options);
+          },
+        },
+      },
+    });
+    expect(result.outcome).toMatchObject({ kind: 'halt' });
+    expect(result.provider.invocationCount).toBe(0);
+  });
+
+  // Covers: task:4
+  it('halts before history writing when the kickback ledger is corrupt', async () => {
+    const result = await fixture('codex', undefined, 2, { corruptKickbackLedger: true });
+    expect(result.outcome).toMatchObject({ kind: 'halt' });
+    expect(result.provider.invocationCount).toBe(0);
+    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('kickback ledger');
+    await expect(readdir(join(result.root, '.pipeline', 'remediation-history'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   // Covers: task:21
