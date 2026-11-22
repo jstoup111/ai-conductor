@@ -2578,7 +2578,9 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
   // Covers: task:18
   it('clears the stale-citation halt marker before a halt-clear re-kick', async () => {
     await seedToBuildStep();
-    const seeded = (await readState(statePath)).value as Record<string, unknown>;
+    const seededResult = await readState(statePath);
+    if (!seededResult.ok) throw new Error(seededResult.error.message);
+    const seeded = seededResult.value as Record<string, unknown>;
     let afterBuild = false;
     for (const step of ALL_STEPS) {
       if (afterBuild) seeded[step.name] = 'done';
