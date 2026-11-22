@@ -1007,6 +1007,20 @@ describe('Conductor residue routing judge binding', () => {
           haltCategories: ['architectural-clarity', 'product-scope', 'unanswerable'],
         },
       },
+      history: {
+        active: {
+          path: '.pipeline/remediation-history/unknown-attempt.active.json',
+          digest: 'sha256:active',
+        },
+        resolved: {
+          path: '.pipeline/remediation-history/unknown-attempt.resolved.json',
+          digest: 'sha256:resolved',
+        },
+        pendingAsBuiltFindings: { ids: [], count: 0 },
+        priorAsBuiltCases: { ids: [], count: 0 },
+        priorLaps: { ids: [], count: 0 },
+        refusals: { ids: [], count: 0 },
+      },
     };
 
     const second = parseChildId(2)!;
