@@ -841,6 +841,39 @@ describe('Conductor typed remediation-plan admission', () => {
     expect(result.provider.invocationCount).toBe(0);
   });
 
+  // Covers: task:9
+  it('halts needs-human before remediate when a prior as-built repair task is missing from the active plan', async () => {
+    const missingRepairTaskId = 'rem-as-built-t9';
+    const result = await fixture('codex', undefined, 2, {
+      source: 'as-built', asBuiltRound: true,
+      asBuiltCases: [{
+        id: 'case-prior-repair', domain: 'as_built', status: 'open', repairTaskIds: [missingRepairTaskId], recurrenceCount: 1,
+        sources: [{
+          findingId: 'as-built:prior:9', attemptId: 'prior-attempt', class: 'REMEDIABLE',
+          reference: { kind: 'plan-task', taskId: '1' }, summary: 'A prior repair is still open.',
+          relation: 'new', reason: 'The repair was first observed.',
+        }],
+      }],
+    });
+
+    expect(result.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+    expect(result.provider.invocationCount).toBe(0);
+    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(missingRepairTaskId);
+  });
+
+  // Covers: task:9
+  it('halts mechanically when a missing active-plan owner is not a prior as-built repair task', async () => {
+    const result = await fixture('codex', undefined, 2, {
+      source: 'as-built', asBuiltRound: true,
+      planText: plan.replace('### Task 1: Authored task 1', '### Task 9: Replacement task'),
+      asBuiltCases: [],
+    });
+
+    expect(result.outcome).toMatchObject({ kind: 'halt', haltClass: 'mechanical' });
+    expect(result.provider.invocationCount).toBe(0);
+    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('task 1');
+  });
+
   // Covers: task:21
   it('retains the build-stall question verbatim on a mechanical capability halt', async () => {
     const question = 'Which verified input should unblock this stalled build?';
