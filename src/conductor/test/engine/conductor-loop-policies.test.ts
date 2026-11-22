@@ -657,6 +657,7 @@ describe('build-step stall circuit breaker', () => {
 
     const buildHints: string[] = [];
     const retryReasons: string[] = [];
+    const composerProviderSwitches: unknown[] = [];
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
         if (step === 'build' && options?.retryReason) buildHints.push(options.retryReason);
@@ -665,6 +666,9 @@ describe('build-step stall circuit breaker', () => {
     };
     events.on('step_retry', (event) => {
       if (event.type === 'step_retry' && event.step === 'build') retryReasons.push(event.reason);
+    });
+    events.on('composer_provider_switched', (event) => {
+      composerProviderSwitches.push(event);
     });
 
     const conductor = new Conductor({
@@ -681,6 +685,7 @@ describe('build-step stall circuit breaker', () => {
 
     expect(buildHints).not.toHaveLength(0);
     expect(retryReasons).not.toHaveLength(0);
+    expect(composerProviderSwitches).toEqual([]);
     for (const value of [...buildHints, ...retryReasons]) {
       for (let i = 0; i < titles.length; i++) {
         expect(value).toContain(String(i + 1));

@@ -45,7 +45,12 @@ function makeGh(
       const issues = issuesByRepo[repo] ?? [];
       return {
         stdout: JSON.stringify(
-          issues.map((i) => ({ number: i.number, title: i.title, body: i.body, labels: (i.labels ?? []).map((l) => ({ name: l })) })),
+          issues.map((i) => ({
+            number: i.number,
+            title: i.title,
+            body: i.body,
+            labels: (i.labels ?? []).map((l) => ({ name: l })),
+          })),
         ),
       };
     }
@@ -131,7 +136,9 @@ describe('detectEngineerCommand: poll + forget grammar', () => {
   });
   it('rejects unknown forget flags by name', () => {
     expect(detectEngineerCommand(composeArgv('forget', 'o/a#1', '--unknown'))).toEqual({
-      kind: 'reject', sub: 'forget', flag: '--unknown',
+      kind: 'reject',
+      sub: 'forget',
+      flag: '--unknown',
     });
   });
   it('forget without a ref → guide', () => {
@@ -182,39 +189,90 @@ describe('engineer land tracker write-back (Task 11)', () => {
     await writeFile(join(repoPath, '.ai-conductor', 'config.yml'), 'tracker:\n  backend: jira\n');
     await git(['add', 'README.md', '.ai-conductor/config.yml']);
     await git(['commit', '-m', 'initial']);
-    await writeFile(registryPath, JSON.stringify([{
-      schemaVersion: 1,
-      name: 'tracker-project',
-      path: repoPath,
-      status: 'registered',
-      registeredAt: '2026-09-28T00:00:00.000Z',
-    }]));
+    await writeFile(
+      registryPath,
+      JSON.stringify([
+        {
+          schemaVersion: 1,
+          name: 'tracker-project',
+          path: repoPath,
+          status: 'registered',
+          registeredAt: '2026-09-28T00:00:00.000Z',
+        },
+      ]),
+    );
 
     const worktree = (await createEngineerWorktree(repoPath, 'jira writeback')).worktreePath;
-    await Promise.all(['specs', 'stories', 'plans', 'coherence'].map((directory) => mkdir(join(worktree, '.docs', directory), { recursive: true })));
+    await Promise.all(
+      ['specs', 'stories', 'plans', 'coherence'].map((directory) =>
+        mkdir(join(worktree, '.docs', directory), { recursive: true }),
+      ),
+    );
     await writeFile(join(worktree, '.docs', 'specs', 'jira-writeback.md'), '# PRD: Jira writeback\n\nApproved.\n');
-    await writeFile(join(worktree, '.docs', 'stories', 'jira-writeback.md'), [
-      '# Stories: Jira writeback', '', '**Status:** Accepted', '', '## Story 1: Jira writeback',
-      '### Acceptance Criteria', '#### Happy Path', '- Given X, when Y, then Z.', '',
-      '#### Negative Paths', '- Given invalid input, when Y, then it is refused.', '',
-    ].join('\n'));
-    await writeFile(join(worktree, '.docs', 'plans', 'jira-writeback.md'), [
-      '# Implementation Plan: Jira writeback', '', '**Stories:** .docs/stories/jira-writeback.md', '',
-      '### Task 1: Route Jira write-backs', '', '**Story:** 1', '', '**Dependencies:** none', '', '**Done when:**', '- Jira write-backs are no-ops.', '- The ledger advances after the no-op.', '',
-      '## Task Dependency Graph', '```', '1', '```', '',
-    ].join('\n'));
-    await writeFile(join(worktree, '.docs', 'coherence', 'jira-writeback.md'), [
-      '# Coherence: Jira writeback', '', 'Track: technical', 'Tier: M', 'Verdict: covered', '',
-      '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Quote / Notes |',
-      '| --- | --- | --- | --- | --- |',
-      '| story | story-1 | task-1 | covered | Jira writeback |',
-      '| task | task-1 | story-1 | covered | Jira write-backs are no-ops. |', '',
-      '## Criterion mapping', '',
-      '| Row class | Criterion | Task id(s) | Verdict | Done when quote | Disposition |',
-      '| --- | --- | --- | --- | --- | --- |',
-      '| criterion | Story 1 happy: Given X, when Y, then Z. | task-1 | covered | Jira write-backs are no-ops. | diff-local |',
-      '| criterion | Story 1 negative: Given invalid input, when Y, then it is refused. | task-1 | covered | The ledger advances after the no-op. | diff-local |', '',
-    ].join('\n'));
+    await writeFile(
+      join(worktree, '.docs', 'stories', 'jira-writeback.md'),
+      [
+        '# Stories: Jira writeback',
+        '',
+        '**Status:** Accepted',
+        '',
+        '## Story 1: Jira writeback',
+        '### Acceptance Criteria',
+        '#### Happy Path',
+        '- Given X, when Y, then Z.',
+        '',
+        '#### Negative Paths',
+        '- Given invalid input, when Y, then it is refused.',
+        '',
+      ].join('\n'),
+    );
+    await writeFile(
+      join(worktree, '.docs', 'plans', 'jira-writeback.md'),
+      [
+        '# Implementation Plan: Jira writeback',
+        '',
+        '**Stories:** .docs/stories/jira-writeback.md',
+        '',
+        '### Task 1: Route Jira write-backs',
+        '',
+        '**Story:** 1',
+        '',
+        '**Dependencies:** none',
+        '',
+        '**Done when:**',
+        '- Jira write-backs are no-ops.',
+        '- The ledger advances after the no-op.',
+        '',
+        '## Task Dependency Graph',
+        '```',
+        '1',
+        '```',
+        '',
+      ].join('\n'),
+    );
+    await writeFile(
+      join(worktree, '.docs', 'coherence', 'jira-writeback.md'),
+      [
+        '# Coherence: Jira writeback',
+        '',
+        'Track: technical',
+        'Tier: M',
+        'Verdict: covered',
+        '',
+        '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Quote / Notes |',
+        '| --- | --- | --- | --- | --- |',
+        '| story | story-1 | task-1 | covered | Jira writeback |',
+        '| task | task-1 | story-1 | covered | Jira write-backs are no-ops. |',
+        '',
+        '## Criterion mapping',
+        '',
+        '| Row class | Criterion | Task id(s) | Verdict | Done when quote | Disposition |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| criterion | Story 1 happy: Given X, when Y, then Z. | task-1 | covered | Jira write-backs are no-ops. | diff-local |',
+        '| criterion | Story 1 negative: Given invalid input, when Y, then it is refused. | task-1 | covered | The ledger advances after the no-op. | diff-local |',
+        '',
+      ].join('\n'),
+    );
     const planText = await readFile(join(worktree, '.docs', 'plans', 'jira-writeback.md'), 'utf8');
     const storiesText = await readFile(join(worktree, '.docs', 'stories', 'jira-writeback.md'), 'utf8');
     const coherenceText = await readFile(join(worktree, '.docs', 'coherence', 'jira-writeback.md'), 'utf8');
@@ -223,7 +281,7 @@ describe('engineer land tracker write-back (Task 11)', () => {
       storiesText,
       adrTexts: {},
       artifactTexts: { '.docs/coherence/jira-writeback.md': coherenceText },
-      changedPaths: [...await resolveIdeaFiles(worktree, repoPath)],
+      changedPaths: [...(await resolveIdeaFiles(worktree, repoPath))],
     });
     await mkdir(join(worktree, '.docs', 'plan-review'), { recursive: true });
     await writeFile(
@@ -263,7 +321,11 @@ describe('engineer land tracker write-back (Task 11)', () => {
         { kind: 'land', project: 'tracker-project', idea: 'jira writeback', worktree, sourceRef },
         opts({
           gh: gh as DispatchEngineerOpts['gh'],
-          events: { emit: async (event) => { events.push(event); } },
+          events: {
+            emit: async (event) => {
+              events.push(event);
+            },
+          },
         }),
       );
     } finally {
@@ -275,9 +337,14 @@ describe('engineer land tracker write-back (Task 11)', () => {
     expect(code, err.join('\n')).toBe(0);
     expect(JSON.parse(out[0])).toMatchObject({ branch: 'spec/jira-writeback' });
     expect(calls).toEqual([]); // no GitHub write-back argv
-    expect(events).toEqual([{
-      type: 'tracker_backend_unavailable', project: sourceRef, backend: 'jira', reason: 'no-adapter',
-    }]);
+    expect(events).toEqual([
+      {
+        type: 'tracker_backend_unavailable',
+        project: sourceRef,
+        backend: 'jira',
+        reason: 'no-adapter',
+      },
+    ]);
     expect(await ledger.get('github-issues', sourceRef)).toMatchObject({ status: 'routed' });
     expect((await ledger.get('github-issues', sourceRef))?.writebackPending).toBeUndefined();
   });
@@ -295,27 +362,56 @@ describe('engineer land tracker write-back (Task 11)', () => {
     await writeFile(join(repoPath, '.ai-conductor', 'config.yml'), 'tracker:\n  backend: jira\n');
     await git(['add', 'README.md', '.ai-conductor/config.yml']);
     await git(['commit', '-m', 'initial']);
-    await writeFile(registryPath, JSON.stringify([{
-      schemaVersion: 1,
-      name: 'tracker-handoff-project',
-      path: repoPath,
-      remote: 'https://github.com/acme/tracker-handoff-project.git',
-      status: 'registered',
-      registeredAt: '2026-09-28T00:00:00.000Z',
-    }]));
+    await writeFile(
+      registryPath,
+      JSON.stringify([
+        {
+          schemaVersion: 1,
+          name: 'tracker-handoff-project',
+          path: repoPath,
+          remote: 'https://github.com/acme/tracker-handoff-project.git',
+          status: 'registered',
+          registeredAt: '2026-09-28T00:00:00.000Z',
+        },
+      ]),
+    );
 
     const worktree = (await createEngineerWorktree(repoPath, 'jira handoff')).worktreePath;
-    await Promise.all(['specs', 'stories', 'plans'].map((directory) => mkdir(join(worktree, '.docs', directory), { recursive: true })));
+    await Promise.all(
+      ['specs', 'stories', 'plans'].map((directory) => mkdir(join(worktree, '.docs', directory), { recursive: true })),
+    );
     await writeFile(join(worktree, '.docs', 'specs', 'jira-handoff.md'), '# PRD: Jira handoff\n\nApproved.\n');
-    await writeFile(join(worktree, '.docs', 'stories', 'jira-handoff.md'), [
-      '# Stories: Jira handoff', '', '**Status:** Accepted', '', '## Story 1: Jira handoff',
-      '### Acceptance Criteria', '#### Happy Path', '- Given X, when Y, then Z.', '',
-      '#### Negative Paths', '- Given invalid input, when Y, then it is refused.', '',
-    ].join('\n'));
-    await writeFile(join(worktree, '.docs', 'plans', 'jira-handoff.md'), [
-      '# Implementation Plan: Jira handoff', '', '**Stories:** .docs/stories/jira-handoff.md', '',
-      '## Task Dependency Graph', '```', '1', '```', '',
-    ].join('\n'));
+    await writeFile(
+      join(worktree, '.docs', 'stories', 'jira-handoff.md'),
+      [
+        '# Stories: Jira handoff',
+        '',
+        '**Status:** Accepted',
+        '',
+        '## Story 1: Jira handoff',
+        '### Acceptance Criteria',
+        '#### Happy Path',
+        '- Given X, when Y, then Z.',
+        '',
+        '#### Negative Paths',
+        '- Given invalid input, when Y, then it is refused.',
+        '',
+      ].join('\n'),
+    );
+    await writeFile(
+      join(worktree, '.docs', 'plans', 'jira-handoff.md'),
+      [
+        '# Implementation Plan: Jira handoff',
+        '',
+        '**Stories:** .docs/stories/jira-handoff.md',
+        '',
+        '## Task Dependency Graph',
+        '```',
+        '1',
+        '```',
+        '',
+      ].join('\n'),
+    );
     const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
     // A GitHub-shaped ref still resolves through the owning project's Jira
     // selection, rather than falling back to the GitHub write-back adapter.
@@ -328,6 +424,7 @@ describe('engineer land tracker write-back (Task 11)', () => {
     const events: unknown[] = [];
     const gh = async (args: string[]) => {
       calls.push(args);
+      if (args[0] === 'pr' && args[1] === 'view' && args[2] === branch) return { stdout: '{}' };
       throw new Error(`unexpected gh write-back call: ${args.join(' ')}`);
     };
     const featureMarker = `.docs/intake/${branch.slice('spec/'.length)}.md`;
@@ -338,14 +435,26 @@ describe('engineer land tracker write-back (Task 11)', () => {
         config: async () => ({ stdout: 'https://github.com/acme/tracker-handoff-project.git' }),
         runRemoteGit: async () => ({ stdout: '', stderr: '' }),
         mutation: {
-          provenance: { repository: 'acme/tracker-handoff-project', defaultBranch: 'main', specBranch: branch, featureMarker, publication: 'initial' },
+          provenance: {
+            repository: 'acme/tracker-handoff-project',
+            defaultBranch: 'main',
+            specBranch: branch,
+            featureMarker,
+            publication: 'initial',
+          },
           dependencies: {
             resolveMachineOwner: async () => ({ resolved: true as const, id: 'test-owner' }),
-            provenanceDiscovery: { readCommittedRecords: async () => [{ path: featureMarker, content: 'Owner: test-owner\n' }] },
+            provenanceDiscovery: {
+              readCommittedRecords: async () => [{ path: featureMarker, content: 'Owner: test-owner\n' }],
+            },
           },
         },
       },
-      operations: { async run() { return { created: { repository: 'acme/tracker-handoff-project', kind: 'pull-request' as const, number: 43 } }; } },
+      operations: {
+        async run() {
+          return { created: { repository: 'acme/tracker-handoff-project', kind: 'pull-request' as const, number: 43 } };
+        },
+      },
     };
     const { out, err, opts } = captureOut();
     const code = await dispatchEngineer(
@@ -355,22 +464,34 @@ describe('engineer land tracker write-back (Task 11)', () => {
         git: async () => ({ stdout: '', stderr: '' }),
         handoffPublication,
         ensureRunningLaunch: async () => {},
-        events: { emit: async (event) => { events.push(event); } },
+        events: {
+          emit: async (event) => {
+            events.push(event);
+          },
+        },
       }),
     );
 
     expect(code, err.join('\n')).toBe(0);
     expect(JSON.parse(out[0])).toEqual({ kind: 'pr-opened', url: prUrl });
-    const writebackCalls = calls.filter((args) =>
-      (args[0] === 'issue' && args[1] === 'comment')
-      || (args[0] === 'api' && args.some((arg) => arg.includes('labels[]=engineer:handled'))),
+    const writebackCalls = calls.filter(
+      (args) =>
+        (args[0] === 'issue' && args[1] === 'comment') ||
+        (args[0] === 'api' && args.some((arg) => arg.includes('labels[]=engineer:handled'))),
     );
     expect(writebackCalls).toEqual([]); // PR metadata reads are not write-backs
-    expect(events).toEqual([{
-      type: 'tracker_backend_unavailable', project: 'tracker-handoff-project', backend: 'jira', reason: 'no-adapter',
-    }]);
+    expect(events).toEqual([
+      {
+        type: 'tracker_backend_unavailable',
+        project: 'tracker-handoff-project',
+        backend: 'jira',
+        reason: 'no-adapter',
+      },
+    ]);
     expect(await ledger.get('github-issues', sourceRef)).toMatchObject({
-      status: 'done', prUrl, branch,
+      status: 'done',
+      prUrl,
+      branch,
     });
     expect((await ledger.get('github-issues', sourceRef))?.writebackPending).toBeUndefined();
   });
@@ -422,7 +543,11 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
     expect(out).toHaveLength(1);
     expect(JSON.parse(out[0])).toMatchObject({
-      kind: 'forget', sourceRef: 'o/a#1', found: true, closed: true, resolvedBy: 'o/a#2',
+      kind: 'forget',
+      sourceRef: 'o/a#1',
+      found: true,
+      closed: true,
+      resolvedBy: 'o/a#2',
     });
     expect(confirmations).toEqual([]);
   });
@@ -462,9 +587,17 @@ describe('engineer forget (T23, FR-40)', () => {
       ['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled'],
     ]);
     expect(confirmations).toEqual([
-      { operation: 'intake.issue.comment.create', target: { repository: 'o/a', kind: 'issue', number: 1 }, writeCount: 1 },
+      {
+        operation: 'intake.issue.comment.create',
+        target: { repository: 'o/a', kind: 'issue', number: 1 },
+        writeCount: 1,
+      },
       { operation: 'intake.issue.close', target: { repository: 'o/a', kind: 'issue', number: 1 }, writeCount: 3 },
-      { operation: 'intake.issue.label.remove', target: { repository: 'o/a', kind: 'issue', number: 1 }, writeCount: 5 },
+      {
+        operation: 'intake.issue.label.remove',
+        target: { repository: 'o/a', kind: 'issue', number: 1 },
+        writeCount: 5,
+      },
     ]);
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
     expect(JSON.parse(out[0])).toMatchObject({ closed: true, resolvedBy: 'o/a#2' });
@@ -481,7 +614,10 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(code).toBe(0);
     expect(out).toHaveLength(1);
     expect(JSON.parse(out[0])).toMatchObject({
-      kind: 'forget', sourceRef: 'o/a#1', found: true, closed: false,
+      kind: 'forget',
+      sourceRef: 'o/a#1',
+      found: true,
+      closed: false,
     });
 
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
@@ -618,10 +754,7 @@ describe('engineer forget (T23, FR-40)', () => {
     const { gh, calls } = makeGh({}, 'comment');
     const { err, opts } = captureOut();
 
-    const code = await dispatchEngineer(
-      { kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' },
-      opts({ gh }),
-    );
+    const code = await dispatchEngineer({ kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' }, opts({ gh }));
 
     expect(code).not.toBe(0);
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
@@ -640,10 +773,7 @@ describe('engineer forget (T23, FR-40)', () => {
     const { gh, calls } = makeGh({}, 'close');
     const { err, opts } = captureOut();
 
-    const code = await dispatchEngineer(
-      { kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' },
-      opts({ gh }),
-    );
+    const code = await dispatchEngineer({ kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' }, opts({ gh }));
 
     expect(code).not.toBe(0);
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
@@ -702,10 +832,7 @@ describe('engineer forget (T23, FR-40)', () => {
 
     const { gh, calls } = makeGh({});
     const { out, opts } = captureOut();
-    const code = await dispatchEngineer(
-      { kind: 'forget', sourceRef: 'o/a#9', resolvedBy: 'o/a#2' },
-      opts({ gh }),
-    );
+    const code = await dispatchEngineer({ kind: 'forget', sourceRef: 'o/a#9', resolvedBy: 'o/a#2' }, opts({ gh }));
 
     expect(code).toBe(0);
     expect(calls).toEqual([
@@ -717,7 +844,12 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
     expect(await readFile(ledgerPath, 'utf-8')).toBe(before);
     expect(JSON.parse(out[0])).toMatchObject({
-      kind: 'forget', sourceRef: 'o/a#9', found: false, removed: false, closed: true, resolvedBy: 'o/a#2',
+      kind: 'forget',
+      sourceRef: 'o/a#9',
+      found: false,
+      removed: false,
+      closed: true,
+      resolvedBy: 'o/a#2',
     });
   });
 
@@ -754,7 +886,12 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
     expect(await readFile(ledgerPath, 'utf-8')).toBe(before);
     expect(JSON.parse(out[0])).toMatchObject({
-      kind: 'forget', sourceRef: 'o/a#9', found: false, removed: false, closed: true, resolvedBy: 'o/a#2',
+      kind: 'forget',
+      sourceRef: 'o/a#9',
+      found: false,
+      removed: false,
+      closed: true,
+      resolvedBy: 'o/a#2',
     });
   });
 
@@ -1064,7 +1201,12 @@ describe('engineer claim: priority-banded ordering (#461)', () => {
       {
         kind: 'claim',
         allBlocked: true,
-        entries: [{ sourceRef: 'PROJ-9', verdict: { kind: 'indeterminate', detail: 'no ordering adapter for jira reference PROJ-9' } }],
+        entries: [
+          {
+            sourceRef: 'PROJ-9',
+            verdict: { kind: 'indeterminate', detail: 'no ordering adapter for jira reference PROJ-9' },
+          },
+        ],
       },
     ]);
   });

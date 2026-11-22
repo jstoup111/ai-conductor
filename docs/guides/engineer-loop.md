@@ -212,6 +212,10 @@ ai-conductor compose phase --worktree <worktreePath> --phase <step>
     If review refuses with `plan review prompt is too large`, shrink the named largest section, or
     rerun with the printed `--max-prompt-chars <n>` value.
 
+After you accept each step, composer saves it before starting the next one with
+`compose checkpoint --step <step> --accept`. See
+[save, switch, hand off, or resume a run](#save-switch-hand-off-or-resume-a-run).
+
 Do not hand-write stub or DRAFT artifacts. See [steps reference](../reference/steps.md) for the
 per-step tier-skip and enforcement table, and [SDLC phases](../explanation/sdlc-phases.md) for why
 the order is fixed.
@@ -329,7 +333,8 @@ ai-conductor compose handoff \
 ```
 
 `handoff` runs `git push -u origin <branch>` and `gh pr create --label spec` from inside the
-per-idea worktree, so the PR opens for `spec/<slug>` with the `spec` label. On success you should
+per-idea worktree, so the PR opens for `spec/<slug>` with the `spec` label. When checkpoints already
+opened the run's draft spec PR, `handoff` marks that PR ready for review instead of opening another. On success you should
 see one of:
 
 | Output | Meaning |
@@ -360,6 +365,53 @@ so nothing is lost across sessions.
 The spec is not built until **you merge the PR**. The daemon reads specs from the committed default
 branch only; an unmerged `spec/<slug>` branch is invisible to it. See
 [running the daemon](running-the-daemon.md).
+
+## Save, switch, hand off, or resume a run
+
+A Composer run outlives its session. Its progress lives in the run record
+`.docs/composer-runs/<slug>.json` on `spec/<slug>`; the draft spec PR only displays it.
+
+**Save.** Each accepted DECIDE step is checkpointed:
+
+```bash
+ai-conductor compose checkpoint --worktree <worktreePath> --step <step> --accept --notes-file <notes.json>
+```
+
+`notes.json` holds `decisions` and `openQuestions` string arrays. With a GitHub remote, the first
+checkpoint opens one draft spec PR titled `DECIDE: <slug>` (with `Refs <owner/repo#N>` for an intake
+idea), and every later checkpoint refreshes its run block. Without a remote, checkpoints stay local
+and no PR opens. A failed push keeps the local commit and prints the retry command; a push rejected
+because someone saved newer progress tells you to reconcile with `compose resume spec/<slug>`.
+
+**Session boundary.** When a session exits before delivery, the launcher saves unfinished `.docs/`
+work as an unaccepted draft and prints the current step and active provider. Answer at the prompt:
+
+```text
+Choose continue, switch <claude|codex|…>, or handoff:
+```
+
+- `continue` relaunches the same provider at the first unaccepted step.
+- `switch codex` relaunches on Codex and records the switch.
+- `handoff` leaves the PR in draft and prints `Resume with compose resume spec/<slug>.` It is
+  refused for a local-only run and until a locally saved checkpoint is published.
+
+**Resume.** Anyone with write access can resume a run on any machine, by PR, branch, or intake issue:
+
+```bash
+ai-conductor compose resume 123 --provider codex
+ai-conductor compose resume spec/<slug>
+ai-conductor compose resume <owner/repo#N>
+```
+
+The session starts at the first unaccepted step. Accepted steps are not repeated; drafts are
+presented as unaccepted and still need your acceptance. If this machine holds unsaved work for the
+run, answer `keep-local` or `discard-local`; discard first saves it to a `composer-backup/` branch.
+If another operator owns the run, you are asked whether to take it over; declining keeps your saves
+local. Exact behavior: [`compose resume`](../reference/cli.md#compose-subcommands) and the
+[run boundary](../reference/cli.md#composer-run-boundary).
+
+`land` refuses a run with an unaccepted draft or a step needing reconfirmation (`unaccepted-draft`),
+and removes the run record before the spec reaches the base branch.
 
 ## Recovering a stranded entry
 

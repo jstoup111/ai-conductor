@@ -23,7 +23,7 @@
 import type { TargetRepo } from './target.js';
 import type { AuthoredLedgerOpts } from './authored-ledger.js';
 import { recordAuthoredKey } from './authored-ledger.js';
-import { injectIssueRef } from './issue-ref.js';
+import { formatIssueRef, injectIssueRef } from './issue-ref.js';
 import { buildSpecPrCreateArgs, ensureReleaseMetadata } from './release-metadata-inject.js';
 import { mirrorIssueCriticalityLabels } from '../pr-criticality-labels.js';
 import type { GitRunner } from '../pr-labels.js';
@@ -68,6 +68,8 @@ export type CommandRunner = (args: string[], opts?: RunnerOpts) => Promise<Runne
 export interface HandoffDeps {
   /** Injectable gh/CLI runner. Tests supply a fake; production wraps execFile. */
   runner: CommandRunner;
+  /** Branch-scoped PR discovery supplied by the production CLI composition. */
+  findExistingSpecPr?: () => Promise<{ readonly url: string; readonly isDraft: boolean } | undefined>;
   /** Injectable git runner used to publish the spec branch before opening its PR. */
   gitRunner?: GitRunner;
   /**
@@ -78,6 +80,8 @@ export interface HandoffDeps {
   worktreePath?: string;
   /** Options forwarded to recordAuthoredKey (e.g. engineerDir for temp-dir isolation). */
   ledgerOpts?: AuthoredLedgerOpts;
+  /** Intake-ledger completion is the durable proof that a ready PR was fully delivered. */
+  deliveryRecorded?: () => Promise<boolean>;
   /**
    * Originating intake reference (`owner/repo#N`). When present and valid, the
    * opened spec PR gets a NON-CLOSING `Refs owner/repo#N` line (links the issue
@@ -87,8 +91,8 @@ export interface HandoffDeps {
   /** Optional log sink for the (non-fatal) issue-ref injection. */
   log?: (msg: string) => void;
   /**
- * The guarded initial-publication composition. Absent composition is a typed
- * refusal; it can never fall back to raw GitHub or Git transports.
+   * The guarded initial-publication composition. Absent composition is a typed
+   * refusal; it can never fall back to raw GitHub or Git transports.
    */
   publication?: {
     readonly remote: RemoteGitOperationDependencies;
@@ -116,6 +120,8 @@ export interface PrOpenedResult {
   kind: 'pr-opened';
   /** The GitHub PR URL (e.g. "https://github.com/acme/proj/pull/42"). */
   url: string;
+  /** Internal handoff disposition: an already-ready PR must not re-run write-back. */
+  alreadyDelivered?: true;
 }
 
 /**
@@ -176,6 +182,90 @@ async function readCreatedPrUrl(
   }
 }
 
+type ExistingSpecPullRequest = {
+  readonly url: string;
+  readonly isDraft: boolean;
+};
+
+/** Lookup is deliberately before creation: a tracker outage never authorizes a duplicate PR. */
+export async function findExistingSpecPullRequest(
+  runner: CommandRunner,
+  repository: string,
+  branch: string,
+  cwd: string,
+): Promise<ExistingSpecPullRequest | undefined> {
+  try {
+    const stdout = await runTrackerRead(
+      async (args, opts) => {
+        const response = await runner(args, opts);
+        return { stdout: response.stdout };
+      },
+      cwd,
+      'pull-request.read',
+      repository,
+      { kind: 'repository' },
+      ['pr', 'view', branch, '--json', 'url,isDraft'],
+    );
+    let parsed: { url?: unknown; isDraft?: unknown };
+    try {
+      parsed = JSON.parse(stdout || '{}') as { url?: unknown; isDraft?: unknown };
+    } catch {
+      return undefined;
+    }
+    if (
+      typeof parsed.url !== 'string' ||
+      !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(parsed.url) ||
+      typeof parsed.isDraft !== 'boolean'
+    )
+      return undefined;
+    return { url: parsed.url, isDraft: parsed.isDraft };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/no pull requests? found|could not resolve to a pull request|not found/i.test(message)) return undefined;
+    throw error;
+  }
+}
+
+function landedSpecBody(body: string, sourceRef: string | undefined): string {
+  const ref = formatIssueRef('Refs', sourceRef);
+  if (!ref) return body;
+  return body.trim() === '' ? ref : `${body.replace(/\s+$/, '')}\n\n${ref}`;
+}
+
+async function readyExistingSpecPullRequest(input: {
+  readonly existing: ExistingSpecPullRequest;
+  readonly repository: string;
+  readonly presentation: GithubOperationRunner;
+  readonly payload: { readonly title: string; readonly body: string };
+}): Promise<void> {
+  const match = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/([1-9]\d*)$/.exec(input.existing.url);
+  if (!match) throw new Error(`openSpecPr: existing PR URL is invalid: ${input.existing.url}`);
+  const resource = { kind: 'pull-request' as const, number: Number(match[1]) };
+  for (const request of [
+    {
+      operation: 'pull-request.edit' as const,
+      repository: input.repository,
+      resource,
+      context: { actor: 'engineer-handoff' },
+      payload: input.payload,
+    },
+    {
+      operation: 'pull-request.ready' as const,
+      repository: input.repository,
+      resource,
+      context: { actor: 'engineer-handoff' },
+    },
+  ]) {
+    const result = await executeGithubOperation(request, input.presentation);
+    if (result.kind === 'refused')
+      throw new Error(`openSpecPr: guarded PR ${request.operation} refused: ${result.reason}`);
+    if (result.kind === 'failed')
+      throw new Error(`openSpecPr: guarded PR ${request.operation} failed: ${result.error}`);
+    if (result.kind === 'partial')
+      throw new Error(`openSpecPr: guarded PR ${request.operation} returned an invalid partial result`);
+  }
+}
+
 // ─── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -190,11 +280,7 @@ async function readCreatedPrUrl(
  *               or `{ kind: 'pr-refused'; reason }` when authorization is absent
  *               or denied.
  */
-export async function openSpecPr(
-  target: TargetRepo,
-  branch: string,
-  deps: HandoffDeps,
-): Promise<OpenSpecPrResult> {
+export async function openSpecPr(target: TargetRepo, branch: string, deps: HandoffDeps): Promise<OpenSpecPrResult> {
   const { runner, gitRunner, ledgerOpts } = deps;
   // cwd = the per-idea worktree (checked out on `spec/<slug>`) so gh pushes and opens
   // the PR from that branch. Falls back to the canonical path for legacy callers.
@@ -210,9 +296,7 @@ export async function openSpecPr(
   }
 
   if (!gitRunner) {
-    throw new Error(
-      `openSpecPr: gitRunner is required to push branch "${branch}" for remote target "${target.name}"`,
-    );
+    throw new Error(`openSpecPr: gitRunner is required to push branch "${branch}" for remote target "${target.name}"`);
   }
 
   const createArgs = await buildSpecPrCreateArgs({ cwd, branch, git: gitRunner });
@@ -229,19 +313,44 @@ export async function openSpecPr(
   if (push.kind !== 'executed') throw new Error('openSpecPr: guarded publication did not resolve a remote push target');
 
   const payload = createPayload(branch, createArgs);
-  const created = await executeGithubOperation({
-    operation: 'pull-request.create',
-    repository: deps.publication.repository,
-    resource: { kind: 'repository' },
-    context: { actor: 'engineer-handoff' },
-    payload: { title: payload.title, body: payload.body, head: branch, base: 'main' },
-  }, deps.publication.operations);
+  const existing = await deps.findExistingSpecPr?.();
+  if (existing) {
+    // A ready PR alone is not a completed delivery: an earlier process can have
+    // failed after marking it ready but before intake write-back, cleanup, or
+    // daemon wake-up. Only the durable intake ledger suppresses those retries.
+    if (!existing.isDraft) {
+      const delivered = await deps.deliveryRecorded?.();
+      return { kind: 'pr-opened', url: existing.url, ...(delivered ? { alreadyDelivered: true as const } : {}) };
+    }
+
+    const presentation = deps.publication.presentation?.(existing.url) ?? deps.publication.operations;
+    await readyExistingSpecPullRequest({
+      existing,
+      repository: deps.publication.repository,
+      presentation,
+      payload: { title: payload.title, body: landedSpecBody(payload.body, deps.sourceRef) },
+    });
+    await recordAuthoredKey(target.name, branch, ledgerOpts ?? {});
+    return { kind: 'pr-opened', url: existing.url };
+  }
+
+  const created = await executeGithubOperation(
+    {
+      operation: 'pull-request.create',
+      repository: deps.publication.repository,
+      resource: { kind: 'repository' },
+      context: { actor: 'engineer-handoff' },
+      payload: { title: payload.title, body: payload.body, head: branch, base: 'main' },
+    },
+    deps.publication.operations,
+  );
   if (created.kind === 'refused') return { kind: 'pr-refused', reason: created.reason };
   if (created.kind === 'failed') throw new Error(`openSpecPr: guarded PR creation failed: ${created.error}`);
   if (created.kind === 'partial') throw new Error('openSpecPr: PR creation returned an invalid partial result');
-  const url = created.target.kind === 'pull-request'
-    ? `https://github.com/${created.target.repository}/pull/${created.target.number}`
-    : await readCreatedPrUrl(runner, deps.publication.repository, branch, cwd);
+  const url =
+    created.target.kind === 'pull-request'
+      ? `https://github.com/${created.target.repository}/pull/${created.target.number}`
+      : await readCreatedPrUrl(runner, deps.publication.repository, branch, cwd);
   if (!url) throw new Error(`openSpecPr: guarded PR creation did not identify a URL for branch "${branch}".`);
 
   // 3. Record the (project, feature) authored key durably.
