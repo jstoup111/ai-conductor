@@ -647,7 +647,7 @@ export async function buildRemediationProjection(
     return preparationFault(
       'active plan',
       taskContext.detail,
-      isMissingPriorAsBuiltRepair ? { dimension: 'prior-as-built-cases' } : {},
+      {},
       isMissingPriorAsBuiltRepair ? 'prior-repair-task-missing' : 'input',
     );
   }

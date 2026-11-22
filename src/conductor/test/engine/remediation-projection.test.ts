@@ -499,7 +499,7 @@ describe('remediation projection', () => {
     await expectPreparationFault(await buildRemediationProjection(undeclared, {
       source: 'as-built', activePlanPath: '.docs/plans/active.md',
     }), {
-      source: 'active plan', dimension: 'prior-as-built-cases', detail: expect.stringContaining('rem-as-built-t1'),
+      source: 'active plan', cause: 'prior-repair-task-missing', detail: expect.stringContaining('rem-as-built-t1'),
     });
 
     const corrupt = await fixture();
