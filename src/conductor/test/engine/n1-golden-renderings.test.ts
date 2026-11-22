@@ -24,7 +24,15 @@ import { shipDraftPrBody } from '../../src/engine/ship-draft-pr.js';
 import { bumpKickbackGateInLedger } from '../../src/engine/kickback-ledger.js';
 import { runTaskStart } from '../../src/engine/task-cli.js';
 import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
-import { BASE_SHA, CELLS, expectGolden, normalizeGolden, partitionConductorRefProbes, RECORD, withGitArgvShim } from './n1-golden-shared.js';
+import {
+  BASE_SHA,
+  CELLS,
+  expectGolden,
+  normalizeGolden,
+  partitionConductorRefProbes,
+  RECORD,
+  withGitArgvShim,
+} from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCb);
 const N1_GOLDEN_SUITE_CHILD = 'AI_CONDUCTOR_N1_GOLDEN_SUITE_CHILD';
@@ -32,7 +40,9 @@ const PRE_CHANGE_N1_GOLDEN_SHA = 'd4870bd95b9bfebe09def9a03fa511e370f6af17';
 const GIT_PROBE_GOLDEN_PATH = 'src/conductor/test/fixtures/n1-golden/finish/git-probe-argv.golden';
 const STALE_RUN_ROOT_TELEMETRY = String.raw`tmpdir-leak-guard: swept \d+ stale run root\(s\) left behind by a previous interrupted run: [^\n]+`;
 const IGNORED_CONCURRENT_TMPDIR_TELEMETRY = String.raw`tmpdir-leak-guard: ignored \d+ new [^\n]+ entry/entries attributed to concurrent tooling \(not the test suite\): [^\n]+`;
-const EXPECTED_CHILD_GUARD_STDERR = new RegExp(String.raw`^(?:|${STALE_RUN_ROOT_TELEMETRY}\n?|${IGNORED_CONCURRENT_TMPDIR_TELEMETRY}\n?|${STALE_RUN_ROOT_TELEMETRY}\n${IGNORED_CONCURRENT_TMPDIR_TELEMETRY}\n?)$`);
+const EXPECTED_CHILD_GUARD_STDERR = new RegExp(
+  String.raw`^(?:|${STALE_RUN_ROOT_TELEMETRY}\n?|${IGNORED_CONCURRENT_TMPDIR_TELEMETRY}\n?|${STALE_RUN_ROOT_TELEMETRY}\n${IGNORED_CONCURRENT_TMPDIR_TELEMETRY}\n?)$`,
+);
 const DURABLE_CHILD_STATE_PROBE_PAIR = [
   ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
   ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-golden/'],
@@ -40,14 +50,8 @@ const DURABLE_CHILD_STATE_PROBE_PAIR = [
 
 describe('N=1 golden renderings', () => {
   const roots: string[] = [];
-  const finishFixture = (name: string) => join(
-    import.meta.dirname,
-    '..',
-    'fixtures',
-    'n1-golden',
-    'finish',
-    `${name}.golden`,
-  );
+  const finishFixture = (name: string) =>
+    join(import.meta.dirname, '..', 'fixtures', 'n1-golden', 'finish', `${name}.golden`);
   const expectFinishGolden = async (name: string, actual: string) => {
     const path = finishFixture(name);
     if (RECORD) {
@@ -84,28 +88,32 @@ describe('N=1 golden renderings', () => {
     // socket-path limit that made Vitest fall back to `/tmp/tmp.*`.
     const childTmpBase = await mkdtemp(join(runTmpRoot ?? tmpdir(), 'n1-golden-child-suite-'));
     roots.push(childTmpBase);
-    const result = await execFile(process.execPath, [
-      'scripts/run-vitest.mjs',
-      'run',
-      '--reporter=dot',
-      '--silent=true',
-      'test/engine/n1-golden-state.test.ts',
-      'test/engine/n1-golden-renderings.test.ts',
-      'test/engine/n1-golden-routing-guard.test.ts',
-    ], {
-      cwd: join(import.meta.dirname, '..', '..'),
-      env: {
-        ...process.env,
-        [N1_GOLDEN_SUITE_CHILD]: '1',
-        AI_CONDUCTOR_TEST_TMP_BASE: childTmpBase,
-        // `run-vitest.mjs` preserves this marker across its fresh allocation;
-        // make the child's real-tmpdir guard observe only its private base.
-        AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: childTmpBase,
-        TMPDIR: childTmpBase,
-        TMP: childTmpBase,
-        TEMP: childTmpBase,
+    const result = await execFile(
+      process.execPath,
+      [
+        'scripts/run-vitest.mjs',
+        'run',
+        '--reporter=dot',
+        '--silent=true',
+        'test/engine/n1-golden-state.test.ts',
+        'test/engine/n1-golden-renderings.test.ts',
+        'test/engine/n1-golden-routing-guard.test.ts',
+      ],
+      {
+        cwd: join(import.meta.dirname, '..', '..'),
+        env: {
+          ...process.env,
+          [N1_GOLDEN_SUITE_CHILD]: '1',
+          AI_CONDUCTOR_TEST_TMP_BASE: childTmpBase,
+          // `run-vitest.mjs` preserves this marker across its fresh allocation;
+          // make the child's real-tmpdir guard observe only its private base.
+          AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: childTmpBase,
+          TMPDIR: childTmpBase,
+          TMP: childTmpBase,
+          TEMP: childTmpBase,
+        },
       },
-    });
+    );
     // The child may report the pre-run stale-root sweep and its teardown's
     // concurrent-tooling notice. Any other child stderr remains a failure.
     expect(result.stderr).toMatch(EXPECTED_CHILD_GUARD_STDERR);
@@ -119,7 +127,8 @@ describe('N=1 golden renderings', () => {
       execFile('git', ['show', `${PRE_CHANGE_N1_GOLDEN_SHA}:${GIT_PROBE_GOLDEN_PATH}`], { cwd: repositoryRoot }),
       readFile(join(repositoryRoot, GIT_PROBE_GOLDEN_PATH), 'utf8'),
     ]);
-    const parseProbeGolden = (raw: string) => JSON.parse(raw.replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '')) as string[][];
+    const parseProbeGolden = (raw: string) =>
+      JSON.parse(raw.replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '')) as string[][];
     const coverageBindingProbePairs = Array.from({ length: 8 }, () => DURABLE_CHILD_STATE_PROBE_PAIR).flat();
 
     // The pre-change fixture contains eight repeated probes from the retired
@@ -147,7 +156,9 @@ describe('N=1 golden renderings', () => {
     await execFile('git', ['config', 'user.name', 'Test User'], { cwd: root });
     await writeFile(join(root, 'README.md'), '# n1-golden\n');
     await writeFile(join(root, '.gitignore'), '.pipeline/\n');
-    await execFile('git', ['add', 'README.md', '.gitignore', '.docs/plans/n1-golden.md', '.ai-conductor/config.yml'], { cwd: root });
+    await execFile('git', ['add', 'README.md', '.gitignore', '.docs/plans/n1-golden.md', '.ai-conductor/config.yml'], {
+      cwd: root,
+    });
     const env = {
       ...process.env,
       GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z',
@@ -238,14 +249,19 @@ describe('N=1 golden renderings', () => {
     const rewindLines: string[] = [];
     const originalLog = console.log;
     const originalError = console.error;
-    console.log = (...args: any[]) => { rewindLines.push(args.join(' ')); };
+    console.log = (...args: any[]) => {
+      rewindLines.push(args.join(' '));
+    };
     console.error = () => {};
     const rewindCode = await dispatchRewindCommand({ kind: 'rewind', target: 'build' }, root, { emit: undefined });
     console.log = originalLog;
     console.error = originalError;
     const rewindEvents = (await readFile(ledgerPath, 'utf8')).trim().split('\n');
     const rewindRecord = rewindEvents.find((line) => line.includes('"operator_rewind"')) ?? '';
-    const rewindNormalized = normalizeGolden([rewindLines.join('\n'), `exit:${rewindCode}`, rewindRecord].join('\n'), root);
+    const rewindNormalized = normalizeGolden(
+      [rewindLines.join('\n'), `exit:${rewindCode}`, rewindRecord].join('\n'),
+      root,
+    );
     await expectGolden(`${cell.name}-rewind`, rewindNormalized);
 
     // The operator command resolves only named feature worktrees. Preserve the
@@ -285,13 +301,18 @@ describe('N=1 golden renderings', () => {
 
     // 4. runDaemonStatus
     const registryPath = join(root, '.daemon-registry.json');
-    await writeFile(registryPath, JSON.stringify([{
-      schemaVersion: 1,
-      name: 'n1-golden-project',
-      path: root,
-      status: 'active',
-      registeredAt: '2026-01-01T00:00:00Z',
-    }]));
+    await writeFile(
+      registryPath,
+      JSON.stringify([
+        {
+          schemaVersion: 1,
+          name: 'n1-golden-project',
+          path: root,
+          status: 'active',
+          registeredAt: '2026-01-01T00:00:00Z',
+        },
+      ]),
+    );
     const statusLines: string[] = [];
     await runDaemonStatus({
       registryPath,
@@ -312,10 +333,18 @@ describe('N=1 golden renderings', () => {
     await mkdir(wtSlug, { recursive: true });
     await mkdir(join(wtSlug, '.pipeline'), { recursive: true });
     await writeFile(join(wtSlug, '.pipeline', 'HALT'), 'test halt\n');
-    await writeFile(join(wtSlug, '.pipeline', 'conduct-state.json'), JSON.stringify({
-      feature_desc: 'n1-golden', complexity_tier: 'S', track: 'technical',
-      last_step: 'build_review', build: 'done', test_suite: 'done', build_review: 'done',
-    }));
+    await writeFile(
+      join(wtSlug, '.pipeline', 'conduct-state.json'),
+      JSON.stringify({
+        feature_desc: 'n1-golden',
+        complexity_tier: 'S',
+        track: 'technical',
+        last_step: 'build_review',
+        build: 'done',
+        test_suite: 'done',
+        build_review: 'done',
+      }),
+    );
     const dashboardState = await scanInheritedState({
       worktreeBase,
       processedDir,
@@ -334,7 +363,9 @@ describe('N=1 golden renderings', () => {
         stateFilePath: statePath,
         baseBranch: 'main',
         git: async () => ({ stdout: '' }),
-        gh: async () => ({ stdout: JSON.stringify({ url: prUrl, title: 'feat: n1-golden', body, isDraft: true, labels: [] }) }),
+        gh: async () => ({
+          stdout: JSON.stringify({ url: prUrl, title: 'feat: n1-golden', body, isDraft: true, labels: [] }),
+        }),
         operations: {
           run: async (request: any) => {
             if (request.operation === 'pull-request.edit') body = request.payload.body;
@@ -346,9 +377,16 @@ describe('N=1 golden renderings', () => {
         recordFinish: async () => 0,
       });
       const runState = {
-        feature_desc: 'n1-golden', worktree_branch: 'feat/n1-golden', complexity_tier: 'S', track: 'technical',
-        build_review: 'done', test_suite: 'done', manual_test: 'done',
-        prd_audit: 'done', architecture_review_as_built: 'done', rebase: 'done',
+        feature_desc: 'n1-golden',
+        worktree_branch: 'feat/n1-golden',
+        complexity_tier: 'S',
+        track: 'technical',
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        prd_audit: 'done',
+        architecture_review_as_built: 'done',
+        rebase: 'done',
         pr_url: prUrl,
       } as any;
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -368,12 +406,15 @@ describe('N=1 golden renderings', () => {
 
     // 7. renderShippedRecordWithCost
     const rollup = await computeCostRollup(root);
-    const shippedRecord = renderShippedRecordWithCost({
-      slug: 'n1-golden',
-      specHash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-      pr: 'https://github.com/acme/repo/pull/42',
-      shipped: '2026-01-01',
-    }, rollup);
+    const shippedRecord = renderShippedRecordWithCost(
+      {
+        slug: 'n1-golden',
+        specHash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        pr: 'https://github.com/acme/repo/pull/42',
+        shipped: '2026-01-01',
+      },
+      rollup,
+    );
     await expectGolden(`${cell.name}-shipped-record`, shippedRecord);
   });
 
@@ -383,9 +424,10 @@ describe('N=1 golden renderings', () => {
     const pipeline = join(root, '.pipeline');
     const prUrl = 'https://github.com/acme/widget/pull/42';
     const statePath = join(pipeline, 'conduct-state.json');
-    const normalizeRecord = (record: string) => record
-      .replace(/^shipped: \d{4}-\d{2}-\d{2}$/m, 'shipped: <DATE>')
-      .replace(/^(active_ms|provider_active_ms|no_provider_active_ms): .+$/gm, '$1: <TIME_VALUE>');
+    const normalizeRecord = (record: string) =>
+      record
+        .replace(/^shipped: \d{4}-\d{2}-\d{2}$/m, 'shipped: <DATE>')
+        .replace(/^(active_ms|provider_active_ms|no_provider_active_ms): .+$/gm, '$1: <TIME_VALUE>');
 
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await mkdir(pipeline, { recursive: true });
@@ -446,52 +488,63 @@ describe('N=1 golden renderings', () => {
       };
       const operations = {
         run: async (request: { operation: string; payload?: { body?: string } }) => {
-          if (request.operation === 'pull-request.edit' && request.payload?.body !== undefined) body = request.payload.body;
+          if (request.operation === 'pull-request.edit' && request.payload?.body !== undefined)
+            body = request.payload.body;
           if (request.operation === 'pull-request.ready') isDraft = false;
           return {};
         },
       };
-      const makeCoordinator = () => createProductionFinishPublicationCoordinator({
-        projectRoot: root,
-        stateFilePath: statePath,
-        baseBranch: 'main',
-        git,
-        gh,
-        operations: operations as any,
-        observeReleaseReadiness: async () => 'present',
-        writeShippedRecord: async (command, cwd) => {
-          if (command.kind !== 'write') return 1;
-          const { slug, pr } = command;
-          const record = appendTimingSection(
-            renderShippedRecordWithCost({
-              slug,
-              pr,
-              shipped: '2026-01-01',
-              specHash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-            }, await computeCostRollup(cwd)),
-            await computeTimingRollup(cwd),
-          );
-          await mkdir(join(cwd, '.docs', 'shipped'), { recursive: true });
-          await writeFile(join(cwd, '.docs', 'shipped', `${slug}.md`), record);
-          return 0;
-        },
-        recordFinish: async () => 0,
-      });
-      const advance = async (coordinator: ReturnType<typeof makeCoordinator>) => coordinator.advance({
-        state,
-        mode: 'auto',
-        daemon: true,
-        dispatchAuthoring: async () => {
-          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
-            version: 1,
-            title: 'feat: freeze N=1 FINISH',
-            body: '## Why\n\nFreeze the single-leaf FINISH baseline.\n\n## What Changed\n\nCommitted N=1 goldens.\n\n## Testing\n\nai-conductor scoped-run src/conductor/test/engine/n1-golden-renderings.test.ts\n',
-          }));
-          return { success: true };
-        },
-        dispatchJudgment: async () => ({ success: true, output: '{"kind":"accepted"}' }),
-        emit: async (event) => { events.push(event); },
-      });
+      const makeCoordinator = () =>
+        createProductionFinishPublicationCoordinator({
+          projectRoot: root,
+          stateFilePath: statePath,
+          baseBranch: 'main',
+          git,
+          gh,
+          operations: operations as any,
+          observeReleaseReadiness: async () => 'present',
+          writeShippedRecord: async (command, cwd) => {
+            if (command.kind !== 'write') return 1;
+            const { slug, pr } = command;
+            const record = appendTimingSection(
+              renderShippedRecordWithCost(
+                {
+                  slug,
+                  pr,
+                  shipped: '2026-01-01',
+                  specHash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+                },
+                await computeCostRollup(cwd),
+              ),
+              await computeTimingRollup(cwd),
+            );
+            await mkdir(join(cwd, '.docs', 'shipped'), { recursive: true });
+            await writeFile(join(cwd, '.docs', 'shipped', `${slug}.md`), record);
+            return 0;
+          },
+          recordFinish: async () => 0,
+        });
+      const advance = async (coordinator: ReturnType<typeof makeCoordinator>) =>
+        coordinator.advance({
+          state,
+          mode: 'auto',
+          daemon: true,
+          dispatchAuthoring: async () => {
+            await writeFile(
+              join(pipeline, 'finish-pr-prose.json'),
+              JSON.stringify({
+                version: 1,
+                title: 'feat: freeze N=1 FINISH',
+                body: '## Why\n\nFreeze the single-leaf FINISH baseline.\n\n## What Changed\n\nCommitted N=1 goldens.\n\n## Testing\n\nai-conductor scoped-run src/conductor/test/engine/n1-golden-renderings.test.ts\n',
+              }),
+            );
+            return { success: true };
+          },
+          dispatchJudgment: async () => ({ success: true, output: '{"kind":"accepted"}' }),
+          emit: async (event) => {
+            events.push(event);
+          },
+        });
 
       const gitArgv = await withGitArgvShim(root, async () => {
         let coordinator = makeCoordinator();
@@ -507,7 +560,13 @@ describe('N=1 golden renderings', () => {
         throw new Error(`N=1 FINISH did not reach its terminal outcome: ${JSON.stringify(outcomes)}`);
       });
 
-      return { body, ghArgv, gitArgv, events, record: await readFile(join(root, '.docs', 'shipped', 'n1-golden.md'), 'utf8') };
+      return {
+        body,
+        ghArgv,
+        gitArgv,
+        events,
+        record: await readFile(join(root, '.docs', 'shipped', 'n1-golden.md'), 'utf8'),
+      };
     };
 
     const normal = await run(false);
@@ -531,7 +590,9 @@ describe('N=1 golden renderings', () => {
     await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
     // A resumed real N=1 feature carries the pushed-tip receipt every daemon
     // push records; it is not durable stack state and must not change FINISH.
-    await execFile('git', ['update-ref', 'refs/conductor/n1-golden/pushed/feat/daemon-n1-golden', 'HEAD'], { cwd: root });
+    await execFile('git', ['update-ref', 'refs/conductor/n1-golden/pushed/feat/daemon-n1-golden', 'HEAD'], {
+      cwd: root,
+    });
     const resumed = await run(true);
     await expectFinishGolden('resumed-events', resumed.events.map((event) => JSON.stringify(event)).join('\n'));
     const resumedGit = partitionConductorRefProbes(resumed.gitArgv, 'n1-golden');
@@ -589,7 +650,15 @@ describe('N=1 golden renderings', () => {
         return { stdout: JSON.stringify({ url: prUrl, state: 'OPEN' }) };
       }
       if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl) {
-        return { stdout: JSON.stringify({ url: prUrl, title: 'feat: n1 push', body: shipDraftPrBody('n1-push'), isDraft: true, labels: [] }) };
+        return {
+          stdout: JSON.stringify({
+            url: prUrl,
+            title: 'feat: n1 push',
+            body: shipDraftPrBody('n1-push'),
+            isDraft: true,
+            labels: [],
+          }),
+        };
       }
       throw new Error(`unexpected gh argv: ${JSON.stringify(args)}`);
     };
@@ -607,12 +676,17 @@ describe('N=1 golden renderings', () => {
       },
       remoteMutation: {
         provenance: {
-          repository: 'acme/widget', defaultBranch: 'main', specBranch: branch,
-          featureMarker: '.docs/intake/n1-push.md', publication: 'initial',
+          repository: 'acme/widget',
+          defaultBranch: 'main',
+          specBranch: branch,
+          featureMarker: '.docs/intake/n1-push.md',
+          publication: 'initial',
         },
         dependencies: {
           resolveMachineOwner: async () => ({ resolved: true as const, id: 'test-user' }),
-          provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/n1-push.md', content: 'Owner: test-user\n' }] },
+          provenanceDiscovery: {
+            readCommittedRecords: async () => [{ path: '.docs/intake/n1-push.md', content: 'Owner: test-user\n' }],
+          },
         },
       },
       observeReleaseReadiness: async () => 'present',
@@ -637,7 +711,8 @@ describe('N=1 golden renderings', () => {
     expect(pushed.stdout.trim()).toBe(leaf.stdout.trim());
     const pushGit = partitionConductorRefProbes(gitArgv, 'n1-push');
     // Commit SHAs carry fixture timestamps; every other argv byte is pinned.
-    const shaFree = (argv: readonly string[][]) => `${JSON.stringify(argv, null, 2).replace(/\b[0-9a-f]{40}\b/g, '<SHA>')}\n`;
+    const shaFree = (argv: readonly string[][]) =>
+      `${JSON.stringify(argv, null, 2).replace(/\b[0-9a-f]{40}\b/g, '<SHA>')}\n`;
     await expectFinishGolden('push-git-argv', shaFree(pushGit.parity));
     await expectFinishGolden('push-git-probe-argv', shaFree(pushGit.probes));
     // The leaf push recorded the ordinary pushed-tip receipt, which is not stack state.
@@ -655,36 +730,45 @@ describe('N=1 golden renderings', () => {
     await execFile('git', ['commit', '-m', 'leaf resume'], { cwd: root });
     const localArgv: string[][] = [];
     const remoteArgv: string[][] = [];
-    await expect(executeRemoteGit(['push', 'origin', `HEAD:refs/heads/${branch}`], {
-      cwd: root,
-      config: async () => ({ stdout: 'https://github.com/acme/widget.git\n' }),
-      mutation: {
-        provenance: {
-          repository: 'acme/widget', defaultBranch: 'main', specBranch: branch,
-          featureMarker: '.docs/intake/n1-push.md', publication: 'initial',
+    await expect(
+      executeRemoteGit(['push', 'origin', `HEAD:refs/heads/${branch}`], {
+        cwd: root,
+        config: async () => ({ stdout: 'https://github.com/acme/widget.git\n' }),
+        mutation: {
+          provenance: {
+            repository: 'acme/widget',
+            defaultBranch: 'main',
+            specBranch: branch,
+            featureMarker: '.docs/intake/n1-push.md',
+            publication: 'initial',
+          },
+          dependencies: {
+            resolveMachineOwner: async () => ({ resolved: true as const, id: 'test-user' }),
+            provenanceDiscovery: {
+              readCommittedRecords: async () => [{ path: '.docs/intake/n1-push.md', content: 'Owner: test-user\n' }],
+            },
+          },
         },
-        dependencies: {
-          resolveMachineOwner: async () => ({ resolved: true as const, id: 'test-user' }),
-          provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/n1-push.md', content: 'Owner: test-user\n' }] },
+        pushLeaseGit: async (args, input) => {
+          localArgv.push([...args]);
+          const result = await execa('git', args, { cwd: root, input, reject: false });
+          return { stdout: result.stdout, exitCode: result.exitCode ?? 1 };
         },
-      },
-      pushLeaseGit: async (args, input) => {
-        localArgv.push([...args]);
-        const result = await execa('git', args, { cwd: root, input, reject: false });
-        return { stdout: result.stdout, exitCode: result.exitCode ?? 1 };
-      },
-      runRemoteGit: async (args) => {
-        remoteArgv.push([...args]);
-        return { stdout: '' };
-      },
-    })).resolves.toMatchObject({ kind: 'executed' });
+        runRemoteGit: async (args) => {
+          remoteArgv.push([...args]);
+          return { stdout: '' };
+        },
+      }),
+    ).resolves.toMatchObject({ kind: 'executed' });
     const localGit = partitionConductorRefProbes(localArgv, 'n1-push');
     await expectFinishGolden('push-resumed-git-argv', shaFree([...localGit.parity, ...remoteArgv]));
     await expectFinishGolden('push-resumed-git-probe-argv', shaFree(localGit.probes));
-    expect(localGit.probes).toEqual(expect.arrayContaining([
-      ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
-      ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-push/'],
-    ]));
+    expect(localGit.probes).toEqual(
+      expect.arrayContaining([
+        ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
+        ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-push/'],
+      ]),
+    );
     expect(JSON.stringify(localGit.parity)).not.toContain('refs/conductor/n1-push/publication');
   });
 });
