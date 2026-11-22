@@ -771,7 +771,7 @@ describe('conductor transcript retention wiring', () => {
         complexity: 'done', stories: 'done', conflict_check: 'done', plan: 'done',
         coherence_check: 'done', plan_review: 'done', coverage_binding: 'done',
         architecture_diagram: 'done', architecture_review: 'done', worktree: 'done',
-        acceptance_specs: 'done', build: 'pending',
+        acceptance_specs: 'done', build: 'pending', test_suite: 'pending',
       }));
       await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: 'retry-task', status: 'pending' }],
@@ -781,9 +781,13 @@ describe('conductor transcript retention wiring', () => {
         featureSlug: 'retry-flow', events, stepRunner: runner, providerExecution,
         selfHostGuardrails: guardrails, daemon: true, selfHost: true, fromStep: 'build',
         mode: 'auto', verifyArtifacts: false, maxRetries: 2, sleepFn: async () => {},
+        // Stop at the next dispatch boundary once the build's terminal
+        // retention outcome is observable. This fixture exercises provider
+        // teardown plus build settlement, not the unrelated suite gate.
+        preemptionRequested: () => invocations === 2,
         config: { llm_provider: 'codex', harness_self_host: { sandbox_build_env: true, build_auth: { mode: 'api-key' } } } as never,
       });
-      await conductor.run();
+      expect(await conductor.run()).toMatchObject({ kind: 'preempted' });
 
       const first = join('.pipeline', 'transcripts', 'build', 'retry-flow-a1-codex');
       const second = join('.pipeline', 'transcripts', 'build', 'retry-flow-a2-codex');
