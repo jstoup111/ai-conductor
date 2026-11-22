@@ -340,6 +340,18 @@ describe('remediation projection', () => {
     expect(resolved).toEqual({ pendingAsBuiltFindings: [], priorAsBuiltCases: [], priorLaps: [], refusals: [] });
   });
 
+  // Covers: task:7
+  it('detects an active history file changed after projection rendering', async () => {
+    const root = await fixture();
+    await writeAsBuiltVerdict(root);
+    const result = await buildRemediationProjection(root, { source: 'as-built', activePlanPath: '.docs/plans/active.md', attemptRunId: 'digest-check' });
+    if (!result.ok) throw new Error(result.fault.detail);
+    const path = join(root, result.history.active.path);
+    await writeFile(path, '{"changed":true}', 'utf8');
+    const current = `sha256:${createHash('sha256').update(await readFile(path, 'utf8')).digest('hex')}`;
+    expect(current).not.toBe(result.history.active.digest);
+  });
+
   // Covers: task:1
   it('writes both empty attempt history files for an as-built gap plan', async () => {
     const root = await fixture();
@@ -519,7 +531,7 @@ describe('remediation projection', () => {
       },
     });
     if (!result.ok) throw new Error(result.fault.detail);
-    expect(REMEDIATION_PROJECTION_VERSION).toBe(2);
+    expect(REMEDIATION_PROJECTION_VERSION).toBe(3);
     expect(result.projection).not.toHaveProperty('priorAsBuiltCases');
     expect(JSON.stringify({ ...result.projection, version: 1 })).toBe(
       '{"version":1,"source":"prd-audit","requiredReferences":[{"kind":"prd-criterion","id":"S1.2","sourceGate":"prd_audit","ownerTaskId":"7","summary":"The renderer ignores the durable disposition."}],"evidence":{"excerpts":[],"omittedFiles":[]},"tasks":[{"id":"7","title":"Repair the typed projection","doneWhen":["[test] The projection receives the criterion.","The task title and completion checks are available."]}],"pendingAsBuiltFindings":[],"priorLaps":[],"refusals":[],"vocabulary":{"dispositions":["build","acceptance_specs","architecture_review","plan","publication","existing-task","halt"],"haltCategories":["architectural-clarity","product-scope","unanswerable"]}}',

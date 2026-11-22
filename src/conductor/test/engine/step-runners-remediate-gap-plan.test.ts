@@ -109,6 +109,32 @@ describe('remediate gap-plan native-schema dispatch', () => {
       priorLaps: { count: 0, ids: [] }, refusals: { count: 0, ids: [] },
     });
   });
+
+  // Covers: task:7
+  it('keeps all history collections out of the rendered gap-plan input', () => {
+    const withHistory: RemediationProjection = {
+      ...projection,
+      pendingAsBuiltFindings: [{ finding: 'as-built:x:1' } as never],
+      priorAsBuiltCases: [{ id: 'case-1' } as never], priorLaps: [{ gate: 'as-built', laps: 1 }],
+      refusals: [{ decisionId: 'refusal-1' } as never],
+    };
+    const rendered = renderRemediationPromptProjection(withHistory, history);
+    expect(rendered).not.toHaveProperty('pendingAsBuiltFindings');
+    expect(rendered).not.toHaveProperty('priorAsBuiltCases');
+    expect(rendered).not.toHaveProperty('priorLaps');
+    expect(rendered).not.toHaveProperty('refusals');
+  });
+
+  // Covers: task:7
+  it('keeps the prompt envelope unchanged when history content grows by 100x', () => {
+    const small = renderRemediationPromptProjection(projection, history);
+    const large = renderRemediationPromptProjection({
+      ...projection, pendingAsBuiltFindings: Array.from({ length: 100 }, (_, index) => ({ finding: `as-built:x:${index + 1}` } as never)),
+    }, history);
+    const { history: _smallHistory, ...smallEnvelope } = small as typeof small & { history: RemediationProjectionHistory };
+    const { history: _largeHistory, ...largeEnvelope } = large as typeof large & { history: RemediationProjectionHistory };
+    expect(largeEnvelope).toEqual(smallEnvelope);
+  });
   // Covers: task:16, task:17
   it.each(['claude', 'codex'] as const)(
     'uses a fresh %s one-shot with the engine-owned schema and rendered contract',
