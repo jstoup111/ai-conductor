@@ -7328,7 +7328,6 @@ describe('engine/conductor', () => {
 
     async function runBlockedAsBuilt(
       configure?: () => Promise<void>,
-      remediationProjectionLimitOverrides?: { priorAsBuiltCasesBytes: number },
     ): Promise<{ remediateRequests: StepRunOptions[]; halt: string; haltClass: string }> {
       await seedSerialAsBuiltRoute();
       await configure?.();
@@ -7353,7 +7352,6 @@ describe('engine/conductor', () => {
         daemon: true,
         verifyArtifacts: true,
         maxRetries: 1,
-        remediationProjectionLimitOverrides,
       }).run();
       return {
         remediateRequests,
@@ -7369,14 +7367,6 @@ describe('engine/conductor', () => {
       expect(empty.remediateRequests[0]?.remediationRequest).toMatchObject({
         mode: 'gap-plan', projection: { priorAsBuiltCases: [] },
       });
-
-      const oversize = await runBlockedAsBuilt(
-        () => writeCaseStore(),
-        { priorAsBuiltCasesBytes: 1 },
-      );
-      expect(oversize.remediateRequests).toEqual([]);
-      expect(oversize.haltClass).toBe('needs-human');
-      expect(oversize.halt).toMatch(/prior-as-built-cases.*actual \d+, limit 1/);
 
       const undeclaredRepair = await runBlockedAsBuilt(
         () => writeCaseStore(['rem-as-built-missing']),

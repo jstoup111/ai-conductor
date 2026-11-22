@@ -749,6 +749,19 @@ describe('Conductor typed remediation-plan admission', () => {
     await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  // Covers: task:8
+  it('halts before dispatch when the rendered gap-plan payload exceeds its total limit', async () => {
+    const result = await fixture('codex', undefined, 2, {
+      remediationProjectionLimitOverrides: { totalBytes: 1 },
+    });
+
+    expect(result.outcome).toMatchObject({ kind: 'halt' });
+    expect(result.provider.invocationCount).toBe(0);
+    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(
+      /dimension total \(actual \d+, limit 1\)/,
+    );
+  });
+
   // Covers: task:4
   it('halts mechanically without invoking remediate when every history write fails', async () => {
     const result = await fixture('codex', undefined, 2, {

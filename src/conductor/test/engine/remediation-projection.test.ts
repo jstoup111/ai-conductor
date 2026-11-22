@@ -194,6 +194,26 @@ async function expectPreparationFault(
 }
 
 describe('remediation projection', () => {
+  // Covers: task:8
+  it('retains required-reference and task size faults after removing history limits', async () => {
+    const root = await fixture();
+    await writePrdVerdict(root);
+
+    const requiredReferences = await buildRemediationProjection(root, {
+      source: 'prd-audit', activePlanPath: '.docs/plans/active.md',
+    }, { requiredReferencesBytes: 1 });
+    const tasks = await buildRemediationProjection(root, {
+      source: 'prd-audit', activePlanPath: '.docs/plans/active.md',
+    }, { tasksBytes: 1 });
+
+    await expectPreparationFault(requiredReferences, {
+      dimension: 'required-references', actual: expect.any(Number), limit: 1,
+    });
+    await expectPreparationFault(tasks, {
+      dimension: 'tasks', actual: expect.any(Number), limit: 1,
+    });
+  });
+
   // Covers: task:3
   it('projects prior as-built cases and their repair tasks into an as-built gap plan', async () => {
     const root = await fixture();
