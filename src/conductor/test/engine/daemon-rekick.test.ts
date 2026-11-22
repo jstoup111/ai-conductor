@@ -10,6 +10,7 @@ import {
   clearHaltForResume,
   consumeResumeAuthorizations,
   evaluateRebaseRecoveryHalt,
+  validateRebaseRecoveryAdmission,
   recoverEpisodeHalts,
   resolveHaltRetention,
   rekickSweep,
@@ -1803,6 +1804,40 @@ describe('evaluateRebaseRecoveryHalt', () => {
     } finally {
       await rm(missingRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe('validateRebaseRecoveryAdmission', () => {
+  const attempt = {
+    version: 1 as const, generation: 'g1', feature: 'feature', child: 7,
+    preRebaseHead: 'a'.repeat(40), mergeBase: 'b'.repeat(40), target: 'c'.repeat(40),
+  };
+  const base = {
+    expected: attempt, liveAttempt: attempt, expectedHead: 'd'.repeat(40), liveHead: 'd'.repeat(40),
+    expectedChild: 7, liveChild: 7, operatorParked: false, independentBlocker: false, liveHaltClass: 'rebase-recovery',
+  };
+
+  // Covers: task:3
+  it('retains a park or any replaced recovery identity before admission', () => {
+    expect(validateRebaseRecoveryAdmission({ ...base, operatorParked: true })).toEqual(
+      { kind: 'retained', reason: 'feature is operator-parked' },
+    );
+    expect(validateRebaseRecoveryAdmission({ ...base, independentBlocker: true })).toEqual(
+      { kind: 'retained', reason: 'an independent halt blocker is present' },
+    );
+    expect(validateRebaseRecoveryAdmission({ ...base, liveHaltClass: 'needs-human' })).toEqual(
+      { kind: 'retained', reason: 'rebase recovery halt was replaced' },
+    );
+    expect(validateRebaseRecoveryAdmission({ ...base, liveHead: 'e'.repeat(40) })).toEqual(
+      { kind: 'retained', reason: 'completed revision changed before admission' },
+    );
+    expect(validateRebaseRecoveryAdmission({ ...base, liveChild: 8 })).toEqual(
+      { kind: 'retained', reason: 'execution child changed before admission' },
+    );
+    expect(validateRebaseRecoveryAdmission({ ...base, liveAttempt: { ...attempt, generation: 'g2' } })).toEqual(
+      { kind: 'retained', reason: 'rebase recovery attempt changed before admission' },
+    );
+    expect(validateRebaseRecoveryAdmission(base)).toEqual({ kind: 'admitted' });
   });
 });
 

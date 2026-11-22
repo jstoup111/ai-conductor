@@ -44,7 +44,7 @@ import { emitRestackRefused } from './restack/restack-events.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
-import { readRebaseRecoveryAttempt } from './rebase-recovery-attempt.js';
+import { matchesRebaseRecoveryAttempt, readRebaseRecoveryAttempt, type RebaseRecoveryAttempt } from './rebase-recovery-attempt.js';
 import { verifyCompletedReplay } from './rebase-replay.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
@@ -102,6 +102,34 @@ export async function evaluateRebaseRecoveryHalt(opts: {
   return verified.kind === 'accepted'
     ? { kind: 'verified' }
     : { kind: 'retained', reason: verified.reason };
+}
+
+/**
+ * Compare the live state immediately before recovery admission with the
+ * verified snapshot.  The recovery owner calls this while holding the
+ * feature's existing dispatch lease; it deliberately performs no mutation so
+ * a park or replacement halt always wins the race.
+ */
+export function validateRebaseRecoveryAdmission(input: {
+  expected: RebaseRecoveryAttempt;
+  liveAttempt: RebaseRecoveryAttempt | undefined;
+  expectedHead: string;
+  liveHead: string;
+  expectedChild?: number;
+  liveChild?: number;
+  operatorParked: boolean;
+  independentBlocker: boolean;
+  liveHaltClass: string;
+}): { kind: 'admitted' } | { kind: 'retained'; reason: string } {
+  if (input.operatorParked) return { kind: 'retained', reason: 'feature is operator-parked' };
+  if (input.independentBlocker) return { kind: 'retained', reason: 'an independent halt blocker is present' };
+  if (input.liveHaltClass !== 'rebase-recovery') return { kind: 'retained', reason: 'rebase recovery halt was replaced' };
+  if (!matchesRebaseRecoveryAttempt(input.liveAttempt, input.expected)) {
+    return { kind: 'retained', reason: 'rebase recovery attempt changed before admission' };
+  }
+  if (input.liveHead !== input.expectedHead) return { kind: 'retained', reason: 'completed revision changed before admission' };
+  if (input.liveChild !== input.expectedChild) return { kind: 'retained', reason: 'execution child changed before admission' };
+  return { kind: 'admitted' };
 }
 
 /**
