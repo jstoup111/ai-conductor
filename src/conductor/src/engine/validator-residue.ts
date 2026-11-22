@@ -25,13 +25,26 @@ export async function listUntrackedPaths(git: GitRunner): Promise<string[]> {
   return listing.stdout.split('\0').filter((path) => path.length > 0);
 }
 
-function isBaselinePath(path: string, baseline: ReadonlySet<string>): boolean {
-  if (baseline.has(path)) return true;
+interface ValidatorResidueBaseline {
+  readonly exactPaths: ReadonlySet<string>;
+  readonly opaqueDirectories: readonly string[];
+}
+
+function parseBaseline(paths: readonly string[]): ValidatorResidueBaseline {
+  return {
+    exactPaths: new Set(paths.filter((path) => !path.endsWith('/'))),
+    opaqueDirectories: paths.filter((path) => path.endsWith('/')),
+  };
+}
+
+function isBaselinePath(path: string, baseline: ValidatorResidueBaseline): boolean {
+  if (baseline.exactPaths.has(path)) return true;
+  if (baseline.opaqueDirectories.some((directory) => path.startsWith(directory))) return true;
   // Git represents an untracked nested repository as `directory/`.  Its
   // contents can have been present before the dispatch even though the new
   // listing no longer names them individually, so never quarantine it when a
   // baseline path is beneath that directory.
-  return path.endsWith('/') && [...baseline].some((baselinePath) => baselinePath.startsWith(path));
+  return path.endsWith('/') && [...baseline.exactPaths].some((baselinePath) => baselinePath.startsWith(path));
 }
 
 /**
@@ -57,7 +70,7 @@ export async function quarantineValidatorResidue(
 ): Promise<ValidatorResidueResult> {
   try {
     const current = await listUntrackedPaths(input.git);
-    const baseline = new Set(input.baseline);
+    const baseline = parseBaseline(input.baseline);
     const paths = current.filter((path) => !isBaselinePath(path, baseline));
     if (paths.length === 0) return { kind: 'none' };
 

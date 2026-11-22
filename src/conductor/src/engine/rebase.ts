@@ -1,6 +1,6 @@
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
+import { writeFile, readFile, access, lstat, mkdir, rename } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
 import { isRegionStep, type ChildId } from './child-context.js';
@@ -605,7 +605,7 @@ export async function confirmUntrackedRebasePaths(
     const source = confinedWorktreePath(projectRoot, path);
     if (!source) throw new Error(`refusing to quarantine unsafe rebase path: ${path}`);
     try {
-      await access(source);
+      await lstat(source);
     } catch {
       throw new Error(`refusing to quarantine missing rebase path: ${path}`);
     }
@@ -637,7 +637,7 @@ export async function moveRebaseUntrackedPathsToQuarantine(
 
   for (const move of moves) {
     try {
-      await access(move.source);
+      await lstat(move.source);
     } catch {
       throw new Error(`refusing to quarantine missing rebase path: ${move.path}`);
     }

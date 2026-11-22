@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execa } from 'execa';
@@ -111,6 +111,54 @@ describe('validator residue quarantine', () => {
         reason: expect.stringMatching(/^worktree is dirty:.*existing/),
       },
     );
+  });
+
+  it('leaves files beneath an opaque baseline nested repository in place after it becomes an ordinary directory', async () => {
+    await mkdir(join(repository, 'existing'), { recursive: true });
+    await writeFile(join(repository, 'existing/notes.txt'), 'already here\n');
+    await runGit(['init', '-q', 'existing']);
+    const baseline = await listUntrackedPaths(git);
+    expect(baseline).toContain('existing/');
+    await rm(join(repository, 'existing/.git'), { recursive: true });
+    await mkdir(join(repository, 'docs/reports'), { recursive: true });
+    await writeFile(join(repository, 'docs/reports/report.html'), 'new report\n');
+
+    const result = await quarantineValidatorResidue({
+      projectRoot: repository,
+      git,
+      baseline,
+      source: 'manual_test',
+      now: residueNow,
+    });
+
+    expect(result).toMatchObject({ kind: 'moved', paths: ['docs/reports/report.html'] });
+    await expect(readFile(join(repository, 'existing/notes.txt'), 'utf8')).resolves.toBe('already here\n');
+    if (result.kind !== 'moved') throw new Error('expected residue to move');
+    await expect(readFile(join(repository, result.directory, 'docs/reports/report.html'), 'utf8')).resolves.toBe(
+      'new report\n',
+    );
+  });
+
+  it('quarantines a dangling symlink as a present untracked entry', async () => {
+    const baseline = await listUntrackedPaths(git);
+    await symlink('missing-target', join(repository, 'dangling-link'));
+    await mkdir(join(repository, 'docs/reports'), { recursive: true });
+    await writeFile(join(repository, 'docs/reports/report.html'), 'new report\n');
+
+    const result = await quarantineValidatorResidue({
+      projectRoot: repository,
+      git,
+      baseline,
+      source: 'manual_test',
+      now: residueNow,
+    });
+
+    expect(result).toMatchObject({ kind: 'moved', paths: ['dangling-link', 'docs/reports/report.html'] });
+    if (result.kind !== 'moved') throw new Error('expected residue to move');
+    const quarantinedLink = join(repository, result.directory, 'dangling-link');
+    const linkStats = await lstat(quarantinedLink);
+    expect(linkStats.isSymbolicLink()).toBe(true);
+    await expect(readlink(quarantinedLink)).resolves.toBe('missing-target');
   });
 
   it('ignores the old-path field of a staged rename while listing new residue', async () => {
