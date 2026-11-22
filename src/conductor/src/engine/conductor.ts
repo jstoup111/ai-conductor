@@ -6929,8 +6929,21 @@ export class Conductor {
           !(await routedRoundOpen(this.projectRoot, slug))
         ) {
           // returnToLeaf re-pends whole-feature gates in the root state file.
-          // Do not keep the former routed host's overlay or its CAS baseline.
+          // Refresh feature-owned fields, then adopt the settled leaf's
+          // region evidence. The root deliberately holds no synthetic
+          // region completion after returnToLeaf.
           await this.restoreWholeFeatureState(state);
+          const leafCursor = await this.resolveActiveChild(this.projectRoot, slug);
+          const leaf = resolveExecutionChild(leafCursor, slug);
+          if (leaf.source !== 'cursor' || !leaf.target.isLeaf) {
+            await this.haltChildRegionRefusal(
+              await this.renderChildCursorRefusal(
+                leafCursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>,
+              ),
+            );
+            return 'halt';
+          }
+          await this.activateChildRegionState(state, leaf.target.child, leaf.target.isLeaf);
           return { index: indexOf('manual_test') };
         }
         break;
