@@ -6,7 +6,12 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 
-import { captureReplayIdentity, compareReplayTree, type ReplayIdentity } from '../../src/engine/rebase-replay.js';
+import {
+  captureReplayIdentity,
+  compareReplayTree,
+  verifyCompletedReplay,
+  type ReplayIdentity,
+} from '../../src/engine/rebase-replay.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 
 const execFile = promisify(execFileCallback);
@@ -163,6 +168,75 @@ describe('captureReplayIdentity', () => {
       kind: 'unproved',
       identity: captured,
       reason: 'replay identity is missing or malformed',
+    });
+  });
+});
+
+describe('verifyCompletedReplay', () => {
+  const attempt = {
+    version: 1 as const,
+    generation: 'attempt-1',
+    feature: 'verified-rebase',
+    preRebaseHead: 'a'.repeat(40),
+    mergeBase: 'b'.repeat(40),
+    target: 'c'.repeat(40),
+  };
+
+  // Covers: task:2
+  it('rejects a clean revision with matching subjects when no feature content remains', async () => {
+    const result = await verifyCompletedReplay(scripted([
+      { exitCode: 0, stdout: '.git/rebase-merge\n' },
+      { exitCode: 0, stdout: '.git/rebase-apply\n' },
+      { exitCode: 0, stdout: '' },
+      { exitCode: 0, stdout: `${'c'.repeat(40)}\n` },
+      { exitCode: 0 },
+      { exitCode: 1 },
+      { exitCode: 0 },
+    ]), '/fixture', attempt);
+
+    expect(result).toEqual({ kind: 'blocked', reason: 'completed revision has no preserved feature content' });
+  });
+
+  // Covers: task:2
+  it('accepts a clean completed revision only when the attempt identity and reconstructed tree agree', async () => {
+    const tree = 'e'.repeat(40);
+    const completed = 'd'.repeat(40);
+    const result = await verifyCompletedReplay(scripted([
+      { exitCode: 0, stdout: '.git/rebase-merge\n' },
+      { exitCode: 0, stdout: '.git/rebase-apply\n' },
+      { exitCode: 0, stdout: '' },
+      { exitCode: 0, stdout: `${completed}\n` },
+      { exitCode: 0 },
+      { exitCode: 1 },
+      { exitCode: 1 },
+      { exitCode: 0, stdout: `${tree}\n` },
+      { exitCode: 0, stdout: `${tree}\n` },
+    ]), '/fixture', attempt);
+
+    expect(result).toMatchObject({
+      kind: 'accepted',
+      identity: { ...attempt, completedHead: completed },
+      comparison: { kind: 'unchanged', expectedTree: tree, completedTree: tree },
+    });
+  });
+
+  // Covers: task:2
+  it('retains a completed conflict resolution until its exact revision has accepted intent evidence', async () => {
+    const result = await verifyCompletedReplay(scripted([
+      { exitCode: 0, stdout: '.git/rebase-merge\n' },
+      { exitCode: 0, stdout: '.git/rebase-apply\n' },
+      { exitCode: 0, stdout: '' },
+      { exitCode: 0, stdout: `${'d'.repeat(40)}\n` },
+      { exitCode: 0 },
+      { exitCode: 1 },
+      { exitCode: 1 },
+      { exitCode: 0, stdout: `${'e'.repeat(40)}\n` },
+      { exitCode: 0, stdout: `${'f'.repeat(40)}\n` },
+    ]), '/fixture', attempt);
+
+    expect(result).toEqual({
+      kind: 'blocked',
+      reason: 'resolved rebase lacks accepted revision-bound intent evidence',
     });
   });
 });

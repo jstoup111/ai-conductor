@@ -1,4 +1,7 @@
+import { access } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
 import type { GitRunner } from './rebase.js';
+import type { RebaseRecoveryAttempt } from './rebase-recovery-attempt.js';
 
 /** Immutable identities captured around one completed replay. */
 export interface ReplayIdentity {
@@ -95,4 +98,82 @@ export async function captureReplayIdentity(
   } catch {
     return identity;
   }
+}
+
+/** The verifier's deliberately narrow result: callers retain the halt on every blocker. */
+export type CompletedReplayVerification =
+  | { kind: 'accepted'; identity: ReplayIdentity; comparison: Exclude<ReplayComparison, { kind: 'unproved' }> }
+  | { kind: 'blocked'; reason: string };
+
+/**
+ * Verify the worktree left by one persisted replay attempt without treating a
+ * clean checkout or matching commit subjects as proof of preserved work.
+ *
+ * A clean replay is authorized only by exact tree reconstruction. A resolved
+ * conflict must still have separately recorded, revision-bound intent; this
+ * helper fails closed until that evidence is supplied by the recovery owner.
+ */
+export async function verifyCompletedReplay(
+  git: GitRunner,
+  projectRoot: string,
+  attempt: RebaseRecoveryAttempt | undefined,
+): Promise<CompletedReplayVerification> {
+  if (!attempt) return { kind: 'blocked', reason: 'rebase recovery attempt evidence is missing or invalid' };
+
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    let state;
+    try {
+      state = await git(['rev-parse', '--git-path', name]);
+    } catch {
+      return { kind: 'blocked', reason: 'cannot inspect whether rebase is still active' };
+    }
+    if (state.exitCode !== 0 || !state.stdout.trim()) continue;
+    const path = state.stdout.trim();
+    const absolute = isAbsolute(path) ? path : join(projectRoot, path);
+    if (await access(absolute).then(() => true, () => false)) {
+      return { kind: 'blocked', reason: 'rebase is still active' };
+    }
+  }
+
+  let status;
+  let head;
+  let targetAncestor;
+  try {
+    [status, head, targetAncestor] = await Promise.all([
+      git(['status', '--porcelain']),
+      git(['rev-parse', 'HEAD']),
+      git(['merge-base', '--is-ancestor', attempt.target, 'HEAD']),
+    ]);
+  } catch {
+    return { kind: 'blocked', reason: 'cannot inspect completed rebase revision' };
+  }
+  if (status.exitCode !== 0) return { kind: 'blocked', reason: 'cannot inspect worktree cleanliness' };
+  if (status.stdout.trim()) return { kind: 'blocked', reason: 'checkout is dirty after completed rebase' };
+  const completedHead = head.exitCode === 0 ? head.stdout.trim() : '';
+  if (!validObject(completedHead)) return { kind: 'blocked', reason: 'completed rebase revision is unavailable' };
+  if (targetAncestor.exitCode !== 0) return { kind: 'blocked', reason: 'completed revision is not based on the captured rebase target' };
+
+  let originalFeature;
+  let completedFeature;
+  try {
+    [originalFeature, completedFeature] = await Promise.all([
+      git(['diff', '--quiet', attempt.mergeBase, attempt.preRebaseHead]),
+      git(['diff', '--quiet', attempt.target, completedHead]),
+    ]);
+  } catch {
+    return { kind: 'blocked', reason: 'cannot inspect preserved feature content' };
+  }
+  if (originalFeature.exitCode === 0) return { kind: 'blocked', reason: 'captured replay attempt has no feature content to verify' };
+  if (originalFeature.exitCode > 1 || completedFeature.exitCode > 1) {
+    return { kind: 'blocked', reason: 'cannot inspect preserved feature content' };
+  }
+  if (completedFeature.exitCode === 0) return { kind: 'blocked', reason: 'completed revision has no preserved feature content' };
+
+  const identity: ReplayIdentity = { ...attempt, completedHead };
+  const comparison = await compareReplayTree(git, identity);
+  if (comparison.kind === 'unproved') return { kind: 'blocked', reason: comparison.reason };
+  if (comparison.kind === 'changed') {
+    return { kind: 'blocked', reason: 'resolved rebase lacks accepted revision-bound intent evidence' };
+  }
+  return { kind: 'accepted', identity, comparison };
 }
