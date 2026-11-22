@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
-import type { StepName } from '../../src/types/index.js';
+import type { ConductorEvent, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
@@ -103,6 +103,7 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
   let events: ConductorEventEmitter;
   let stepStarts: StepName[];
   let completedBuilds: number;
+  let uncommittedWorkEvents: Array<Extract<ConductorEvent, { type: 'build_uncommitted_work' }>>;
   let currentCommitSha: { mockRestore: () => void };
 
   beforeEach(async () => {
@@ -118,6 +119,10 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
       if (event.type === 'step_completed' && event.step === 'build' && event.status === 'done') {
         completedBuilds += 1;
       }
+    });
+    uncommittedWorkEvents = [];
+    events.on('build_uncommitted_work', (event) => {
+      if (event.type === 'build_uncommitted_work') uncommittedWorkEvents.push(event);
     });
     await initGitRepo(dir);
     await seedArtifacts(dir);
@@ -135,8 +140,14 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
     await rm(dir, { recursive: true, force: true });
   });
 
-  function makeConductor(runner: StepRunner, maxRetries = 2): Conductor {
+  // `refuseCommits` models a hook rejecting the engine's own commit at the
+  // injected git boundary, which is the only way a settled attempt's dirty
+  // work still reaches the dirty-tree miss (adr-2026-08-03 D10).
+  function makeConductor(runner: StepRunner, maxRetries = 2, options: { refuseCommits?: boolean } = {}): Conductor {
     const git: GitRunner = async (args, { cwd }) => {
+      if (options.refuseCommits && args[0] === 'commit') {
+        throw Object.assign(new Error('git commit refused'), { stderr: 'commit-msg: rejected by fixture hook' });
+      }
       const result = await execa('git', args, { cwd });
       return { stdout: result.stdout };
     };
@@ -160,7 +171,7 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
   }
 
   describe('Story S3: budget-exhaustion routing observes the final worktree', () => {
-    it('does not emit BUILD done or dispatch build_review after commit movement leaves tracked work dirty', async () => {
+    it('does not emit BUILD done or dispatch build_review after commit movement leaves tracked work dirty and the engine commit is refused', async () => {
       await writePlanAndStatus(dir, 'pending');
       let attempt = 0;
       const runner: StepRunner = {
@@ -176,7 +187,7 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
         }),
       };
 
-      await makeConductor(runner).run();
+      await makeConductor(runner, 2, { refuseCommits: true }).run();
 
       expect(attempt).toBe(2);
       expect(completedBuilds).toBe(0);
@@ -210,6 +221,8 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
       expect(attempt).toBe(2);
       expect(completedBuilds).toBe(1);
       expect(stepStarts).toContain('build_review');
+      // A clean, self-committed attempt never triggers the engine commit.
+      expect(uncommittedWorkEvents).toEqual([]);
       expect(forwardedVerdict).toEqual(
         expect.objectContaining({
           satisfied: true,
@@ -217,6 +230,88 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
           checkedAt: expect.any(Number),
         }),
       );
+    });
+  });
+
+  describe('Story S9 (#3229): the engine commits settled work the attempt left uncommitted', () => {
+    it('commits the dirty work with the active task trailer so the attempt completes without a retry', async () => {
+      await writePlanAndStatus(dir, 'pending');
+      let attempt = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          if (step === 'build') {
+            attempt += 1;
+            // The builder's `task start` stamp, written during the attempt.
+            await writeFile(join(dir, '.pipeline/current-task'), '1\n');
+            await writeFile(join(dir, 'README.md'), '# Test\n\nuncommitted repair\n');
+          } else if (step === 'build_review') {
+            throw new Error('observed build_review');
+          }
+          return { success: true };
+        }),
+      };
+
+      await makeConductor(runner).run();
+
+      const head = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+      const message = (await execa('git', ['log', '-1', '--format=%B'], { cwd: dir })).stdout;
+      const porcelain = (await execa('git', ['status', '--porcelain'], { cwd: dir })).stdout;
+      expect({ attempt, completedBuilds, porcelain, uncommittedWorkEvents }).toEqual({
+        attempt: 1,
+        completedBuilds: 1,
+        porcelain: '',
+        uncommittedWorkEvents: [
+          expect.objectContaining({
+            step: 'build',
+            attempt: 1,
+            paths: ['README.md'],
+            taskIds: ['1'],
+            outcome: 'committed',
+            sha: head,
+          }),
+        ],
+      });
+      expect(message).toMatch(/^build: commit work left uncommitted by BUILD attempt 1/);
+      expect(message).toMatch(/^Task: 1$/m);
+      expect(stepStarts).toContain('build_review');
+    });
+
+    it('falls back to the dirty-tree miss, naming the commit failure, when the engine commit is refused', async () => {
+      await writePlanAndStatus(dir, 'completed');
+      let attempt = 0;
+      const retryReasons: Array<string | undefined> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step, _state, options) => {
+          if (step === 'build') {
+            attempt += 1;
+            retryReasons.push(options?.retryReason);
+            if (attempt === 1) {
+              await writeFile(join(dir, 'README.md'), '# Test\n\nuncommitted repair\n');
+            } else {
+              await execa('git', ['add', 'README.md'], { cwd: dir });
+              await execa('git', ['commit', '-m', 'fix: commit repair'], { cwd: dir });
+            }
+          }
+          return { success: true };
+        }),
+      };
+
+      await makeConductor(runner, 2, { refuseCommits: true }).run();
+
+      expect(attempt).toBe(2);
+      expect(retryReasons[1]).toMatch(/1 uncommitted paths: README\.md/);
+      expect(retryReasons[1]).toMatch(
+        /engine commit of uncommitted BUILD work failed: commit-msg: rejected by fixture hook/,
+      );
+      expect(uncommittedWorkEvents).toEqual([
+        expect.objectContaining({
+          attempt: 1,
+          paths: ['README.md'],
+          outcome: 'failed',
+          reason: expect.stringContaining('rejected by fixture hook'),
+        }),
+      ]);
+      expect(completedBuilds).toBe(1);
     });
   });
 
@@ -241,7 +336,7 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
         }),
       };
 
-      await makeConductor(runner).run();
+      await makeConductor(runner, 2, { refuseCommits: true }).run();
 
       expect(attempt).toBe(2);
       expect(retryReasons[1]).toMatch(/README\.md/);

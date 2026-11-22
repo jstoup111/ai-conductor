@@ -59,6 +59,7 @@ engine/build-review-scoped-run.ts -> process
 engine/build-review-test-quality-preflight.ts -> filesystem
 engine/build-review-work-order.ts -> filesystem
 engine/build-tail-rollup.ts -> filesystem
+engine/build-work-commit.ts -> filesystem
 engine/canonical-launcher.ts -> filesystem
 engine/child-context.ts -> filesystem
 engine/child-cursor.ts -> filesystem

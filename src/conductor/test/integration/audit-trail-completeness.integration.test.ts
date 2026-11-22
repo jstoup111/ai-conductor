@@ -258,6 +258,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<AuditedEventType, 'friction-mapped' | 'n
   // Retry-loop liveness telemetry: the attempt it describes is already
   // friction-mapped via `step_retry`, so it writes no record of its own.
   unattributed_progress: 'not-audited-by-design',
+  build_uncommitted_work: 'not-audited-by-design',
   halt_cleared: 'friction-mapped',
   halt_clear_authorized: 'friction-mapped',
   kickback_budget_adjustment_authorized: 'friction-mapped',
@@ -1289,6 +1290,15 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     resolvedCount: 0,
     headBefore: 'a'.repeat(40),
     headAfter: 'b'.repeat(40),
+  },
+  build_uncommitted_work: {
+    type: 'build_uncommitted_work',
+    step: 'build',
+    attempt: 1,
+    paths: ['src/a.ts'],
+    taskIds: ['1'],
+    outcome: 'committed',
+    sha: 'c'.repeat(40),
   },
   halt_cleared: { type: 'halt_cleared', step: 'build', cause: 'operator' },
   halt_clear_authorized: {

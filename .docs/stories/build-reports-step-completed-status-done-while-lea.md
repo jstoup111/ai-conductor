@@ -233,3 +233,36 @@ evidence is not stale; its label is incomplete. This story adds a label and no r
 - [ ] One additive optional field on the pass and fail evidence shapes, with validators accepting its absence.
 - [ ] A round-trip test proves pre-existing evidence still validates.
 - [ ] A test asserts the `test_suite` gate verdict is unchanged in every case.
+
+---
+
+## Story S9: The engine commits settled work the attempt left uncommitted (#3229)
+
+**Requirement:** O1, O2 · ADR Decision 10 (amended 2026-11-22)
+
+As the engine, I want a BUILD attempt that settles `completed` with uncommitted work to have that
+work committed by me, stamped with the tasks the builder declared active, before the completion
+predicate observes the tree, so that a finished attempt is not spent as a retry on a dirty tree and
+downstream gates receive the work to re-verify.
+
+### Happy Path
+
+- Given a build attempt returns success with tracked or untracked-non-ignored paths dirty, when the completion path runs, then the engine commits exactly those paths before the completion predicate, the closure judgement, and the stall accounting observe the tree.
+- Given `.pipeline/current-task` names a task or `task-status.json` rows are `in_progress`, when the engine commits, then the commit carries one `Task:` trailer per such task and the trailer-union resolution counts the task as resolved, so the attempt completes or counts as progress rather than a retry.
+- Given the engine commit succeeds, when the step is observed, then one `build_uncommitted_work` event with `outcome: committed`, the dirty `paths`, the `taskIds`, and the `sha` is emitted on the spine and rendered as a daemon log line.
+- Given the builder declared no active task, when the engine commits, then the commit carries no `Task:` trailer, the work is preserved on the branch, HEAD movement counts as liveness, and the pending tasks remain pending for the next attempt.
+
+### Negative Paths
+
+- Given the dirty paths include a protected DECIDE artifact or only run state under `.pipeline/`, when the engine would commit, then it refuses without staging anything and the attempt follows the existing dirty-tree miss with the refusal reason appended.
+- Given the pre-commit, commit-msg, or repository hook rejects the engine commit, when the completion predicate runs, then it returns today's `N uncommitted paths: …` miss with the `uncommitted` retry hint, suffixed `engine commit of uncommitted BUILD work failed: <reason>`, and a `build_uncommitted_work` event with `outcome: failed` carries the same reason.
+- Given a build attempt committed its own work and left the tree clean, when the completion path runs, then no engine commit is attempted, no `build_uncommitted_work` event is emitted, and behavior is byte-for-byte today's.
+- Given the `worktreeStatus` probe is absent or throws, when the completion path runs, then no engine commit is attempted (ADR Decision 3 fail-open on absence).
+- Given the engine commit runs, when its git invocation is inspected, then it never passes `--no-verify`, a forced add, or `CONDUCT_ENGINE_COMMIT`, so every protection the builder's own commit faces applies.
+
+### Done When
+- [ ] `commitUncommittedBuildWork` commits through the injected git runner with the attribution rule above, refusing `.pipeline/` and protected artifact paths.
+- [ ] `Conductor` invokes it for `build` before `checkStepCompletion` and suffixes a failed commit's reason onto the completion miss.
+- [ ] `build_uncommitted_work` is a `ConductorEvent` variant, persisted, and rendered by the daemon log.
+- [ ] Tests prove: dirty-completed attempt commits with the trailer and completes in one attempt; a refused commit falls back to the existing miss naming the cause; a clean committed attempt is unchanged.
+

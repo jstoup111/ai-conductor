@@ -2217,6 +2217,26 @@ type ConductorEventBody =
       headBefore: string | null;
       headAfter: string | null;
     }
+  | {
+      /**
+       * A BUILD attempt settled `completed` with uncommitted work in its
+       * worktree, and the engine committed that work itself (stamped with
+       * the builder-declared active task ids) or could not. Emitted once
+       * per such attempt, before its completion check (adr-2026-08-03 D10).
+       */
+      type: 'build_uncommitted_work';
+      step: StepName;
+      attempt: number;
+      /** Every dirty path the completion probe reported. */
+      paths: string[];
+      /** `Task:` trailer ids the engine commit carried (empty: unattributed). */
+      taskIds: string[];
+      outcome: 'committed' | 'failed';
+      /** Present when `outcome` is `committed`. */
+      sha?: string;
+      /** Present when `outcome` is `failed`. */
+      reason?: string;
+    }
   // ── Audit-trail write-completeness: halt lifecycle closure ──
   | {
       /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */

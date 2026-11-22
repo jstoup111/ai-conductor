@@ -107,6 +107,7 @@ export const DAEMON_EVENT_DEPTH: DaemonEventDepthTable = {
   rebase_conflict_halt: 1,
   auto_park_contradiction: 1,
   unattributed_progress: 1,
+  build_uncommitted_work: 1,
   ci_failed: 1,
   ci_repair_diagnostic: 1,
   worktree_reclaim_reclaimed: 1,

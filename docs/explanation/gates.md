@@ -974,7 +974,10 @@ authority. So when the budget exhausts but at least one attempt moved HEAD — r
 a `Task:` trailer attributing it — the run routes through the same advance seam a completed build uses,
 straight into `build_review`, instead of the generic "retries exhausted" halt, **but only when the
 worktree is clean**. Dirty paths keep the build halted so they can be committed or discarded; they never
-ride the commit-movement route. Which plan task ids were left unresolved is recorded in
+ride the commit-movement route. In practice the engine commits them first: an attempt that settles
+`completed` with uncommitted work gets an engine-owned commit (trailered with the tasks the builder declared
+active) before its completion check, reported as `build_uncommitted_work`, so only a failed engine commit
+still reaches the dirty-tree halt. Which plan task ids were left unresolved is recorded in
 `conduct-state.json` so the decision stays visible. This is not an always-pass:
 `build_review` re-grades the diff against the plan on its own evidence and can still FAIL, kicking the build
 back under the same per-gate kickback cap as any other `build_review` kickback, so repeated route→FAIL

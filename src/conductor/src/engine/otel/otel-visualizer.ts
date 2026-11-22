@@ -371,6 +371,7 @@ export class OtelVisualizer implements VisualizerPlugin {
         this.spanManager.onBuildProgress(event);
         break;
       case 'unattributed_progress':
+      case 'build_uncommitted_work':
         // Routine telemetry is intentionally tolerated without a span event.
         break;
       case 'build_no_progress':

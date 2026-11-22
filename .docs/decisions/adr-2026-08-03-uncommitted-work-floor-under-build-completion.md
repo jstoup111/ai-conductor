@@ -205,3 +205,51 @@ alone, and Decision 7 deliberately adds a label rather than machinery built on t
 > an exhausted budget halts naming the missing pass instead of bypassing it. A miss is routing, not
 > authority (Decision 1): it never asserts completion, its retry hint names the record path, and a
 > simplify-only follow-up attempt that moves no HEAD is exempt from the no-task-progress stall breaker.
+
+> **Amended 2026-11-22 by hotfix #3229 (operator decision, jstoup111):** Option B above rejected an
+> engine commit of the residue in 2026-08 on the ground that it would present unreviewed content as
+> intentional work. Two live occurrences since (#3229: `daemon-log-lines-are-unreadable-to-operators`,
+> three Codex attempts; `prevent-avoidable-operator-cleanup-after-verified-`, a one-hour remediation
+> attempt that reported "Validated: TypeScript compile; 122 rebase/replay tests" and committed none of
+> its 8 modified files) showed the floor alone converts a finished attempt into a burned retry on a
+> dirty tree, and the ground for rejecting Option B no longer holds: `build_review`'s completeness
+> rubric is retired (the 2026-08-22 amendment) and every downstream gate (`test_suite`,
+> `build_review`, SHIP validators) re-verifies the committed diff on its own evidence, so an engine
+> commit asserts nothing a gate trusts. The floor itself (D1–D9) stands unchanged; this decision runs
+> before it.
+>
+> **D10 — A BUILD attempt that settles `completed` with uncommitted work has that work committed by the engine, before the completion predicate observes the tree.**
+> In the step loop, after the runner reports success and before the closure judgement, the completion
+> predicate, and the no-task-progress accounting run, the engine reads the same `worktreeStatus` probe
+> (D3 fail-open semantics: absent or throwing probe means no commit) and, when the tree is dirty,
+> commits the dirty paths itself (`build-work-commit.ts`, `commitSettledBuildWork` in `conductor.ts`).
+> The commit is engine-owned but is **not** an engine-bookkeeping commit: it runs without
+> `CONDUCT_ENGINE_COMMIT`, without `--no-verify`, and without a forced add, so the pre-commit protected
+> artifact seal, the commit-msg task validation, the stack commit guard, and any repository hooks apply
+> exactly as they would to the builder's own `git commit`; a feature that has entered the durable
+> stacked-child lifecycle commits through the journal-fenced `commitEngineChangeWhenStacked` helper
+> instead, so it never races a restack move. Run state under `.pipeline/` is never
+> staged, and a protected DECIDE artifact among the dirty paths refuses the whole commit rather than
+> being committed around. The commit preserves work and asserts nothing: a clean tree after it still
+> has to pass task resolution, the simplify floor (D9), the pre-check, and every downstream gate.
+>
+> **Task attribution rule.** The commit carries one `Task:` trailer per task the builder itself
+> declared active: the `.pipeline/current-task` stamp written by `task start`, plus every
+> `in_progress` row in `.pipeline/task-status.json` (de-duplicated, stamp first). The engine never
+> infers attribution from touched paths or picks among pending tasks: a guessed trailer would resolve
+> a task nobody finished and skip it for good, whereas an unattributed commit merely leaves the task
+> pending for the next attempt while the work is already safe on the branch (HEAD movement still
+> counts as liveness under the commit-movement floor and never classifies as `no_task_progress`).
+> With a trailer, the existing trailer-union resolution (#859) credits the task, so the attempt counts
+> as progress instead of a retry.
+>
+> **Failure falls back to D1–D4 unchanged, naming the cause.** When the engine commit fails (hook
+> rejection, protected path, git error), the tree is left as it was, the completion predicate returns
+> today's `N uncommitted paths: …` miss with the same `missing: 'uncommitted'` retry hint, and the
+> reason is suffixed `; engine commit of uncommitted BUILD work failed: <reason>` so the `step_retry`
+> record and any terminal HALT carry it. The attempt is otherwise handled exactly as before D10.
+>
+> **Visibility.** Each engine commit attempt (success or failure) is one `build_uncommitted_work`
+> event on the existing spine (`paths`, `taskIds`, `outcome`, `sha` or `reason`), rendered as a
+> daemon log line; no sidecar, stamp, or second channel is introduced.
+

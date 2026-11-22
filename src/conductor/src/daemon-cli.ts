@@ -3766,6 +3766,20 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'build_uncommitted_work': {
+      const pathNoun = event.paths.length === 1 ? 'path' : 'paths';
+      const tasks = event.taskIds.length > 0 ? `Task: ${event.taskIds.join(', ')}` : 'no active task attributed';
+      if (event.outcome === 'committed') {
+        log(
+          `${dot} ${chalk.green('✓')} ${event.step} attempt ${event.attempt} left ${event.paths.length} ${pathNoun} uncommitted; engine committed ${event.sha?.slice(0, 12) ?? '(unknown)'} (${tasks})`,
+        );
+      } else {
+        log(
+          `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} attempt ${event.attempt} left ${event.paths.length} ${pathNoun} uncommitted; engine commit failed (${tasks}): ${event.reason ?? 'unknown'}`)}`,
+        );
+      }
+      break;
+    }
     case 'build_no_progress': {
       // Warning line: distinct glyph + yellow coloring so it stands out from
       // the plain build_progress heartbeat above during a quiet episode.

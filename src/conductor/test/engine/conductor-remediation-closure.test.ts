@@ -283,7 +283,10 @@ describe('BUILD remediation-closure judgement boundary', () => {
       run: async () => ({ success: true }),
       dispatchRemediationClosureJudgement: closures,
     };
+    // adr-2026-08-03 D10 commits a settled attempt's dirty work before this
+    // boundary; a refused engine commit is the only way the tree stays dirty.
     const git = async (args: string[], options: { cwd: string }) => {
+      if (args[0] === 'commit') throw Object.assign(new Error('git commit refused'), { stderr: 'hook rejected' });
       const { stdout } = await exec('git', args, { cwd: options.cwd });
       return { stdout, exitCode: 0 };
     };
