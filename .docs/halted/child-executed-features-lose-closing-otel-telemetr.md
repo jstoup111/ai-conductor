@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-11-22T00:13:56.839Z
+Status: halted
 Slug: child-executed-features-lose-closing-otel-telemetr
 Class: needs-human
 Halting step: rebase
 Phase: SHIP
 Branch: feat/daemon-child-executed-features-lose-closing-otel-telemetr
-Head SHA: cc9d2e1730635baa0098944086c245376d7f2dac
-Halted at: 2026-11-22T00:12:24.006Z
+Head SHA: d2db32c3a7123114ab4d6cddc8f142a372105ea8
+Halted at: 2026-11-22T00:44:22.164Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
