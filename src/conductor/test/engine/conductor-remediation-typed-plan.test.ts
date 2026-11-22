@@ -824,6 +824,16 @@ describe('Conductor typed remediation-plan admission', () => {
     expect(mechanical.outcome).toMatchObject({ kind: 'halt', haltClass: 'mechanical' });
   });
 
+  // Covers: task:9
+  it('keeps input preparation faults mechanical', async () => {
+    const oversized = await fixture('codex', undefined, 2, {
+      planText: plan.replace('Authored task 1', 'x'.repeat(600)), remediationProjectionLimitOverrides: { tasksBytes: 1 },
+    });
+    const ledger = await fixture('codex', undefined, 2, { corruptKickbackLedger: true });
+    expect(oversized.outcome).toMatchObject({ kind: 'halt', haltClass: 'mechanical' });
+    expect(ledger.outcome).toMatchObject({ kind: 'halt', haltClass: 'mechanical' });
+  });
+
   // Covers: task:21
   it('retains the build-stall question verbatim on a mechanical capability halt', async () => {
     const question = 'Which verified input should unblock this stalled build?';
