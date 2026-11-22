@@ -38,6 +38,7 @@ import type { ConductState } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS, STEP_GROUPS, VALIDATION_GROUP, getGroupForStep, tryGetStepIndex } from '../../src/engine/steps.js';
 import { buildRetryHint, appendRemediationTasks } from '../../src/engine/conductor.js';
@@ -2572,6 +2573,171 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
         evidence: [{ gate: 'build', evidenceFile: '.pipeline/build-stall-question.md' }],
       }),
     );
+  });
+
+  // Covers: task:18
+  it.skip('clears the stale-citation halt marker before a halt-clear re-kick', async () => {
+    await seedToBuildStep();
+    const seeded = (await readState(statePath)).value as Record<string, unknown>;
+    let afterBuild = false;
+    for (const step of ALL_STEPS) {
+      if (afterBuild) seeded[step.name] = 'done';
+      if (step.name === 'build') afterBuild = true;
+    }
+    await writeState(statePath, seeded as ConductState);
+
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    const caseId = 'case-settled-by-child-4';
+    const feature = { version: 'v1', repository: 'acme/conductor', feature: 'stale-citation' };
+    const emptyStore = {
+      version: 'v4',
+      feature,
+      cases: [],
+      prdWideningCases: [],
+      asBuiltCases: [],
+      suppressions: [],
+      outbox: [],
+    };
+    const resolvedStore = {
+      ...emptyStore,
+      cases: [
+        {
+          id: caseId,
+          domain: 'build_review',
+          disposition: 'act',
+          priority: 'high',
+          rationale: 'Fixture case was already settled by the sibling.',
+          confidence: 'high',
+          resolution: 'resolved',
+          sources: [{ sourceId: 'testQuality:case', outcome: 'acted', recordedAt: '2026-11-20T00:00:00.000Z' }],
+          effect: { id: 'effect-case', kind: 'action', status: 'applied', workOrderId: 'order-case' },
+        },
+      ],
+    };
+    for (const [child, store] of [
+      [child3, emptyStore],
+      [child4, resolvedStore],
+    ] as const) {
+      await mkdir(join(dir, '.pipeline', 'children', String(child)), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'children', String(child), 'remediation-cases.json'),
+        JSON.stringify(store),
+      );
+    }
+    await writeFile(
+      join(dir, '.pipeline', 'events.jsonl'),
+      [1, 2]
+        .map((attempt) =>
+          JSON.stringify({
+            type: 'build_stall_stale_citation',
+            caseId,
+            stalledChild: child3,
+            ownerChild: child4,
+            state: 'resolved',
+            resolvedTasks: 0,
+            attempt,
+          }),
+        )
+        .join('\n') + '\n',
+    );
+
+    const firstEvents = new ConductorEventEmitter();
+    const firstPersister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), firstEvents);
+    firstPersister.start();
+    let first: Conductor;
+    first = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            (first as unknown as { activeRegionChild: ChildId }).activeRegionChild = child3;
+            await writeFile(join(dir, '.pipeline', 'halt-user-input-required'), `Do not repeat ${caseId}.`);
+            await writeFile(
+              join(dir, '.pipeline', 'children', String(child3), 'task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+            await writeFile(
+              join(dir, '.pipeline', 'task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true };
+        }),
+      },
+      events: firstEvents,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+    });
+    (first as unknown as { activeRegionChild: ChildId }).activeRegionChild = child3;
+    try {
+      await first.run();
+    } finally {
+      firstPersister.stop();
+    }
+
+    await expect(readFile(join(dir, '.pipeline', 'halt-user-input-required'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(await readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).toContain('Stale citation');
+    await rm(join(dir, '.pipeline', 'HALT'), { force: true });
+    await rm(join(dir, '.pipeline', 'HALT.class'), { force: true });
+
+    const reKickEvents = new ConductorEventEmitter();
+    const reKickStalls: string[] = [];
+    reKickEvents.on('build_stall', (event) => {
+      if (event.type === 'build_stall') reKickStalls.push(event.reason);
+    });
+    let reKick: Conductor;
+    reKick = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            (reKick as unknown as { activeRegionChild: ChildId }).activeRegionChild = child3;
+            await writeFile(
+              join(dir, '.pipeline', 'children', String(child3), 'task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'completed' }] }),
+            );
+            await writeFile(
+              join(dir, '.pipeline', 'task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'completed' }] }),
+            );
+            await writeFile(
+              join(dir, '.pipeline', 'task-evidence.json'),
+              JSON.stringify({
+                evidenceStamps: { '1': { sha: '0000000000000000000000000000000000000001', form: 'trailer' } },
+                noEvidenceAttempts: 0,
+                migrationGrandfather: [],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      },
+      events: reKickEvents,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+    });
+    (reKick as unknown as { activeRegionChild: ChildId }).activeRegionChild = child3;
+    await reKick.run();
+
+    expect(reKickStalls).not.toContain('halt_marker');
+    const staleCitationAttempts = (await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { type?: string; caseId?: string; attempt?: number })
+      .filter((event) => event.type === 'build_stall_stale_citation' && event.caseId === caseId)
+      .map((event) => event.attempt);
+    expect(staleCitationAttempts).toEqual([1, 2, 3]);
   });
 
   it('interactive mode with halt marker → runInteractive called, remediate NOT dispatched', async () => {

@@ -14915,7 +14915,11 @@ export class Conductor {
                             staleOutcome.haltClass,
                           );
                           if (haltWrite.status === 'written') await this.retireTerminalBuildStallInputs();
+                          await clearHaltMarker(this.projectRoot);
+                          await this.persistPendingStateChanges(state, 'persist conductor transition');
                           await this.emitLoopHalt(effectiveQuestion);
+                          process.off('SIGINT', sigintHandler);
+                          process.off('SIGTERM', sigterm);
                           return;
                         }
                         if (staleOutcome.kind === 'fall-through') continue;
