@@ -5,14 +5,8 @@ import type {
   NativeSchemaRequest,
 } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import {
-  CLAUDE_MODEL_POLICY,
-  CODEX_MODEL_POLICY,
-} from '../../src/engine/provider-model-policy.js';
-import {
-  ProviderRuntimeSet,
-  type ProviderRuntime,
-} from '../../src/engine/provider-runtime.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ProviderRuntimeSet, type ProviderRuntime } from '../../src/engine/provider-runtime.js';
 import { validateRemediationPlan } from '../../src/engine/remediation-plan-contract.js';
 import { persistRemediationPlan } from '../../src/engine/remediation-plan-store.js';
 import type { StepRunOptions } from '../../src/engine/conductor.js';
@@ -21,22 +15,22 @@ export type RemediationPlanProviderKey = 'claude' | 'codex';
 
 export type RemediationPlanProviderOutcome =
   | {
-    kind: 'structured';
-    finalStructuredResult: unknown;
-    output?: string;
-    exitCode?: number;
-  }
+      kind: 'structured';
+      finalStructuredResult: unknown;
+      output?: string;
+      exitCode?: number;
+    }
   | {
-    kind: 'chat';
-    output: string;
-    exitCode?: number;
-  }
+      kind: 'chat';
+      output: string;
+      exitCode?: number;
+    }
   | { kind: 'throw'; error: unknown }
   | {
-    kind: 'timeout';
-    output?: string;
-    exitCode?: number;
-  }
+      kind: 'timeout';
+      output?: string;
+      exitCode?: number;
+    }
   | { kind: 'provider-condition'; result: InvokeResult };
 
 export interface RemediationPlanProviderCall {
@@ -102,7 +96,11 @@ export async function persistFixtureTestRemediationPlan(
   }[],
 ): Promise<void> {
   const request = options?.remediationRequest;
-  if (request?.mode !== 'gap-plan' || request.history === undefined || request.projection.source !== 'finish-verification') {
+  if (
+    request?.mode !== 'gap-plan' ||
+    request.history === undefined ||
+    request.projection.source !== 'finish-verification'
+  ) {
     throw new Error('test remediation fixture requires a finish-verification gap-plan request with a history index');
   }
   await persistFixtureRemediationPlan(projectRoot, options, {
@@ -131,7 +129,11 @@ export async function persistFixtureProjectedRemediationPlan(
     readonly rationale: string;
     readonly tasks: readonly { readonly id: string; readonly title: string }[];
     readonly boundTaskIds?: readonly string[];
-    readonly reconciliation?: { readonly relation: 'same' | 'recurrence' | 'materially-changed' | 'new'; readonly priorCaseId?: string; readonly reason: string };
+    readonly reconciliation?: {
+      readonly relation: 'same' | 'recurrence' | 'materially-changed' | 'new';
+      readonly priorCaseId?: string;
+      readonly reason: string;
+    };
   }[],
 ): Promise<void> {
   const request = options?.remediationRequest;
@@ -139,12 +141,13 @@ export async function persistFixtureProjectedRemediationPlan(
     throw new Error('fixture remediation dispatch requires a gap-plan request with a history index');
   }
   const raw = dispositions.map((disposition) => {
-    const reference = request.projection.requiredReferences.find((candidate) =>
-      candidate.id === disposition.id ||
-      (candidate.kind === 'prd-criterion' && candidate.id.toLowerCase() === disposition.id.toLowerCase()) ||
-      (candidate.kind === 'refusal' && `refusal-${candidate.id}` === disposition.id) ||
-      (candidate.kind === 'as-built-finding' && candidate.id.endsWith(`:${disposition.id.replace(/^AB-/, '')}`)) ||
-      candidate.kind === disposition.referenceKind,
+    const reference = request.projection.requiredReferences.find(
+      (candidate) =>
+        candidate.id === disposition.id ||
+        (candidate.kind === 'prd-criterion' && candidate.id.toLowerCase() === disposition.id.toLowerCase()) ||
+        (candidate.kind === 'refusal' && `refusal-${candidate.id}` === disposition.id) ||
+        (candidate.kind === 'as-built-finding' && candidate.id.endsWith(`:${disposition.id.replace(/^AB-/, '')}`)) ||
+        candidate.kind === disposition.referenceKind,
     );
     if (reference !== undefined) {
       return {
@@ -155,17 +158,25 @@ export async function persistFixtureProjectedRemediationPlan(
         tasks: disposition.tasks.map(({ id, title }) => ({ id, title })),
         boundTaskIds: disposition.boundTaskIds ?? [],
         ...(reference.kind === 'as-built-finding'
-          ? { reconciliation: disposition.reconciliation ?? { relation: 'new', reason: 'Fixture finding has no prior case.' } }
+          ? {
+              reconciliation: disposition.reconciliation ?? {
+                relation: 'new',
+                reason: 'Fixture finding has no prior case.',
+              },
+            }
           : {}),
       };
     }
-    const untypedKind = request.projection.source === 'build-stall' ? 'stall'
-      : request.projection.source === 'finish-verification' ? 'test'
-      : undefined;
+    const untypedKind =
+      request.projection.source === 'build-stall'
+        ? 'stall'
+        : request.projection.source === 'finish-verification'
+          ? 'test'
+          : undefined;
     if (untypedKind === undefined || !new RegExp(`^${untypedKind}:[A-Za-z0-9][A-Za-z0-9._-]*$`).test(disposition.id)) {
       throw new Error(
         `fixture remediation disposition ${disposition.id} is not an engine-projected reference ` +
-        `(${request.projection.requiredReferences.map((candidate) => `${candidate.kind}:${candidate.id}`).join(', ') || 'none'})`,
+          `(${request.projection.requiredReferences.map((candidate) => `${candidate.kind}:${candidate.id}`).join(', ') || 'none'})`,
       );
     }
     return {
@@ -243,6 +254,8 @@ export function createRemediationPlanProviderFixture({
     runtime,
     runtimes: new ProviderRuntimeSet([runtime]),
     calls,
-    get invocationCount() { return calls.length; },
+    get invocationCount() {
+      return calls.length;
+    },
   };
 }

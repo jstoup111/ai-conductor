@@ -705,82 +705,85 @@ describe('Conductor typed remediation-plan admission', () => {
   it.each([
     ['the same run id', 'attempt-one'],
     ['no run id', undefined],
-  ] as const)('leaves an earlier round history intact when a new remediation round is prepared with %s', async (_label, runId) => {
-    const result = await fixture(
-      'codex',
-      [
-        { kind: 'structured', finalStructuredResult: output() },
-        { kind: 'structured', finalStructuredResult: output() },
-      ],
-      1,
-      runId === undefined ? {} : { attemptRunId: runId },
-    );
-    const directory = join(result.root, '.pipeline', 'remediation-history');
-    const firstFiles = (await readdir(directory)).sort();
-    const firstBytes = await Promise.all(firstFiles.map((name) => readFile(join(directory, name), 'utf8')));
-    await settlePendingRepair(result.root, [
-      {
-        gate: 'prd_audit',
-        lapCap: 2,
-        growthCap: 2,
-        authoredSource: 'plan',
-        growth: { authored: 8, added: 0, byGate: {}, remaining: 2 },
-      },
-    ]);
-    await persistPrdAuditVerdict(
-      result.root,
-      {
-        complete: true,
-        judgment: {
-          version: 'v1',
-          criterionJudgments: ['S1.1', 'S1.2'].map((criterion, index) => ({
-            criterion: { storyId: '1', ordinal: index + 1 },
-            criterionId: criterion,
-            grade: 'FIXABLE' as const,
-            evidence: `${criterion} has a repairable gap.`,
-            rationale: `${criterion} requires repair.`,
-            requirementAssociations: [],
-            evidenceTaskIds: [String(index + 1)],
-            ownerTaskId: String(index + 1),
-          })),
-          noOwnerObservations: [],
+  ] as const)(
+    'leaves an earlier round history intact when a new remediation round is prepared with %s',
+    async (_label, runId) => {
+      const result = await fixture(
+        'codex',
+        [
+          { kind: 'structured', finalStructuredResult: output() },
+          { kind: 'structured', finalStructuredResult: output() },
+        ],
+        1,
+        runId === undefined ? {} : { attemptRunId: runId },
+      );
+      const directory = join(result.root, '.pipeline', 'remediation-history');
+      const firstFiles = (await readdir(directory)).sort();
+      const firstBytes = await Promise.all(firstFiles.map((name) => readFile(join(directory, name), 'utf8')));
+      await settlePendingRepair(result.root, [
+        {
+          gate: 'prd_audit',
+          lapCap: 2,
+          growthCap: 2,
+          authoredSource: 'plan',
+          growth: { authored: 8, added: 0, byGate: {}, remaining: 2 },
         },
-        diagnostics: [],
-        recordedDispositions: [],
-      },
-      { attemptId: runId ?? 'attempt-two', codeStamp: null },
-    );
-    const next = new Conductor({
-      stateFilePath: join(result.root, '.pipeline', 'conduct-state.json'),
-      stepRunner: result.runner,
-      events: new ConductorEventEmitter(),
-      projectRoot: result.root,
-      mode: 'auto',
-      daemon: true,
-      verifyArtifacts: false,
-      config: result.config,
-    });
-    (next as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...result.state };
-    if (runId !== undefined) (next as unknown as { currentRunId: string }).currentRunId = runId;
-    await (
-      next as unknown as {
-        planRemediation(
-          state: ConductState,
-          steps: typeof ALL_STEPS,
-          context: string,
-          source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
-        ): Promise<unknown>;
-      }
-    ).planRemediation(result.state, ALL_STEPS, 'Retry after a new attempt.', {
-      source: 'prd-audit',
-      evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
-    });
-    const allFiles = (await readdir(directory)).sort();
-    expect(allFiles).toHaveLength(4);
-    await expect(Promise.all(firstFiles.map((name) => readFile(join(directory, name), 'utf8')))).resolves.toEqual(
-      firstBytes,
-    );
-  });
+      ]);
+      await persistPrdAuditVerdict(
+        result.root,
+        {
+          complete: true,
+          judgment: {
+            version: 'v1',
+            criterionJudgments: ['S1.1', 'S1.2'].map((criterion, index) => ({
+              criterion: { storyId: '1', ordinal: index + 1 },
+              criterionId: criterion,
+              grade: 'FIXABLE' as const,
+              evidence: `${criterion} has a repairable gap.`,
+              rationale: `${criterion} requires repair.`,
+              requirementAssociations: [],
+              evidenceTaskIds: [String(index + 1)],
+              ownerTaskId: String(index + 1),
+            })),
+            noOwnerObservations: [],
+          },
+          diagnostics: [],
+          recordedDispositions: [],
+        },
+        { attemptId: runId ?? 'attempt-two', codeStamp: null },
+      );
+      const next = new Conductor({
+        stateFilePath: join(result.root, '.pipeline', 'conduct-state.json'),
+        stepRunner: result.runner,
+        events: new ConductorEventEmitter(),
+        projectRoot: result.root,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: false,
+        config: result.config,
+      });
+      (next as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...result.state };
+      if (runId !== undefined) (next as unknown as { currentRunId: string }).currentRunId = runId;
+      await (
+        next as unknown as {
+          planRemediation(
+            state: ConductState,
+            steps: typeof ALL_STEPS,
+            context: string,
+            source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
+          ): Promise<unknown>;
+        }
+      ).planRemediation(result.state, ALL_STEPS, 'Retry after a new attempt.', {
+        source: 'prd-audit',
+        evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+      });
+      const allFiles = (await readdir(directory)).sort();
+      expect(allFiles).toHaveLength(4);
+      await expect(Promise.all(firstFiles.map((name) => readFile(join(directory, name), 'utf8')))).resolves.toEqual(
+        firstBytes,
+      );
+    },
+  );
 
   // Covers: task:20
   it('does not retry a valid first gap-plan attempt', async () => {

@@ -520,7 +520,15 @@ describe('remediation projection', () => {
         gates: Object.fromEntries(
           Array.from({ length: 4_000 }, (_, index) => [
             `gate-${index}`,
-            { count: 1, cumulative: 1, laps: 1, treeHash: null, lastReason: 'prior', priorVerdict: true, resolvedBefore: 0 },
+            {
+              count: 1,
+              cumulative: 1,
+              laps: 1,
+              treeHash: null,
+              lastReason: 'prior',
+              priorVerdict: true,
+              resolvedBefore: 0,
+            },
           ]),
         ),
         pendingAsBuiltRemediationFindings: largePending,
@@ -552,7 +560,9 @@ describe('remediation projection', () => {
       readFile(resolvedPath, 'utf8').then(JSON.parse),
     ]);
     expect(Buffer.byteLength(JSON.stringify(result.projection.priorAsBuiltCases), 'utf8')).toBeGreaterThan(200 * 1024);
-    expect(Buffer.byteLength(JSON.stringify(result.projection.pendingAsBuiltFindings), 'utf8')).toBeGreaterThan(200 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(result.projection.pendingAsBuiltFindings), 'utf8')).toBeGreaterThan(
+      200 * 1024,
+    );
     expect(Buffer.byteLength(JSON.stringify(result.projection.priorLaps), 'utf8')).toBeGreaterThan(100 * 1024);
     expect(Buffer.byteLength(JSON.stringify(result.projection.refusals), 'utf8')).toBeGreaterThan(200 * 1024);
     expect(active.priorAsBuiltCases).toEqual(result.projection.priorAsBuiltCases);
