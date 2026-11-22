@@ -1851,7 +1851,7 @@ describe('validateRebaseRecoveryAdmission', () => {
     target: 'c'.repeat(40),
   };
   const base = {
-    expected: attempt,
+    expectedGeneration: attempt.generation,
     liveAttempt: attempt,
     expectedHead: 'd'.repeat(40),
     liveHead: 'd'.repeat(40),
@@ -1860,6 +1860,7 @@ describe('validateRebaseRecoveryAdmission', () => {
     operatorParked: false,
     independentBlocker: false,
     liveHaltClass: 'rebase-recovery',
+    liveHaltGeneration: attempt.generation,
   };
 
   // Covers: task:3
@@ -1887,6 +1888,10 @@ describe('validateRebaseRecoveryAdmission', () => {
     expect(validateRebaseRecoveryAdmission({ ...base, liveAttempt: { ...attempt, generation: 'g2' } })).toEqual({
       kind: 'retained',
       reason: 'rebase recovery attempt changed before admission',
+    });
+    expect(validateRebaseRecoveryAdmission({ ...base, liveHaltGeneration: 'g2' })).toEqual({
+      kind: 'retained',
+      reason: 'rebase recovery halt generation changed before admission',
     });
     expect(validateRebaseRecoveryAdmission(base)).toEqual({ kind: 'admitted' });
   });
@@ -1921,11 +1926,15 @@ describe('admitVerifiedRebaseRecoveries', () => {
         listHaltedWorktrees: async () => ['feature'],
         worktreePath: () => '/feature',
         readAttempt: async () => liveAttempt,
-        verify: async () => ({ kind: 'verified' as const }),
+        verify: async () => ({
+          kind: 'verified' as const,
+          proof: { attemptGeneration: attempt.generation, completedHead: 'd'.repeat(40) },
+        }),
         readHead: async () => liveHead,
         readExecutionChild: async () => liveChild,
         isOperatorParked: async () => parked,
         readHaltClass: async () => haltClass,
+        readHaltGeneration: async () => attempt.generation,
         acquireFeatureDispatchLease: acquire,
         beforeAdmission: async () => duringVerification(),
         recheckScheduler: async () => !parked,
@@ -1982,11 +1991,14 @@ describe('admitVerifiedRebaseRecoveries', () => {
       worktreePath: (slug) => `/${slug}`,
       readAttempt: async (slug) => attempts.get(slug),
       verify: async (slug) =>
-        slug === 'one' ? { kind: 'verified' as const } : { kind: 'retained' as const, reason: 'independent blocker' },
+        slug === 'one'
+          ? { kind: 'verified' as const, proof: { attemptGeneration: attempt.generation, completedHead: 'd'.repeat(40) } }
+          : { kind: 'retained' as const, reason: 'independent blocker' },
       readHead: async () => 'd'.repeat(40),
       readExecutionChild: async () => undefined,
       isOperatorParked: async () => false,
       readHaltClass: async (slug) => (slug === 'one' ? 'rebase-recovery' : 'needs-human'),
+      readHaltGeneration: async () => attempt.generation,
       acquireFeatureDispatchLease: async () => ({
         kind: 'acquired' as const,
         lease: { release: async () => ({ ok: true as const }) },
@@ -2009,11 +2021,15 @@ describe('admitVerifiedRebaseRecoveries', () => {
         listHaltedWorktrees: async () => ['feature'],
         worktreePath: () => '/feature',
         readAttempt: async () => attempt,
-        verify: async () => ({ kind: 'verified' as const }),
+        verify: async () => ({
+          kind: 'verified' as const,
+          proof: { attemptGeneration: attempt.generation, completedHead: 'd'.repeat(40) },
+        }),
         readHead: async () => 'd'.repeat(40),
         readExecutionChild: async () => 7,
         isOperatorParked: async () => false,
         readHaltClass: async () => haltClass,
+        readHaltGeneration: async () => attempt.generation,
         acquireFeatureDispatchLease: async () => ({
           kind: 'acquired' as const,
           lease: { release: async () => ({ ok: true as const }) },

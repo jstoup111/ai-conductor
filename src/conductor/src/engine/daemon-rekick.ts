@@ -45,7 +45,6 @@ import { publishedStackRefusal } from './stack-publication.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import {
-  matchesRebaseRecoveryAttempt,
   readRebaseRecoveryAttempt,
   type RebaseRecoveryAttempt,
 } from './rebase-recovery-attempt.js';
@@ -97,7 +96,12 @@ export async function evaluateRebaseRecoveryHalt(opts: {
   child?: number;
   git?: GitRunner;
 }): Promise<
-  | { kind: 'verified'; replay: import('./rebase-replay.js').ReplayIdentity; expectedTree: string }
+  | {
+      kind: 'verified';
+      replay: import('./rebase-replay.js').ReplayIdentity;
+      expectedTree: string;
+      proof: { attemptGeneration: string; completedHead: string };
+    }
   | { kind: 'retained'; reason: string }
 > {
   const attempt = await readRebaseRecoveryAttempt(opts.worktreePath);
@@ -113,7 +117,12 @@ export async function evaluateRebaseRecoveryHalt(opts: {
     attempt,
   );
   return verified.kind === 'accepted'
-    ? { kind: 'verified', replay: verified.identity, expectedTree: verified.comparison.expectedTree }
+    ? {
+        kind: 'verified',
+        replay: verified.identity,
+        expectedTree: verified.comparison.expectedTree,
+        proof: { attemptGeneration: attempt.generation, completedHead: verified.identity.completedHead },
+      }
     : { kind: 'retained', reason: verified.reason };
 }
 
@@ -124,7 +133,7 @@ export async function evaluateRebaseRecoveryHalt(opts: {
  * a park or replacement halt always wins the race.
  */
 export function validateRebaseRecoveryAdmission(input: {
-  expected: RebaseRecoveryAttempt;
+  expectedGeneration: string;
   liveAttempt: RebaseRecoveryAttempt | undefined;
   expectedHead: string;
   liveHead: string;
@@ -133,12 +142,16 @@ export function validateRebaseRecoveryAdmission(input: {
   operatorParked: boolean;
   independentBlocker: boolean;
   liveHaltClass: string;
+  liveHaltGeneration: string;
 }): { kind: 'admitted' } | { kind: 'retained'; reason: string } {
   if (input.operatorParked) return { kind: 'retained', reason: 'feature is operator-parked' };
   if (input.independentBlocker) return { kind: 'retained', reason: 'an independent halt blocker is present' };
   if (input.liveHaltClass !== 'rebase-recovery')
     return { kind: 'retained', reason: 'rebase recovery halt was replaced' };
-  if (!matchesRebaseRecoveryAttempt(input.liveAttempt, input.expected)) {
+  if (input.liveHaltGeneration !== input.expectedGeneration) {
+    return { kind: 'retained', reason: 'rebase recovery halt generation changed before admission' };
+  }
+  if (input.liveAttempt?.generation !== input.expectedGeneration) {
     return { kind: 'retained', reason: 'rebase recovery attempt changed before admission' };
   }
   if (input.liveHead !== input.expectedHead)
@@ -165,18 +178,23 @@ export interface VerifiedRebaseRecoveryAdmissionDeps {
   verify: (
     slug: string,
     attempt: RebaseRecoveryAttempt,
-  ) => Promise<{ kind: 'verified' } | { kind: 'retained'; reason: string }>;
+    child: number | undefined,
+  ) => Promise<
+    | { kind: 'verified'; proof: { attemptGeneration: string; completedHead: string } }
+    | { kind: 'retained'; reason: string }
+  >;
   readHead: (slug: string) => Promise<string>;
   readExecutionChild: (slug: string) => Promise<number | undefined>;
   isOperatorParked: (slug: string) => Promise<boolean>;
   readHaltClass: (slug: string) => Promise<string>;
+  readHaltGeneration: (slug: string) => Promise<string>;
   acquireFeatureDispatchLease: (slug: string) => Promise<FeatureDispatchLeaseAcquireResult>;
   /** Test and integration seam for a race between verification and admission. */
   beforeAdmission?: (slug: string) => Promise<void>;
   /** Scheduler's final eligibility check; false leaves the verified halt intact. */
   recheckScheduler: (slug: string) => Promise<boolean>;
   /** Runs while the feature lease is held after every identity check passed. */
-  admit: (slug: string, attempt: RebaseRecoveryAttempt) => Promise<void>;
+  admit: (slug: string, proof: { attemptGeneration: string; completedHead: string }) => Promise<void>;
   log?: (message: string) => void;
 }
 
@@ -191,7 +209,7 @@ export async function admitVerifiedRebaseRecoveries(deps: VerifiedRebaseRecovery
       if (!expected) continue;
       const expectedHead = await deps.readHead(slug);
       const expectedChild = await deps.readExecutionChild(slug);
-      const verification = await deps.verify(slug, expected);
+      const verification = await deps.verify(slug, expected, expectedChild);
       if (verification.kind !== 'verified') {
         deps.log?.(`verified-rebase ${slug}: retained — ${verification.reason}`);
         continue;
@@ -206,7 +224,7 @@ export async function admitVerifiedRebaseRecoveries(deps: VerifiedRebaseRecovery
       try {
         const liveHaltClass = (await deps.readHaltClass(slug)).trim();
         const decision = validateRebaseRecoveryAdmission({
-          expected,
+          expectedGeneration: verification.proof.attemptGeneration,
           liveAttempt: await deps.readAttempt(slug),
           expectedHead,
           liveHead: await deps.readHead(slug),
@@ -215,6 +233,7 @@ export async function admitVerifiedRebaseRecoveries(deps: VerifiedRebaseRecovery
           operatorParked: await deps.isOperatorParked(slug),
           independentBlocker: liveHaltClass !== 'rebase-recovery',
           liveHaltClass,
+          liveHaltGeneration: (await deps.readHaltGeneration(slug)).trim(),
         });
         if (decision.kind !== 'admitted') {
           deps.log?.(`verified-rebase ${slug}: retained — ${decision.reason}`);
@@ -224,7 +243,7 @@ export async function admitVerifiedRebaseRecoveries(deps: VerifiedRebaseRecovery
           deps.log?.(`verified-rebase ${slug}: retained — scheduler ownership changed before admission`);
           continue;
         }
-        await deps.admit(slug, expected);
+        await deps.admit(slug, verification.proof);
         admitted.push(slug);
       } finally {
         const released = await acquired.lease.release();

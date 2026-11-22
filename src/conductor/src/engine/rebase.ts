@@ -5,7 +5,7 @@ import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:pat
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
 import { isRegionStep, type ChildId } from './child-context.js';
 import { isSkipVerdict, readVerdict, writeVerdict, type GateVerdict } from './gate-verdicts.js';
-import { writeHaltMarker } from './halt-marker.js';
+import { REBASE_RECOVERY_GENERATION_PREFIX, writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
@@ -486,6 +486,35 @@ export function filterCodeOrTestPaths(paths: string[]): string[] {
   return paths.filter(isCodeOrTestPath);
 }
 
+/**
+ * Rebuild the same delta and feature surface a normal completed rebase would
+ * have carried into gate invalidation. Recovery has immutable replay refs, so
+ * empty arrays must never stand in for a failed inspection.
+ */
+export async function deriveRecoveredRebaseOutcome(
+  git: GitRunner,
+  projectRoot: string,
+  replay: ReplayIdentity,
+): Promise<Extract<RebaseOutcome, { kind: 'changed' }>> {
+  const [delta, feature] = await Promise.all([
+    git(['diff', '--name-only', replay.preRebaseHead, replay.completedHead]),
+    git(['diff', '--name-only', replay.mergeBase, replay.preRebaseHead]),
+  ]);
+  if (delta.exitCode !== 0 || feature.exitCode !== 0)
+    throw new Error('cannot derive recovered rebase change surfaces');
+  const allChangedPaths = delta.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+  const featureSurface = feature.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+  const documentInputs = await resolveReviewInputs(projectRoot, allChangedPaths);
+  return {
+    kind: 'changed',
+    changedCodePaths: filterCodeOrTestPaths(allChangedPaths),
+    allChangedPaths,
+    featureSurface,
+    documentInputs,
+    replay,
+  };
+}
+
 /** The set of paths that differ between two tree-ish refs (name-only). */
 export async function changedPathsBetween(git: GitRunner, fromRef: string, toRef: string): Promise<string[]> {
   const r = await git(['diff', '--name-only', fromRef, toRef]);
@@ -711,6 +740,7 @@ async function writeRebaseHalt(
   events: ConductorEventEmitter | undefined,
   resumeShape: RebaseResumeShape,
   haltClass: 'needs-human' | 'rebase-recovery',
+  recoveryGeneration?: string,
 ): Promise<HaltMarkerWriteResult> {
   const note =
     resumeShape === 'completed-rebase'
@@ -729,7 +759,10 @@ async function writeRebaseHalt(
         `  2. git rebase --continue\n` +
         `  3. rm .pipeline/HALT\n` +
         `  4. Re-queue the feature for the daemon.\n`;
-  return writeHaltMarker(projectRoot, note, haltClass, events);
+  const boundNote = haltClass === 'rebase-recovery' && recoveryGeneration
+    ? `${note}${REBASE_RECOVERY_GENERATION_PREFIX}${recoveryGeneration}\n`
+    : note;
+  return writeHaltMarker(projectRoot, boundNote, haltClass, events);
 }
 
 /** Park a seal refusal that happened before git started a rebase. */
@@ -1355,6 +1388,7 @@ export async function writeRebaseOutcomeHalt(
       events,
       outcome.resumeShape ?? 'paused-rebase',
       haltClass,
+      haltClass === 'rebase-recovery' ? outcome.recoveryAttempt?.generation : undefined,
     );
   }
   const quarantine = outcome.quarantine

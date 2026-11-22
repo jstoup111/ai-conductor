@@ -135,16 +135,19 @@ export async function verifyCompletedReplay(
     } catch {
       return { kind: 'blocked', reason: 'cannot inspect whether rebase is still active' };
     }
-    if (state.exitCode !== 0 || !state.stdout.trim()) continue;
+    if (state.exitCode !== 0 || !state.stdout.trim())
+      return { kind: 'blocked', reason: 'cannot inspect whether rebase is still active' };
     const path = state.stdout.trim();
     const absolute = isAbsolute(path) ? path : join(projectRoot, path);
-    if (
-      await access(absolute).then(
-        () => true,
-        () => false,
-      )
-    ) {
+    try {
+      await access(absolute);
       return { kind: 'blocked', reason: 'rebase is still active' };
+    } catch (error) {
+      // Only a successful git-path lookup followed by ENOENT proves that the
+      // state directory is absent. Permissions and every other filesystem
+      // failure leave the recovery evidence inconclusive.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+        return { kind: 'blocked', reason: 'cannot inspect whether rebase is still active' };
     }
   }
 

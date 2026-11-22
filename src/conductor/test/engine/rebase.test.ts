@@ -776,6 +776,9 @@ describe('engine/rebase — HALT (FR-8)', () => {
       recoveryAttempt: expected,
     });
     await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('rebase-recovery');
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+      'Rebase recovery generation: attempt-1',
+    );
 
     await writeFile(path, '{"version":1,"generation":"partial"}\n');
     await writeRebaseOutcomeHalt(dir, {

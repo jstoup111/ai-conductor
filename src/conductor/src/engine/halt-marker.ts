@@ -30,6 +30,19 @@ export const HALT_MARKER = '.pipeline/HALT';
 /** Machine-readable sidecar classifying why a HALT was raised. */
 export const HALT_CLASS_MARKER = '.pipeline/HALT.class';
 
+/** A recovery HALT binds its body to this one persisted replay generation. */
+export const REBASE_RECOVERY_GENERATION_PREFIX = 'Rebase recovery generation: ';
+
+/** Read the generation embedded in a rebase-recovery marker, if it is intact. */
+export async function readRebaseRecoveryHaltGeneration(worktreePath: string): Promise<string> {
+  try {
+    const body = await readFile(join(worktreePath, HALT_MARKER), 'utf8');
+    return new RegExp(`^${REBASE_RECOVERY_GENERATION_PREFIX}([^\\s]+)$`, 'm').exec(body)?.[1] ?? '';
+  } catch {
+    return '';
+  }
+}
+
 /** HALT class for a feature-authored protected-artifact violation. */
 export const PROTECTED_ARTIFACT_HALT_CLASS = 'protected-artifact';
 

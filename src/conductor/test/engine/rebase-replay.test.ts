@@ -1,6 +1,6 @@
 // Covers: task:3
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -159,6 +159,29 @@ describe('compareReplayTree', () => {
     expect(result).not.toHaveProperty('expectedTree');
     expect(result).not.toHaveProperty('completedTree');
   });
+
+  // Covers: task:2
+  it('retains the HALT when the resolved rebase-state path cannot be inspected', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-replay-state-'));
+    const blocked = join(root, 'blocked');
+    await mkdir(blocked);
+    await chmod(blocked, 0o000);
+    try {
+      await expect(
+        verifyCompletedReplay(scripted([{ exitCode: 0, stdout: `${join(blocked, 'state')}\n` }]), root, {
+          version: 1,
+          generation: 'attempt-1',
+          feature: 'verified-rebase',
+          preRebaseHead: 'a'.repeat(40),
+          mergeBase: 'b'.repeat(40),
+          target: 'c'.repeat(40),
+        }),
+      ).resolves.toEqual({ kind: 'blocked', reason: 'cannot inspect whether rebase is still active' });
+    } finally {
+      await chmod(blocked, 0o700);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('captureReplayIdentity', () => {
@@ -231,6 +254,17 @@ describe('verifyCompletedReplay', () => {
     mergeBase: 'b'.repeat(40),
     target: 'c'.repeat(40),
   };
+
+  // Covers: task:2
+  it.each([
+    ['a failed git-path lookup', { exitCode: 128, stderr: 'not a repository' }],
+    ['an empty git-path lookup', { exitCode: 0, stdout: '' }],
+  ])('retains the HALT when %s makes rebase-state inspection inconclusive', async (_name, lookup) => {
+    await expect(verifyCompletedReplay(scripted([lookup]), '/fixture', attempt)).resolves.toEqual({
+      kind: 'blocked',
+      reason: 'cannot inspect whether rebase is still active',
+    });
+  });
 
   // Covers: task:2
   it('rejects a clean revision with matching subjects when no feature content remains', async () => {

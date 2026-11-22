@@ -156,7 +156,8 @@ import {
   formatDaemonConcurrencyWarning,
   resolveDaemonCommandConcurrency,
 } from './engine/daemon-command.js';
-import { hasDurableChildState } from './engine/child-cursor.js';
+import { hasDurableChildState, resolveActiveChild } from './engine/child-cursor.js';
+import { resolveExecutionChild } from './engine/routing/execution-child.js';
 import { acquireFeatureDispatchLease } from './engine/feature-dispatch-lease.js';
 import { createChildProcessFeatureExecutor, type ChildFeatureExecutorDeps } from './engine/child-feature-executor.js';
 import { createExecutorBroker } from './engine/executor-broker.js';
@@ -191,7 +192,13 @@ import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js'
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { readState } from './engine/state.js';
 import { supersedeHaltRecord } from './engine/halt-record.js';
-import { applyRebaseVerdicts, makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
+import {
+  applyRebaseVerdicts,
+  deriveRecoveredRebaseOutcome,
+  makeGitRunner,
+  originDefaultBranch,
+  type RebaseResolver,
+} from './engine/rebase.js';
 import { applyRebaseTransition } from './engine/rebase-transition.js';
 import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
 import { readRebaseRecoveryAttempt } from './engine/rebase-recovery-attempt.js';
@@ -234,7 +241,12 @@ import {
   makeRekickBuildPreVerify,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
-import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
+import {
+  HALT_MARKER,
+  isOperatorActionHalt,
+  readHaltClass,
+  readRebaseRecoveryHaltGeneration,
+} from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import {
   applyPooledRepairOutcome,
@@ -2582,49 +2594,57 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         });
       },
       reconcileVerifiedRebaseRecoveries: async () => {
-        const verified = new Map<
-          string,
-          Extract<Awaited<ReturnType<typeof evaluateRebaseRecoveryHalt>>, { kind: 'verified' }>
-        >();
         await admitVerifiedRebaseRecoveries({
           listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
           worktreePath: (slug) => join(worktreeBase, slug),
           readAttempt: (slug) => readRebaseRecoveryAttempt(join(worktreeBase, slug)),
-          verify: async (slug) => {
+          verify: async (slug, _attempt, child) => {
             const result = await evaluateRebaseRecoveryHalt({
               worktreePath: join(worktreeBase, slug),
               feature: slug,
+              ...(child === undefined ? {} : { child }),
               git: makeGitRunner(join(worktreeBase, slug)),
             });
-            if (result.kind === 'verified') verified.set(slug, result);
             return result;
           },
           readHead: async (slug) => {
             const result = await makeGitRunner(join(worktreeBase, slug))(['rev-parse', 'HEAD']);
             return result.exitCode === 0 ? result.stdout.trim() : '';
           },
-          // The durable replay attempt is the execution-owner record. Re-reading
-          // it under the lease catches a child replacement before clear.
-          readExecutionChild: async (slug) => (await readRebaseRecoveryAttempt(join(worktreeBase, slug)))?.child,
+          // Resolve the live execution owner independently of the persisted
+          // replay record. A routed/revalidating child owns its own gate state.
+          readExecutionChild: async (slug) => {
+            const cursor = await resolveActiveChild(join(worktreeBase, slug), slug);
+            const execution = resolveExecutionChild(cursor, slug);
+            return 'target' in execution ? execution.target.child : undefined;
+          },
           isOperatorParked: (slug) => isOperatorParked(projectRoot, slug),
           readHaltClass: (slug) => readRawHaltClass(join(worktreeBase, slug)),
+          readHaltGeneration: (slug) => readRebaseRecoveryHaltGeneration(join(worktreeBase, slug)),
           acquireFeatureDispatchLease: (slug) =>
             acquireFeatureDispatchLease(projectRoot, slug, 'verified rebase recovery'),
           recheckScheduler: async (slug) => !(await isOperatorParked(projectRoot, slug)),
-          admit: async (slug) => {
-            const result = verified.get(slug);
-            if (!result) throw new Error('verified replay result disappeared before admission');
+          admit: async (slug, proof) => {
             const worktreePath = join(worktreeBase, slug);
             const git = makeGitRunner(worktreePath);
+            const cursor = await resolveActiveChild(worktreePath, slug);
+            const execution = resolveExecutionChild(cursor, slug);
+            const child = 'target' in execution ? execution.target.child : undefined;
+            const result = await evaluateRebaseRecoveryHalt({
+              worktreePath,
+              feature: slug,
+              ...(child === undefined ? {} : { child }),
+              git,
+            });
+            if (result.kind !== 'verified' || result.proof.attemptGeneration !== proof.attemptGeneration ||
+              result.proof.completedHead !== proof.completedHead)
+              throw new Error('verified replay proof changed before admission');
+            const state = await readState(join(worktreePath, '.pipeline', 'conduct-state.json'));
+            if (!state.ok) throw new Error('cannot read conduct state for verified rebase recovery');
             const verdict = await applyRebaseVerdicts(
               worktreePath,
-              {
-                kind: 'changed',
-                changedCodePaths: [],
-                featureSurface: [],
-                replay: result.replay,
-              },
-              false,
+              await deriveRecoveredRebaseOutcome(git, worktreePath, result.replay),
+              state.value.manual_test === 'done',
               makeRekickBuildPreVerify(worktreePath, slug),
               git,
             );
@@ -2637,7 +2657,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               preserved: verdict.preservedGates ?? [],
               preservedCandidates: verdict.preservedCandidates ?? [],
               reverified: verdict.reverified,
-              operationId: `verified-rebase-${result.replay.completedHead}`,
+              operationId: `verified-rebase-${proof.completedHead}`,
+              ...(child === undefined ? {} : { child }),
             });
             if (transition.stateResult === 'refused') throw new Error('verified rebase transition was refused');
             // This is intentionally not `clearMarker`: recovered work is already
