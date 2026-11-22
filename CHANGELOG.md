@@ -283,6 +283,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review no longer charges a mechanical fault when a reviewer reports two same-kind concerns in one region, such as a newly added file. The engine merges findings that share an identity into one finding that keeps every summary and evidence location. ([implementation PR #3737](https://github.com/jstoup111/ai-conductor/pull/3737)).
 - BUILD no longer halts needs-human with "work order foreign-effect" when a build_review work order's primary case is resolved while another case in the same order is still open. ([implementation PR #3741](https://github.com/jstoup111/ai-conductor/pull/3741)).
 - A daemon-managed remediation-closure judgement now runs on Codex when Codex is the configured build_review provider, instead of being skipped as setup-unavailable and falling back to Claude. ([implementation PR #3743](https://github.com/jstoup111/ai-conductor/pull/3743)).
+- A remediation gap-plan retry now sees the prior attempt's validator rejection, so a single rejected binding no longer consumes the whole retry allowance and halts the feature needs-human. ([implementation PR #3759](https://github.com/jstoup111/ai-conductor/pull/3759)).
 
 ## Migration
 
