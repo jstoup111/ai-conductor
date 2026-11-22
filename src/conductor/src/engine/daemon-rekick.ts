@@ -44,10 +44,7 @@ import { emitRestackRefused } from './restack/restack-events.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
-import {
-  readRebaseRecoveryAttempt,
-  type RebaseRecoveryAttempt,
-} from './rebase-recovery-attempt.js';
+import { readRebaseRecoveryAttempt, type RebaseRecoveryAttempt } from './rebase-recovery-attempt.js';
 import { verifyCompletedReplay } from './rebase-replay.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';

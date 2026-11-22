@@ -500,10 +500,15 @@ export async function deriveRecoveredRebaseOutcome(
     git(['diff', '--name-only', replay.preRebaseHead, replay.completedHead]),
     git(['diff', '--name-only', replay.mergeBase, replay.preRebaseHead]),
   ]);
-  if (delta.exitCode !== 0 || feature.exitCode !== 0)
-    throw new Error('cannot derive recovered rebase change surfaces');
-  const allChangedPaths = delta.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
-  const featureSurface = feature.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+  if (delta.exitCode !== 0 || feature.exitCode !== 0) throw new Error('cannot derive recovered rebase change surfaces');
+  const allChangedPaths = delta.stdout
+    .split('\n')
+    .map((path) => path.trim())
+    .filter(Boolean);
+  const featureSurface = feature.stdout
+    .split('\n')
+    .map((path) => path.trim())
+    .filter(Boolean);
   const documentInputs = await resolveReviewInputs(projectRoot, allChangedPaths);
   return {
     kind: 'changed',
@@ -759,9 +764,10 @@ async function writeRebaseHalt(
         `  2. git rebase --continue\n` +
         `  3. rm .pipeline/HALT\n` +
         `  4. Re-queue the feature for the daemon.\n`;
-  const boundNote = haltClass === 'rebase-recovery' && recoveryGeneration
-    ? `${note}${REBASE_RECOVERY_GENERATION_PREFIX}${recoveryGeneration}\n`
-    : note;
+  const boundNote =
+    haltClass === 'rebase-recovery' && recoveryGeneration
+      ? `${note}${REBASE_RECOVERY_GENERATION_PREFIX}${recoveryGeneration}\n`
+      : note;
   return writeHaltMarker(projectRoot, boundNote, haltClass, events);
 }
 

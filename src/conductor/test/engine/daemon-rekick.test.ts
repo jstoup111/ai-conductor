@@ -1992,7 +1992,10 @@ describe('admitVerifiedRebaseRecoveries', () => {
       readAttempt: async (slug) => attempts.get(slug),
       verify: async (slug) =>
         slug === 'one'
-          ? { kind: 'verified' as const, proof: { attemptGeneration: attempt.generation, completedHead: 'd'.repeat(40) } }
+          ? {
+              kind: 'verified' as const,
+              proof: { attemptGeneration: attempt.generation, completedHead: 'd'.repeat(40) },
+            }
           : { kind: 'retained' as const, reason: 'independent blocker' },
       readHead: async () => 'd'.repeat(40),
       readExecutionChild: async () => undefined,

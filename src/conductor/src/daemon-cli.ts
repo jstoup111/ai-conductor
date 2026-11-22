@@ -2636,8 +2636,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               ...(child === undefined ? {} : { child }),
               git,
             });
-            if (result.kind !== 'verified' || result.proof.attemptGeneration !== proof.attemptGeneration ||
-              result.proof.completedHead !== proof.completedHead)
+            if (
+              result.kind !== 'verified' ||
+              result.proof.attemptGeneration !== proof.attemptGeneration ||
+              result.proof.completedHead !== proof.completedHead
+            )
               throw new Error('verified replay proof changed before admission');
             const state = await readState(join(worktreePath, '.pipeline', 'conduct-state.json'));
             if (!state.ok) throw new Error('cannot read conduct state for verified rebase recovery');
