@@ -65,6 +65,8 @@ Spec 3 changes the layout and content.
    unknown kind, a path outside `.docs/`, a `decision` path outside `.docs/decisions/`, a `slug` that
    differs from its folder name, or anything other than exactly one `plan` entry.
 
+   > **Amended 2026-11-20 by #3419:** These kinds and path rules govern version one. The opt-in review format distinguishes the plan summary from the executable plan and accepts feature-relative review and machine paths as specified by adr-2026-11-19-spec-review-layout-and-criterion-references D2.
+
 3. **Not in the manifest:**
    - plan-review records, which are never committed
    - halted and shipped records, which are repository-wide indexes enumerated across features, like
@@ -131,6 +133,8 @@ Spec 3 changes the layout and content.
    > added after land through the same renderer and emits `feature_artifacts_registered` on the
    > feature worktree's spine. See `adr-2026-10-28-path-policy-reads-feature-ownership-from-manifest`
    > decision 8.
+
+   > **Amended 2026-11-20 by #3419:** For opted-in features interactive DECIDE and composer register complete artifacts before BUILD. Both use the plan stem; pre-registration gates resolve current authored files (review-layout ADR D4).
 
 7. **Drift checks and manifest protection belong to spec 2.** Spec 1 adds no drift refusal. The
    phase-scoped docs write guard covers Edit, Write and NotebookEdit but not Bash, so a BUILD agent
