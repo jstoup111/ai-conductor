@@ -1,10 +1,13 @@
 // Covers: task:19, task:20
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Conductor } from '../../src/engine/conductor.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { AS_BUILT_VERDICT_CONTRACT_VERSION, stampAsBuiltFindingIds } from '../../src/engine/as-built-contract.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { REMEDIATION_TYPED_PLAN_PATH } from '../../src/engine/remediation-plan-store.js';
 import { readKickbackLedger, settlePendingRepair } from '../../src/engine/kickback-ledger.js';
@@ -70,11 +73,46 @@ function output() {
   };
 }
 
+function asBuiltOutput() {
+  return {
+    version: 'v1',
+    dispositions: [{
+      reference: { kind: 'as-built-finding', id: 'as-built:fixture-as-built:1' },
+      disposition: 'existing-task', category: null,
+      rationale: 'Task 1 owns the as-built repair.', tasks: [], boundTaskIds: ['1'],
+      reconciliation: { relation: 'new', reason: 'This fixture finding has no prior case.' },
+    }],
+  };
+}
+
+function validationGroupOutput(refusalEvidence: readonly { readonly decisionId: string }[]) {
+  return {
+    ...output(),
+    dispositions: [
+      ...output().dispositions,
+      ...asBuiltOutput().dispositions,
+      ...refusalEvidence.map((entry) => ({
+        reference: { kind: 'refusal', id: entry.decisionId },
+        disposition: 'build', category: null,
+        rationale: 'Remove the refused behavior from the delivered flow.',
+        tasks: [{ id: `remove-${entry.decisionId}`, title: 'Remove the refused behavior.' }], boundTaskIds: [],
+      })),
+    ],
+  };
+}
+
 const refusal = {
   key: 'S9.1',
   decisionId: 'decision-refused-9',
   revision: 2,
   rationale: 'The operator declined this behavior.',
+};
+
+const asBuiltPolicy: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'fixture' },
+  planGap: { enabled: true, reason: 'fixture' },
+  adrCompliance: { enabled: true, reason: 'fixture' },
+  diagramDrift: { enabled: true, reason: 'fixture' },
 };
 
 function refusalOutput(overrides: Record<string, unknown> = {}) {
@@ -109,6 +147,8 @@ async function fixture(
     stallQuestion?: string;
     evidenceDirectory?: boolean;
     skipPlanRemediation?: boolean;
+    asBuiltRound?: boolean;
+    asBuiltCases?: readonly Record<string, unknown>[];
     remediationProjectionLimitOverrides?: Partial<RemediationProjectionLimits>;
   } = {},
 ) {
@@ -124,6 +164,13 @@ async function fixture(
   await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({
     tasks: Array.from({ length: 8 }, (_, index) => ({ id: String(index + 1), status: 'completed' })),
   }), 'utf8');
+  if (options.asBuiltCases !== undefined) {
+    await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+      version: 'v4',
+      feature: { version: 'v1', repository: 'acme/conductor', feature: 'typed-plan-fixture' },
+      cases: [], prdWideningCases: [], asBuiltCases: options.asBuiltCases, suppressions: [], outbox: [],
+    }), 'utf8');
+  }
   await persistPrdAuditVerdict(root, {
     complete: true,
     judgment: {
@@ -143,6 +190,14 @@ async function fixture(
     diagnostics: [],
     recordedDispositions: [],
   }, { attemptId: 'fixture-prd-audit', codeStamp: null });
+  if (options.asBuiltRound) {
+    await persistAsBuiltVerdict(root, stampAsBuiltFindingIds({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      violations: 'Fixture as-built finding.', resolution: 'Repair Task 1.',
+      findings: [{ class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Fixture as-built finding.' }],
+    }, 'fixture-as-built'), { attemptId: 'fixture-as-built', codeStamp: null, policy: asBuiltPolicy });
+  }
   // This is intentionally contradictory legacy prose. The conductor must not
   // read it after the typed-plan migration.
   await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
@@ -213,7 +268,7 @@ async function fixture(
     state,
     ALL_STEPS,
     'PRD audit reported repairable criteria.',
-    { source, evidence: [{ gate: source.includes('stall') ? 'build' : 'prd_audit', evidenceFile }] } as never,
+    { source, evidence: [{ gate: source.includes('stall') ? 'build' : source === 'as-built' ? 'architecture_review_as_built' : 'prd_audit', evidenceFile }] } as never,
   );
   return {
     root,
@@ -317,6 +372,104 @@ describe('Conductor typed remediation-plan admission', () => {
         .toMatchObject({ source: 'prd-audit', dispositions: expect.any(Array) });
     },
   );
+
+  // Covers: task:1
+  it('writes attempt history before invoking the as-built remediate runner', async () => {
+    const cases = Array.from({ length: 11 }, (_, index) => ({
+      id: `case-${index + 1}`, domain: 'as_built', status: 'open', recurrenceCount: 1,
+      repairTaskIds: ['1'],
+      sources: [{
+        findingId: `as-built:prior:${index + 1}`, attemptId: 'prior', class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: '1' },
+        summary: `Case ${index + 1}: ${'complete durable source '.repeat(40)}`,
+        relation: 'new', reason: 'The prior as-built review recorded this source.',
+      }],
+    }));
+    const result = await fixture('codex', [{ kind: 'structured', finalStructuredResult: asBuiltOutput() }], 2, {
+      source: 'as-built', asBuiltRound: true, asBuiltCases: cases,
+    });
+
+    expect(result.provider.invocationCount).toBe(1);
+    const history = await readdir(join(result.root, '.pipeline', 'remediation-history'));
+    const activeName = history.find((name) => name.endsWith('.active.json'));
+    expect(activeName).toBeDefined();
+    const active = JSON.parse(await readFile(join(result.root, '.pipeline', 'remediation-history', activeName!), 'utf8'));
+    expect(Buffer.byteLength(JSON.stringify(active.priorAsBuiltCases), 'utf8')).toBeGreaterThan(8 * 1024);
+    expect(active.priorAsBuiltCases).toEqual(expect.arrayContaining(cases.map((entry) => expect.objectContaining({
+      id: entry.id,
+      repairTasks: [{ id: '1', resolution: 'completed' }],
+    }))));
+  });
+
+  // Covers: task:1
+  it('writes both empty history files before invoking the as-built remediate runner', async () => {
+    const result = await fixture('codex', [{ kind: 'structured', finalStructuredResult: asBuiltOutput() }], 2, {
+      source: 'as-built', asBuiltRound: true,
+    });
+
+    expect(result.provider.invocationCount).toBe(1);
+    const history = await readdir(join(result.root, '.pipeline', 'remediation-history'));
+    const activeName = history.find((name) => name.endsWith('.active.json'));
+    const resolvedName = history.find((name) => name.endsWith('.resolved.json'));
+    expect(activeName).toBeDefined();
+    expect(resolvedName).toBeDefined();
+    await expect(readFile(join(result.root, '.pipeline', 'remediation-history', activeName!), 'utf8')).resolves.toBe(
+      JSON.stringify({ pendingAsBuiltFindings: [], priorAsBuiltCases: [], priorLaps: [], refusals: [] }),
+    );
+    await expect(readFile(join(result.root, '.pipeline', 'remediation-history', resolvedName!), 'utf8')).resolves.toBe(
+      JSON.stringify({ pendingAsBuiltFindings: [], priorAsBuiltCases: [], priorLaps: [], refusals: [] }),
+    );
+  });
+
+  // Covers: task:1
+  it('dispatches a validation-group gap plan with over 512 KiB of complete history', async () => {
+    const refusals = Array.from({ length: 3 }, (_, index) => ({
+      key: `S9.${index + 1}`, decisionId: `refusal-large-${index + 1}`, revision: 1,
+      rationale: `Refusal ${index + 1} remains part of the complete history.`,
+    }));
+    const result = await fixture('codex', [{ kind: 'structured', finalStructuredResult: validationGroupOutput(refusals) }], 2, {
+      source: 'validation-group', asBuiltRound: true, skipPlanRemediation: true,
+    });
+    const pending = Array.from({ length: 3 }, (_, index) => ({
+      gate: 'architecture_review_as_built', finding: `as-built:large:${index + 1}`, class: 'REMEDIABLE',
+      governingClause: 'Task 1', reference: { kind: 'plan-task', taskId: '1' },
+      summary: `Pending ${index + 1}: ${'complete pending finding text '.repeat(7_000)}`,
+      outcome: 'remediated',
+    }));
+    await writeFile(join(result.root, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: { architecture_review_as_built: { count: 1, cumulative: 1, laps: 1, treeHash: null, lastReason: 'prior', priorVerdict: true, resolvedBefore: 0 } },
+      pendingAsBuiltRemediationFindings: pending,
+    }), 'utf8');
+    (result.conductor as unknown as { routeCurrentPrdAuditOverScope: () => Promise<unknown> }).routeCurrentPrdAuditOverScope = async () => ({
+      kind: 'refusal-rework', refusals, refused: [], findings: [], detail: 'Fixture refusal rework.',
+    });
+    const outcome = await (result.conductor as unknown as {
+      planRemediation(
+        state: ConductState, steps: typeof ALL_STEPS, context: string,
+        source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
+      ): Promise<{ kind: string }>;
+    }).planRemediation(
+      result.state, ALL_STEPS, 'Validation group requires remediation.', {
+        source: 'validation-group',
+        evidence: [
+          { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
+          { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
+        ],
+      },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route' });
+    expect(result.provider.invocationCount).toBe(1);
+    const activeName = (await readdir(join(result.root, '.pipeline', 'remediation-history')))
+      .find((name) => name.endsWith('.active.json'));
+    expect(activeName).toBeDefined();
+    const active = JSON.parse(await readFile(join(result.root, '.pipeline', 'remediation-history', activeName!), 'utf8'));
+    expect(Buffer.byteLength(JSON.stringify({ pending, refusals }), 'utf8')).toBeGreaterThan(512 * 1024);
+    expect(active.pendingAsBuiltFindings).toEqual(pending);
+    expect(active.priorLaps).toEqual([{ gate: 'architecture_review_as_built', laps: 1 }]);
+    expect(active.refusals).toEqual(refusals);
+  });
 
   // Covers: task:19
   it('keeps Claude and Codex disposition effects equal apart from attempt metadata', async () => {

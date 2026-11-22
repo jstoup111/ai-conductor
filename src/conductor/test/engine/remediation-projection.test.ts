@@ -259,6 +259,106 @@ describe('remediation projection', () => {
     expect(JSON.stringify(result.projection.priorAsBuiltCases)).not.toContain('reason');
   });
 
+  // Covers: task:1
+  it('writes complete large as-built history to the attempt snapshot before gap planning', async () => {
+    const root = await fixture();
+    const cases = Array.from({ length: 11 }, (_, index) => ({
+      id: `case-${index + 1}`,
+      domain: 'as_built',
+      status: 'open',
+      repairTaskIds: [`repair-${index + 1}`],
+      recurrenceCount: 1,
+      sources: [{
+        findingId: `as-built:prior:${index + 1}`,
+        attemptId: 'prior',
+        class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: '7' },
+        summary: `Case ${index + 1}: ${'full durable source text '.repeat(40)}`,
+        relation: 'new',
+        reason: 'Captured by the prior as-built review.',
+      }],
+    }));
+    await writeFile(join(root, '.docs', 'plans', 'active.md'), [
+      '# Plan', '',
+      '### Task 7: Repair the typed projection', '', '**Done when:**', '- owner repair', '',
+      ...cases.flatMap((record) => [
+        `### Task ${record.repairTaskIds[0]}: Repair ${record.id}`, '', '**Done when:**', '- repair durable history', '',
+      ]),
+    ].join('\n'));
+    await writeAsBuiltVerdict(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+      version: 'v4',
+      feature: { version: 'v1', repository: 'acme/conductor', feature: 'remediation-projection' },
+      cases: [], prdWideningCases: [], asBuiltCases: cases, suppressions: [], outbox: [],
+    }));
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: cases.map((record) => ({ id: record.repairTaskIds[0], status: 'pending' })),
+    }));
+
+    const largePending = Array.from({ length: 3 }, (_, index) => ({
+      gate: 'architecture_review_as_built', finding: `as-built:large:${index + 1}`, class: 'REMEDIABLE',
+      governingClause: 'Task 7', reference: { kind: 'plan-task', taskId: '7' },
+      summary: `Pending ${index + 1}: ${'complete pending finding text '.repeat(7_000)}`,
+      outcome: 'remediated',
+    }));
+    await writeFile(join(root, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: { architecture_review_as_built: { count: 1, cumulative: 1, laps: 1, treeHash: null, lastReason: 'prior', priorVerdict: true, resolvedBefore: 0 } },
+      pendingAsBuiltRemediationFindings: largePending,
+    }));
+    const refusals = Array.from({ length: 3 }, (_, index) => ({
+      key: `S1.${index + 1}`, decisionId: `refusal-${index + 1}`, revision: 1,
+      rationale: `Refusal ${index + 1}: complete refusal evidence.`,
+    }));
+
+    const result = await buildRemediationProjection(root, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md', attemptRunId: 'large-attempt', refusals,
+    });
+    if (!result.ok) throw new Error(result.fault.detail);
+
+    const activePath = join(root, '.pipeline', 'remediation-history', 'large-attempt.active.json');
+    const resolvedPath = join(root, '.pipeline', 'remediation-history', 'large-attempt.resolved.json');
+    const [active, resolved] = await Promise.all([
+      readFile(activePath, 'utf8').then(JSON.parse),
+      readFile(resolvedPath, 'utf8').then(JSON.parse),
+    ]);
+    expect(Buffer.byteLength(JSON.stringify(result.projection.priorAsBuiltCases), 'utf8')).toBeGreaterThan(8 * 1024);
+    expect(Buffer.byteLength(JSON.stringify({ largePending, refusals }), 'utf8')).toBeGreaterThan(512 * 1024);
+    expect(active.priorAsBuiltCases).toEqual(result.projection.priorAsBuiltCases);
+    expect(active.pendingAsBuiltFindings).toEqual(result.projection.pendingAsBuiltFindings);
+    expect(active.priorLaps).toEqual(result.projection.priorLaps);
+    expect(active.refusals).toEqual(refusals);
+    expect(result.history).toMatchObject({
+      active: { path: '.pipeline/remediation-history/large-attempt.active.json', digest: expect.stringMatching(/^sha256:/) },
+      resolved: { path: '.pipeline/remediation-history/large-attempt.resolved.json', digest: expect.stringMatching(/^sha256:/) },
+      pendingAsBuiltFindings: { ids: result.projection.pendingAsBuiltFindings.map((finding) => finding.finding), count: 3 },
+      priorAsBuiltCases: { ids: result.projection.priorAsBuiltCases?.map((entry) => entry.id), count: 11 },
+      priorLaps: { ids: ['architecture_review_as_built'], count: 1 },
+      refusals: { ids: refusals.map((refusal) => refusal.decisionId), count: 3 },
+    });
+    expect(resolved).toEqual({ pendingAsBuiltFindings: [], priorAsBuiltCases: [], priorLaps: [], refusals: [] });
+  });
+
+  // Covers: task:1
+  it('writes both empty attempt history files for an as-built gap plan', async () => {
+    const root = await fixture();
+    await writeAsBuiltVerdict(root);
+
+    const result = await buildRemediationProjection(root, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md', attemptRunId: 'empty-attempt',
+    });
+    if (!result.ok) throw new Error(result.fault.detail);
+
+    const directory = join(root, '.pipeline', 'remediation-history');
+    await expect(readFile(join(directory, 'empty-attempt.active.json'), 'utf8')).resolves.toBe(
+      JSON.stringify({ pendingAsBuiltFindings: [], priorAsBuiltCases: [], priorLaps: [], refusals: [] }),
+    );
+    await expect(readFile(join(directory, 'empty-attempt.resolved.json'), 'utf8')).resolves.toBe(
+      JSON.stringify({ pendingAsBuiltFindings: [], priorAsBuiltCases: [], priorLaps: [], refusals: [] }),
+    );
+  });
+
   // Covers: task:3
   it('keeps prior as-built context scoped to as-built requests and faults instead of truncating it', async () => {
     const root = await fixture();

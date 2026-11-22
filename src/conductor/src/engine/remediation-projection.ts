@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import {
   REMEDIATION_EXISTING_TASK_DISPOSITION,
@@ -129,6 +129,25 @@ export interface RemediationProjection {
   readonly vocabulary: RemediationProjectionVocabulary;
 }
 
+export interface RemediationHistoryFile {
+  readonly path: string;
+  readonly digest: string;
+}
+
+export interface RemediationHistoryDimension {
+  readonly ids: readonly string[];
+  readonly count: number;
+}
+
+export interface RemediationProjectionHistory {
+  readonly active: RemediationHistoryFile;
+  readonly resolved: RemediationHistoryFile;
+  readonly pendingAsBuiltFindings: RemediationHistoryDimension;
+  readonly priorAsBuiltCases: RemediationHistoryDimension;
+  readonly priorLaps: RemediationHistoryDimension;
+  readonly refusals: RemediationHistoryDimension;
+}
+
 type RemediationEvidenceLimits = Pick<AsBuiltProjectionLimits, 'perFileHunksBytes' | 'totalDiffBytes'>;
 
 export interface RemediationProjectionRequest {
@@ -150,7 +169,7 @@ export interface RemediationProjectionRequest {
 }
 
 export type RemediationProjectionResult =
-  | { readonly ok: true; readonly projection: RemediationProjection }
+  | { readonly ok: true; readonly projection: RemediationProjection; readonly history: RemediationProjectionHistory }
   | {
       readonly ok: false;
       readonly kind: 'preparation-fault';
@@ -201,24 +220,24 @@ const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
   // Each finding carries its governing clause, so the set is criterion-bearing and the
   // optional-history floor would fault any as-built lap with roughly eight or more findings.
   pendingAsBuiltFindingsBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+    4 * 1024 * 1024,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes,
   )),
   // `.pipeline/kickback-ledger.json`: 111 B prior-lap set; optional-history floor → 4,096 B.
   priorLapsBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
+    4 * 1024 * 1024,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes,
   )),
   // No `.docs/shipped` refusal record at BUILD (0 B); optional-history floor → 4,096 B.
   refusalsBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
+    4 * 1024 * 1024,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes,
   )),
   // `.pipeline/remediation-cases.json` asBuiltCases: 8,929 B projected for 11 open
   // cases (#3677). Each case carries its source summaries, so the optional-history
   // floor faulted any as-built lap with roughly five or more open cases; D7.2 floor → 262,144 B.
   priorAsBuiltCasesBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+    4 * 1024 * 1024,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorAsBuiltCasesBytes,
   )),
 } as const;
@@ -258,6 +277,11 @@ export interface RemediationProjectionLimits extends RemediationEvidenceLimits {
 export interface RemediationProjectionDependencies {
   readonly readKickbackLedgerResult?: typeof readKickbackLedgerResult;
   readonly readPendingAsBuiltRemediationFindings?: typeof readPendingAsBuiltRemediationFindings;
+  readonly filesystem?: {
+    readonly mkdir: typeof mkdir;
+    readonly writeFile: typeof writeFile;
+    readonly rename: typeof rename;
+  };
 }
 
 const REMEDIATION_DISPOSITIONS: readonly RemediationDisposition[] = [
@@ -296,6 +320,73 @@ function serializedBytes(value: unknown): number {
 function structuredProjection(projection: RemediationProjection): Omit<RemediationProjection, 'evidence'> {
   const { evidence: _evidence, ...structured } = projection;
   return structured;
+}
+
+type RemediationHistoryContents = Pick<
+  RemediationProjection,
+  'pendingAsBuiltFindings' | 'priorLaps' | 'refusals'
+> & { readonly priorAsBuiltCases: readonly RemediationProjectionPriorAsBuiltCase[] };
+
+function historyDigest(contents: RemediationHistoryContents): string {
+  return `sha256:${createHash('sha256').update(JSON.stringify(contents)).digest('hex')}`;
+}
+
+async function writeHistoryFile(
+  filesystem: NonNullable<RemediationProjectionDependencies['filesystem']>,
+  path: string,
+  contents: RemediationHistoryContents,
+): Promise<void> {
+  const temporaryPath = `${path}.${randomUUID()}.tmp`;
+  await filesystem.writeFile(temporaryPath, JSON.stringify(contents), 'utf8');
+  await filesystem.rename(temporaryPath, path);
+}
+
+async function writeRemediationHistory(
+  worktree: string,
+  attemptRunId: string | undefined,
+  projection: RemediationProjection,
+  filesystem: NonNullable<RemediationProjectionDependencies['filesystem']>,
+): Promise<RemediationProjectionHistory> {
+  const attemptId = attemptRunId ?? 'unknown-attempt';
+  const relativeDirectory = '.pipeline/remediation-history';
+  const directory = join(worktree, relativeDirectory);
+  const activePath = join(directory, `${attemptId}.active.json`);
+  const resolvedPath = join(directory, `${attemptId}.resolved.json`);
+  const active: RemediationHistoryContents = {
+    pendingAsBuiltFindings: projection.pendingAsBuiltFindings,
+    priorAsBuiltCases: projection.priorAsBuiltCases ?? [],
+    priorLaps: projection.priorLaps,
+    refusals: projection.refusals,
+  };
+  const resolved: RemediationHistoryContents = {
+    pendingAsBuiltFindings: [],
+    priorAsBuiltCases: [],
+    priorLaps: [],
+    refusals: [],
+  };
+  await filesystem.mkdir(directory, { recursive: true });
+  await writeHistoryFile(filesystem, activePath, active);
+  await writeHistoryFile(filesystem, resolvedPath, resolved);
+  return {
+    active: { path: `${relativeDirectory}/${attemptId}.active.json`, digest: historyDigest(active) },
+    resolved: { path: `${relativeDirectory}/${attemptId}.resolved.json`, digest: historyDigest(resolved) },
+    pendingAsBuiltFindings: {
+      ids: projection.pendingAsBuiltFindings.map((finding) => finding.finding),
+      count: projection.pendingAsBuiltFindings.length,
+    },
+    priorAsBuiltCases: {
+      ids: active.priorAsBuiltCases.map((entry) => entry.id),
+      count: active.priorAsBuiltCases.length,
+    },
+    priorLaps: {
+      ids: projection.priorLaps.map((lap) => lap.gate),
+      count: projection.priorLaps.length,
+    },
+    refusals: {
+      ids: projection.refusals.map((refusal) => refusal.decisionId),
+      count: projection.refusals.length,
+    },
+  };
 }
 
 function projectionLimitFault(
@@ -616,8 +707,7 @@ export async function buildRemediationProjection(
   };
   const fault = projectionLimitFault(projection, request.source, limits);
   if (fault !== undefined) return fault;
-  return {
-    ok: true,
-    projection,
-  };
+  const filesystem = dependencies.filesystem ?? { mkdir, writeFile, rename };
+  const history = await writeRemediationHistory(worktree, request.attemptRunId, projection, filesystem);
+  return { ok: true, projection, history };
 }
