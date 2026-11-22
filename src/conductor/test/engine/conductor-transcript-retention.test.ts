@@ -938,14 +938,6 @@ describe('conductor transcript retention wiring', () => {
           prepareCandidateSelfHost: providerExecution.prepareCandidateSelfHost,
           options: { prompt: 'Build.', cwd: root },
         });
-        if (result.success) {
-          await writeFile(
-            join(root, '.pipeline', 'task-status.json'),
-            JSON.stringify({
-              tasks: [{ id: 'retry-task', status: 'completed' }],
-            }),
-          );
-        }
         return {
           success: result.success,
           output: result.output,
@@ -1004,41 +996,7 @@ describe('conductor transcript retention wiring', () => {
     };
     try {
       await mkdir(join(root, 'skills'));
-      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
       await mkdir(join(root, '.pipeline'), { recursive: true });
-      await writeFile(join(root, '.docs', 'plans', 'retry.md'), '### Task 1: Retry transcript capture\n');
-      await writeFile(
-        join(root, '.pipeline', 'conduct-state.json'),
-        JSON.stringify({
-          ...Object.fromEntries(ALL_STEPS.map(({ name }) => [name, 'done'])),
-          feature_desc: 'retry-flow',
-          complexity_tier: 'S',
-          track: 'technical',
-          bootstrap: 'done',
-          memory: 'done',
-          assess: 'done',
-          explore: 'done',
-          prd: 'skipped',
-          complexity: 'done',
-          stories: 'done',
-          conflict_check: 'done',
-          plan: 'done',
-          coherence_check: 'done',
-          plan_review: 'done',
-          coverage_binding: 'done',
-          architecture_diagram: 'done',
-          architecture_review: 'done',
-          worktree: 'done',
-          acceptance_specs: 'done',
-          build: 'pending',
-        }),
-      );
-      await writeFile(
-        join(root, '.pipeline', 'task-status.json'),
-        JSON.stringify({
-          tasks: [{ id: 'retry-task', status: 'pending' }],
-        }),
-      );
       const conductor = new Conductor({
         projectRoot: root,
         stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
@@ -1067,7 +1025,25 @@ describe('conductor transcript retention wiring', () => {
           },
         } as never,
       });
-      await conductor.run();
+      const dispatch = conductor as unknown as {
+        runSelfBuildDispatch(
+          step: 'build',
+          state: { feature_desc: string },
+          attempt: number,
+          retryHint: string | undefined,
+        ): Promise<{ success: boolean }>;
+        settleTranscriptAttempt(
+          owner: TranscriptOwner,
+          captureAttempt: number,
+          outcome: 'succeeded-with-progress',
+        ): Promise<void>;
+      };
+      const state = { feature_desc: 'retry-flow' };
+
+      expect(await dispatch.runSelfBuildDispatch('build', state, 1, undefined)).toMatchObject({ success: false });
+      await events.emit({ type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 2, reason: 'retry' });
+      expect(await dispatch.runSelfBuildDispatch('build', state, 2, undefined)).toMatchObject({ success: true });
+      await dispatch.settleTranscriptAttempt({ kind: 'registered-step', step: 'build' }, 2, 'succeeded-with-progress');
 
       const first = join('.pipeline', 'transcripts', 'build', 'retry-flow-a1-codex');
       const second = join('.pipeline', 'transcripts', 'build', 'retry-flow-a2-codex');
