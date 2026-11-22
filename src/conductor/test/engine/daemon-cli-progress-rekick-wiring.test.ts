@@ -77,7 +77,9 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
       });
 
       await captured!.reconcileVerifiedRebaseRecoveries!();
-      await expect(readFile(join(pipeline, 'HALT'), 'utf8')).resolves.toContain('completed rebase requires verification');
+      await expect(readFile(join(pipeline, 'HALT'), 'utf8')).resolves.toContain(
+        'completed rebase requires verification',
+      );
       await expect(readFile(join(pipeline, 'HALT.class'), 'utf8')).resolves.toBe('rebase-recovery\n');
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -90,7 +92,10 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
     try {
       await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
       await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'build_progress_halt:\n  enabled: false\n');
-      for (const [slug, haltClass] of [['mechanical-halt', 'mechanical'], ['human-halt', 'needs-human']] as const) {
+      for (const [slug, haltClass] of [
+        ['mechanical-halt', 'mechanical'],
+        ['human-halt', 'needs-human'],
+      ] as const) {
         const pipeline = join(worktreeBase, slug, '.pipeline');
         await mkdir(pipeline, { recursive: true });
         await writeFile(join(pipeline, 'HALT.class'), `${haltClass}\n`);
@@ -377,10 +382,7 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
       await rm(join(pipeline, 'HALT'));
       expect(await deps.isFreshRetryableHalt(slug)).toBe(false);
 
-      const progress = buildProgressReKickDeps(
-        { build_progress_halt: { enabled: false } } as any,
-        worktreeBase,
-      );
+      const progress = buildProgressReKickDeps({ build_progress_halt: { enabled: false } } as any, worktreeBase);
       expect(progress.isProgressReKickEligible).toBeUndefined();
       expect(deps.clearRetryableHalt).toBeTypeOf('function');
       expect(deps.stampDispatchBaseline).toBeTypeOf('function');

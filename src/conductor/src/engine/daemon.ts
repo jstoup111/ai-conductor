@@ -1514,7 +1514,12 @@ export async function runDaemon(deps: DaemonDeps, options: DaemonOptions): Promi
         },
       ],
       ['resume-authorizations', consumeResumeAuthorizations],
-      ['verified-rebase-recovery', async () => { await deps.reconcileVerifiedRebaseRecoveries?.(); }],
+      [
+        'verified-rebase-recovery',
+        async () => {
+          await deps.reconcileVerifiedRebaseRecoveries?.();
+        },
+      ],
       [
         'reconcileHaltPrs',
         async () =>

@@ -41,9 +41,10 @@ import type { ConductState } from '../../src/types/index.js';
 import type { StepRunResult } from '../../src/engine/conductor.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results.
-function fakeGit(
-  script: Array<{ match: string[]; result: Partial<GitResult> }>,
-): { git: GitRunner; calls: string[][] } {
+function fakeGit(script: Array<{ match: string[]; result: Partial<GitResult> }>): {
+  git: GitRunner;
+  calls: string[][];
+} {
   const calls: string[][] = [];
   const git: GitRunner = async (args) => {
     calls.push(args);
@@ -71,9 +72,7 @@ describe('changedPathsSinceMergeBase (Task 1)', () => {
       },
     ]);
 
-    await expect(changedPathsSinceMergeBase(git, 'main', 'spec/sibling')).resolves.toEqual([
-      'branch-only.ts',
-    ]);
+    await expect(changedPathsSinceMergeBase(git, 'main', 'spec/sibling')).resolves.toEqual(['branch-only.ts']);
     expect(calls).not.toContainEqual(['diff', '--name-only', 'main', 'spec/sibling']);
   });
 
@@ -81,9 +80,7 @@ describe('changedPathsSinceMergeBase (Task 1)', () => {
     { name: 'fails', result: { exitCode: 1, stderr: 'unrelated histories' } },
     { name: 'prints no merge-base', result: { stdout: ' \n' } },
   ])('returns null when merge-base $name', async ({ result }) => {
-    const { git, calls } = fakeGit([
-      { match: ['merge-base', 'main', 'spec/sibling'], result },
-    ]);
+    const { git, calls } = fakeGit([{ match: ['merge-base', 'main', 'spec/sibling'], result }]);
 
     await expect(changedPathsSinceMergeBase(git, 'main', 'spec/sibling')).resolves.toBeNull();
     expect(calls).toEqual([['merge-base', 'main', 'spec/sibling']]);
@@ -107,7 +104,7 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
       const events = new ConductorEventEmitter();
       const seen: Array<string | null> = [];
       events.on('rebase_noop', (event) => {
-        seen.push(event.type === 'rebase_noop' ? event.baseSha ?? null : null);
+        seen.push(event.type === 'rebase_noop' ? (event.baseSha ?? null) : null);
       });
 
       const outcome = await performRebase(git, root, 'main', { finishMergeabilityCheck: true });
@@ -321,9 +318,7 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
 
       // An indeterminate assessment must retain the established actual-rebase
       // failure conversion, rather than claiming the feature is mergeable.
-      await expect(
-        performRebase(git, root, 'main', { finishMergeabilityCheck: true }),
-      ).resolves.toEqual({
+      await expect(performRebase(git, root, 'main', { finishMergeabilityCheck: true })).resolves.toEqual({
         kind: 'conflict_halt',
         conflicts: [],
         reason: rebaseStderr,
@@ -356,9 +351,7 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
     try {
       // A malformed merge listing is a pre-mutation start failure: it must
       // never silently fall back to a plain rebase.
-      await expect(
-        performRebase(git, root, 'main', { finishMergeabilityCheck: true }),
-      ).resolves.toMatchObject({
+      await expect(performRebase(git, root, 'main', { finishMergeabilityCheck: true })).resolves.toMatchObject({
         kind: 'conflict_halt',
         conflicts: [],
         reason: 'rev-list --merges returned malformed output',
@@ -388,9 +381,7 @@ describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {
   });
 
   it('no origin → returns the local base, no fetch', async () => {
-    const { git, calls } = fakeGit([
-      { match: ['remote'], result: { stdout: '' } },
-    ]);
+    const { git, calls } = fakeGit([{ match: ['remote'], result: { stdout: '' } }]);
     const base = await resolveBase(git, 'main');
     expect(base).toEqual({ ref: 'main', kind: 'local', branch: 'main', degraded: 'no-origin' });
     expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
@@ -476,7 +467,9 @@ describe('engine/rebase — resolveBaseCore (shared seam, Task 1)', () => {
     };
 
     await expect(resolveBaseCore(fallbackRunner, 'main')).resolves.toEqual({
-      ref: 'origin/trunk', kind: 'remote', branch: 'trunk',
+      ref: 'origin/trunk',
+      kind: 'remote',
+      branch: 'trunk',
     });
     expect(fallbackCalls).toContainEqual(['remote', 'show', 'origin']);
   });
@@ -699,16 +692,12 @@ describe('engine/rebase — resolveFreshBase (Task 2)', () => {
 
 describe('engine/rebase — isBranchCurrent (FR-4)', () => {
   it('true when no commits in HEAD..base', async () => {
-    const { git } = fakeGit([
-      { match: ['rev-list', '--count', 'HEAD..origin/main'], result: { stdout: '0\n' } },
-    ]);
+    const { git } = fakeGit([{ match: ['rev-list', '--count', 'HEAD..origin/main'], result: { stdout: '0\n' } }]);
     expect(await isBranchCurrent(git, 'origin/main')).toBe(true);
   });
 
   it('false when the base has commits the branch lacks (stale never satisfied)', async () => {
-    const { git } = fakeGit([
-      { match: ['rev-list', '--count', 'HEAD..origin/main'], result: { stdout: '3\n' } },
-    ]);
+    const { git } = fakeGit([{ match: ['rev-list', '--count', 'HEAD..origin/main'], result: { stdout: '3\n' } }]);
     expect(await isBranchCurrent(git, 'origin/main')).toBe(false);
   });
 });
@@ -741,9 +730,10 @@ describe('engine/rebase — path classifier (FR-5)', () => {
   });
 
   it('filterCodeOrTestPaths keeps only invalidating paths', () => {
-    expect(
-      filterCodeOrTestPaths(['CHANGELOG.md', 'src/a.ts', 'README.md', 'test/b.ts']),
-    ).toEqual(['src/a.ts', 'test/b.ts']);
+    expect(filterCodeOrTestPaths(['CHANGELOG.md', 'src/a.ts', 'README.md', 'test/b.ts'])).toEqual([
+      'src/a.ts',
+      'test/b.ts',
+    ]);
   });
 });
 
@@ -779,19 +769,31 @@ describe('engine/rebase — HALT (FR-8)', () => {
     const expected = await readRebaseRecoveryAttempt(dir);
 
     await writeRebaseOutcomeHalt(dir, {
-      kind: 'conflict_halt', conflicts: ['src/conflict.ts'], reason: 'rebase conflict requires human resolution', replaySeed: seed, recoveryAttempt: expected,
+      kind: 'conflict_halt',
+      conflicts: ['src/conflict.ts'],
+      reason: 'rebase conflict requires human resolution',
+      replaySeed: seed,
+      recoveryAttempt: expected,
     });
     await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('rebase-recovery');
 
     await writeFile(path, '{"version":1,"generation":"partial"}\n');
     await writeRebaseOutcomeHalt(dir, {
-      kind: 'conflict_halt', conflicts: ['src/conflict.ts'], reason: 'rebase conflict requires human resolution', replaySeed: seed, recoveryAttempt: expected,
+      kind: 'conflict_halt',
+      conflicts: ['src/conflict.ts'],
+      reason: 'rebase conflict requires human resolution',
+      replaySeed: seed,
+      recoveryAttempt: expected,
     });
     await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
 
     await writeFile(path, `${JSON.stringify({ version: 1, generation: 'attempt-2', feature: 'feature', ...seed })}\n`);
     await writeRebaseOutcomeHalt(dir, {
-      kind: 'conflict_halt', conflicts: ['src/conflict.ts'], reason: 'rebase conflict requires human resolution', replaySeed: seed, recoveryAttempt: expected,
+      kind: 'conflict_halt',
+      conflicts: ['src/conflict.ts'],
+      reason: 'rebase conflict requires human resolution',
+      replaySeed: seed,
+      recoveryAttempt: expected,
     });
     await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
@@ -817,10 +819,17 @@ describe('engine/rebase — HALT (FR-8)', () => {
       await mkdir(join(repo, '.pipeline'), { recursive: true });
       await writeFile(join(repo, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'feature' }));
 
-      const outcome = await performRebase(makeGitRunner(repo), repo, 'main', { executionChild: 7 });
+      const outcome = await performRebase(makeGitRunner(repo), repo, 'main', { executionChild: parseChildId(7)! });
       expect(outcome).toMatchObject({ kind: 'conflict_halt', replaySeed: { preRebaseHead } });
       const attempt = JSON.parse(await readFile(join(repo, REBASE_RECOVERY_ATTEMPT_PATH), 'utf8'));
-      expect(attempt).toMatchObject({ version: 1, feature: 'feature', child: 7, preRebaseHead, target: expect.any(String), generation: expect.any(String) });
+      expect(attempt).toMatchObject({
+        version: 1,
+        feature: 'feature',
+        child: 7,
+        preRebaseHead,
+        target: expect.any(String),
+        generation: expect.any(String),
+      });
       if (outcome.kind !== 'conflict_halt') throw new Error('expected replay conflict');
       await writeRebaseOutcomeHalt(repo, outcome);
       await expect(readFile(join(repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('rebase-recovery');
@@ -830,9 +839,9 @@ describe('engine/rebase — HALT (FR-8)', () => {
   });
 
   it('writes a completed-rebase recovery procedure without conflict-resolution steps', async () => {
-    expect(
-      await writeHalt(dir, [], 'feature content needs review', undefined, 'completed-rebase'),
-    ).toEqual({ status: 'written' });
+    expect(await writeHalt(dir, [], 'feature content needs review', undefined, 'completed-rebase')).toEqual({
+      status: 'written',
+    });
     const [note, cls] = await Promise.all([
       readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
       readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
@@ -988,9 +997,10 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect({
       verdict,
       rebase: await readVerdict(dir, 'rebase'),
-      state: JSON.parse(
-        await readFile(join(dir, '.pipeline', 'conduct-state.json'), 'utf8'),
-      ) as { rebase?: string; last_step?: string },
+      state: JSON.parse(await readFile(join(dir, '.pipeline', 'conduct-state.json'), 'utf8')) as {
+        rebase?: string;
+        last_step?: string;
+      },
     }).toEqual({
       verdict: { satisfied: true, kickedBack: [], reverified: [] },
       rebase: expect.objectContaining({
@@ -1047,13 +1057,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
   it('changed but manual_test did not run (featureSurface uncomputable) → build/deterministic group/build_review/audits kicked back, manual_test excluded', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, false);
-    expect(r.kickedBack).toEqual([
-      'build',
-      'build_review',
-      'test_suite',
-      'prd_audit',
-      'architecture_review_as_built',
-    ]);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built']);
   });
 
   it('setup_stop → rebase is refused and remains unsatisfied', async () => {
@@ -1069,9 +1073,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(verdict?.satisfied).toBe(false);
     expect(verdict?.reason).toContain('provider setup unavailable');
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
-    const state = existsSync(statePath)
-      ? (JSON.parse(await readFile(statePath, 'utf8')) as { rebase?: string })
-      : {};
+    const state = existsSync(statePath) ? (JSON.parse(await readFile(statePath, 'utf8')) as { rebase?: string }) : {};
     expect(state.rebase).toBe('refused');
   });
 
@@ -1129,7 +1131,8 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     // build is reverified, NOT in kickedBack (featureSurface uncomputable —
     // fail-closed set, includes the judged audits per the ADR amendment)
-    expect(r.kickedBack).toEqual(['build_review',
+    expect(r.kickedBack).toEqual([
+      'build_review',
       'test_suite',
       'manual_test',
       'prd_audit',
@@ -1258,11 +1261,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // manual_test NOT present (ranManualTest: false); featureSurface is
     // uncomputable here too, so the fail-closed set still includes the
     // judged audits (ADR amendment) regardless of ranManualTest.
-    expect(r.kickedBack).toEqual(['build_review',
-      'test_suite',
-      'prd_audit',
-      'architecture_review_as_built',
-    ]);
+    expect(r.kickedBack).toEqual(['build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built']);
     expect(r.reverified).toEqual(['build']);
 
     // build verdict is fresh satisfied
@@ -1297,13 +1296,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // build and build_review kicked back, manual_test NOT present
     // (ranManualTest: false); fail-closed set still includes the judged
     // audits (featureSurface uncomputable, ADR amendment).
-    expect(r.kickedBack).toEqual([
-      'build',
-      'build_review',
-      'test_suite',
-      'prd_audit',
-      'architecture_review_as_built',
-    ]);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built']);
     expect(r.reverified).toEqual([]);
 
     // build verdict is unsatisfied with kickback
@@ -1347,7 +1340,8 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     // The directly matched gates and every unproved candidate preservation
     // are invalidated. Completed BUILD is not selected by rebase position.
-    expect(r.kickedBack).toEqual(['build_review',
+    expect(r.kickedBack).toEqual([
+      'build_review',
       'test_suite',
       'manual_test',
       'prd_audit',
@@ -1393,9 +1387,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     await emitGateInvalidationEvents(events, outcome, true);
 
     const byGate = Object.fromEntries(invalidated.map((e) => [e.gate, e.matchedPaths]));
-    expect(Object.keys(byGate).sort()).toEqual(
-      ['build_review', 'test_suite', 'manual_test'].sort(),
-    );
+    expect(Object.keys(byGate).sort()).toEqual(['build_review', 'test_suite', 'manual_test'].sort());
     // manual_test is 'all-runtime' — matchedPaths is
     // featureSrc ∪ foreignSrc (foreignSrc: src/foreign.ts; featureSrc empty).
     expect(byGate.manual_test).toEqual(['src/foreign.ts']);
@@ -1428,12 +1420,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     });
 
     expect(invalidated).not.toContain('build');
-    expect(invalidated.sort()).toEqual([
-      'architecture_review_as_built',
-      'build_review',
-      'prd_audit',
-      'test_suite',
-    ]);
+    expect(invalidated.sort()).toEqual(['architecture_review_as_built', 'build_review', 'prd_audit', 'test_suite']);
   });
 
   it('Task 9: emits rebase_gate_preserved for each preserved gate with its non-empty declared surface and empty matched delta', async () => {
@@ -1466,13 +1453,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     await emitGateInvalidationEvents(events, outcome, true);
 
     const byGate = Object.fromEntries(preserved.map((e) => [e.gate, e]));
-    expect(Object.keys(byGate).sort()).toEqual(
-      ['prd_audit', 'architecture_review_as_built'].sort(),
-    );
+    expect(Object.keys(byGate).sort()).toEqual(['prd_audit', 'architecture_review_as_built'].sort());
     // Document-bound gates declare only their document inputs.
-    expect(byGate.prd_audit.surface).toEqual([
-      '<.docs/stories/|.docs/specs/>',
-    ]);
+    expect(byGate.prd_audit.surface).toEqual(['<.docs/stories/|.docs/specs/>']);
     // The as-built review consumes the review decision inputs.
     expect(byGate.architecture_review_as_built.surface).toEqual([
       '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>',
@@ -1506,10 +1489,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     await emitGateInvalidationEvents(events, outcome, true);
 
     const byGate = Object.fromEntries(invalidated.map((event) => [event.gate, event.matchedPaths]));
-    expect(byGate.prd_audit).toEqual([
-      '.docs/stories/feature.md',
-      '.docs/specs/feature.md',
-    ]);
+    expect(byGate.prd_audit).toEqual(['.docs/stories/feature.md', '.docs/specs/feature.md']);
     expect(byGate.prd_audit).not.toContain('src/foreign.ts');
     expect(byGate.prd_audit).not.toContain('docs/unrelated.md');
   });
@@ -1547,9 +1527,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       featureSurface: ['src/feature.ts'],
     };
     const verdict = await applyRebaseVerdicts(dir, outcome, false, async (step) =>
-      step === 'test_suite'
-        ? { done: true, preservationBasis: 'test_suite_drift_budget' }
-        : { done: false },
+      step === 'test_suite' ? { done: true, preservationBasis: 'test_suite_drift_budget' } : { done: false },
     );
     const events = new ConductorEventEmitter();
     const preserved: Array<Record<string, unknown>> = [];
@@ -1563,14 +1541,18 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     await emitGateInvalidationEvents(events, outcome, false, verdict.preserved ?? []);
 
-    expect(verdict).toEqual(expect.objectContaining({
-      kickedBack: expect.not.arrayContaining(['test_suite']),
-      preserved: [{ gate: 'test_suite', basis: 'test_suite_drift_budget' }],
-    }));
-    expect(preserved).toContainEqual(expect.objectContaining({
-      gate: 'test_suite',
-      basis: 'test_suite_drift_budget',
-    }));
+    expect(verdict).toEqual(
+      expect.objectContaining({
+        kickedBack: expect.not.arrayContaining(['test_suite']),
+        preserved: [{ gate: 'test_suite', basis: 'test_suite_drift_budget' }],
+      }),
+    );
+    expect(preserved).toContainEqual(
+      expect.objectContaining({
+        gate: 'test_suite',
+        basis: 'test_suite_drift_budget',
+      }),
+    );
     expect(invalidated).not.toContain('test_suite');
   });
 
@@ -1592,9 +1574,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       featureSurface: undefined,
     };
     const verdict = await applyRebaseVerdicts(dir, outcome, false, async (step) =>
-      step === 'test_suite'
-        ? { done: true, preservationBasis: 'test_suite_drift_budget' }
-        : { done: false },
+      step === 'test_suite' ? { done: true, preservationBasis: 'test_suite_drift_budget' } : { done: false },
     );
     const events = new ConductorEventEmitter();
     const preserved: Array<Record<string, unknown>> = [];
@@ -1608,10 +1588,12 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     await emitGateInvalidationEvents(events, outcome, false, verdict.preserved ?? []);
 
-    expect(preserved).toContainEqual(expect.objectContaining({
-      gate: 'test_suite',
-      basis: 'test_suite_drift_budget',
-    }));
+    expect(preserved).toContainEqual(
+      expect.objectContaining({
+        gate: 'test_suite',
+        basis: 'test_suite_drift_budget',
+      }),
+    );
     // A preserved gate is never also reported invalidated.
     expect(invalidated).not.toContain('test_suite');
   });
@@ -1641,9 +1623,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       reverified: [],
     });
 
-    expect(seen.sort()).toEqual([
-      'architecture_review_as_built', 'build_review', 'prd_audit', 'test_suite',
-    ]);
+    expect(seen.sort()).toEqual(['architecture_review_as_built', 'build_review', 'prd_audit', 'test_suite']);
   });
 
   it('Task 6: delta-aware — feature runtime source changed → all judged gates invalidated including audits', async () => {
@@ -1663,7 +1643,8 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, true);
 
     expect(r.satisfied).toBe(true);
-    expect(r.kickedBack).toEqual(['build_review',
+    expect(r.kickedBack).toEqual([
+      'build_review',
       'test_suite',
       'manual_test',
       'prd_audit',
@@ -1792,9 +1773,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
         expect(rA.kickedBack).not.toContain('build');
         const buildA = await readVerdict(dirA, 'build');
         expect(buildA?.satisfied).toBe(true);
-        expect(buildA?.reason).toBe(
-          're-verified mechanically after file-changing rebase — evidence remains intact',
-        );
+        expect(buildA?.reason).toBe('re-verified mechanically after file-changing rebase — evidence remains intact');
       } finally {
         await rm(dirA, { recursive: true, force: true });
       }
@@ -1836,7 +1815,8 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
     const root = await mkdtemp(join(tmpdir(), 'rebase-base-state-'));
     const statePath = join(root, 'conduct-state.json');
     const events = new ConductorEventEmitter();
-    const perform = vi.fn()
+    const perform = vi
+      .fn()
       .mockResolvedValueOnce({ kind: 'noop', baseSha: 'B-recorded' })
       .mockResolvedValueOnce({ kind: 'noop', baseSha: null });
     const state: ConductState = { manual_test: 'skipped' };
@@ -1879,9 +1859,7 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       'rebase_untracked_quarantined',
     ] as const) {
       events.on(t, (e) => {
-        seen.push('baseSha' in e
-          ? { type: e.type, baseSha: e.baseSha }
-          : { type: e.type });
+        seen.push('baseSha' in e ? { type: e.type, baseSha: e.baseSha } : { type: e.type });
         if (e.type === 'rebase_conflict_halt') conflictHalt = e;
       });
     }
@@ -1893,7 +1871,9 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       baseKind: 'remote',
     });
     await emitRebaseEvent(events, {
-      kind: 'changed', changedCodePaths: ['src/a.ts'], baseSha: 'B-changed',
+      kind: 'changed',
+      changedCodePaths: ['src/a.ts'],
+      baseSha: 'B-changed',
     });
     await emitRebaseEvent(events, { kind: 'noop', baseSha: null });
     await emitRebaseEvent(events, { kind: 'conflict_halt', conflicts: ['x'], reason: 'r' });
@@ -1912,9 +1892,11 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
     const seen: Array<{ type: string; paths?: string[]; directory?: string }> = [];
     for (const type of ['rebase_untracked_quarantined', 'rebase_changed', 'rebase_conflict_halt'] as const) {
       events.on(type, (event) => {
-        seen.push(event.type === 'rebase_untracked_quarantined'
-          ? { type: event.type, paths: event.paths, directory: event.directory }
-          : { type: event.type });
+        seen.push(
+          event.type === 'rebase_untracked_quarantined'
+            ? { type: event.type, paths: event.paths, directory: event.directory }
+            : { type: event.type },
+        );
       });
     }
     const quarantine = {
@@ -1923,15 +1905,23 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
     };
 
     await emitRebaseEvent(events, {
-      kind: 'changed', changedCodePaths: ['generated.txt', 'nested/generated.json'], quarantine,
+      kind: 'changed',
+      changedCodePaths: ['generated.txt', 'nested/generated.json'],
+      quarantine,
     });
     await emitRebaseEvent(events, {
-      kind: 'conflict_halt', conflicts: [], reason: 'still refused', startFailure: true, quarantine,
+      kind: 'conflict_halt',
+      conflicts: [],
+      reason: 'still refused',
+      startFailure: true,
+      quarantine,
     });
 
     expect(seen).toEqual([
-      { type: 'rebase_untracked_quarantined', ...quarantine }, { type: 'rebase_changed' },
-      { type: 'rebase_untracked_quarantined', ...quarantine }, { type: 'rebase_conflict_halt' },
+      { type: 'rebase_untracked_quarantined', ...quarantine },
+      { type: 'rebase_changed' },
+      { type: 'rebase_untracked_quarantined', ...quarantine },
+      { type: 'rebase_conflict_halt' },
     ]);
   });
 
@@ -2055,12 +2045,14 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
 
     const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
     const git = makeGitRunner(repo);
-    const outcome = await (performRebase as unknown as (
-      git: GitRunner,
-      projectRoot: string,
-      localBase: string,
-      opts?: { translateAfterRebase?: typeof translateAfterRebase },
-    ) => Promise<RebaseOutcome>)(git, repo, 'main', { translateAfterRebase });
+    const outcome = await (
+      performRebase as unknown as (
+        git: GitRunner,
+        projectRoot: string,
+        localBase: string,
+        opts?: { translateAfterRebase?: typeof translateAfterRebase },
+      ) => Promise<RebaseOutcome>
+    )(git, repo, 'main', { translateAfterRebase });
 
     expect(outcome.kind).toBe('changed');
     const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
@@ -2071,9 +2063,7 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
 
   it('rotates the seal only after post-rebase translation succeeds', async () => {
     const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
-    const { translateAfterRebase: realTranslateAfterRebase } = await import(
-      '../../src/engine/rebase-translate.js'
-    );
+    const { translateAfterRebase: realTranslateAfterRebase } = await import('../../src/engine/rebase-translate.js');
 
     await g(['checkout', '-q', '-b', 'feat']);
     await writeFile(join(repo, 'a.ts'), 'a1\n');
@@ -2149,12 +2139,14 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     await g(['checkout', '-q', '-b', 'feat']);
     const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
     const git = makeGitRunner(repo);
-    const outcome = await (performRebase as unknown as (
-      git: GitRunner,
-      projectRoot: string,
-      localBase: string,
-      opts?: { translateAfterRebase?: typeof translateAfterRebase },
-    ) => Promise<RebaseOutcome>)(git, repo, 'main', { translateAfterRebase });
+    const outcome = await (
+      performRebase as unknown as (
+        git: GitRunner,
+        projectRoot: string,
+        localBase: string,
+        opts?: { translateAfterRebase?: typeof translateAfterRebase },
+      ) => Promise<RebaseOutcome>
+    )(git, repo, 'main', { translateAfterRebase });
 
     expect(outcome.kind).toBe('noop');
     expect(translateAfterRebase).not.toHaveBeenCalled();
@@ -2216,9 +2208,7 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
   }, 20000);
 
   it('Task 5: carries the feature claimed surface F (changedPathsBetween(mergeBase, preTree)) on the `changed` outcome', async () => {
-    const { performRebase, makeGitRunner, changedPathsBetween } = await import(
-      '../../src/engine/rebase.js'
-    );
+    const { performRebase, makeGitRunner, changedPathsBetween } = await import('../../src/engine/rebase.js');
 
     await g(['checkout', '-q', '-b', 'feat']);
     const mergeBase = (await g(['rev-parse', 'HEAD'])).stdout.trim();
@@ -2249,9 +2239,7 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
   // so it must translate sha-anchored evidence (#535).
   it('invokes translateAfterRebase when a clean rebase moves HEAD for a root markdown base advance, with no residue on a pure replay', async () => {
     const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
-    const { translateAfterRebase: realTranslate } = await import(
-      '../../src/engine/rebase-translate.js'
-    );
+    const { translateAfterRebase: realTranslate } = await import('../../src/engine/rebase-translate.js');
 
     await g(['checkout', '-q', '-b', 'feat']);
     await writeFile(join(repo, 'a.ts'), 'a1\n');
@@ -2292,9 +2280,8 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     // Delegate to the REAL translation (with an emitter, so residue — if any —
     // would actually be written) to prove the pure-replay case leaves none.
     const events = new ConductorEventEmitter();
-    const translateAfterRebase = vi.fn(
-      (gr: GitRunner, root: string, o: string, oh: string, h: string) =>
-        realTranslate(gr, root, o, oh, h, events),
+    const translateAfterRebase = vi.fn((gr: GitRunner, root: string, o: string, oh: string, h: string) =>
+      realTranslate(gr, root, o, oh, h, events),
     );
     const git = makeGitRunner(repo);
     const outcome = await performRebase(git, repo, 'main', { translateAfterRebase });
@@ -2308,20 +2295,21 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     expect(translateAfterRebase).toHaveBeenCalledWith(git, repo, onto, origHead, newHead);
 
     // Pure replay: patch-ids match, the map covers the replayed commit…
-    const rewrites = JSON.parse(
-      await readFile(join(repo, '.pipeline/rebase-rewrites.json'), 'utf-8'),
-    ) as Record<string, string>;
+    const rewrites = JSON.parse(await readFile(join(repo, '.pipeline/rebase-rewrites.json'), 'utf-8')) as Record<
+      string,
+      string
+    >;
     expect(rewrites[origHead]).toBe(newHead);
 
     // The sha-anchored stores are TRANSLATED, not just mapped: every seeded
     // pre-rebase citation now points at the post-rebase sha.
-    const status = JSON.parse(
-      await readFile(join(repo, '.pipeline/task-status.json'), 'utf-8'),
-    ) as { tasks: Array<{ id: string; commit?: string }> };
+    const status = JSON.parse(await readFile(join(repo, '.pipeline/task-status.json'), 'utf-8')) as {
+      tasks: Array<{ id: string; commit?: string }>;
+    };
     expect(status.tasks[0].commit).toBe(newHead);
-    const evidence = JSON.parse(
-      await readFile(join(repo, '.pipeline/task-evidence.json'), 'utf-8'),
-    ) as { evidenceStamps: Record<string, { sha?: string; citedShas?: string[] }> };
+    const evidence = JSON.parse(await readFile(join(repo, '.pipeline/task-evidence.json'), 'utf-8')) as {
+      evidenceStamps: Record<string, { sha?: string; citedShas?: string[] }>;
+    };
     expect(evidence.evidenceStamps.T1.sha).toBe(newHead);
     expect(evidence.evidenceStamps.T1.citedShas).toEqual([newHead]);
 
@@ -2403,9 +2391,7 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
   });
 
   it('mergeBase unavailable (merge-base fails but leaks a bogus ref) → featureSurface undefined, fixed-set fallback applied', async () => {
-    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import(
-      '../../src/engine/rebase.js'
-    );
+    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import('../../src/engine/rebase.js');
 
     await g(['checkout', '-q', '-b', 'feat']);
     await writeFile(join(repo, 'a.ts'), 'a1\n');
@@ -2459,9 +2445,7 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
   }, 20000);
 
   it('F diff (mergeBase..preTree) throws → featureSurface undefined, performRebase does not throw/reject', async () => {
-    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import(
-      '../../src/engine/rebase.js'
-    );
+    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import('../../src/engine/rebase.js');
 
     await g(['checkout', '-q', '-b', 'feat']);
     const mergeBase = (await g(['rev-parse', 'HEAD'])).stdout.trim();
@@ -2533,9 +2517,7 @@ describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', 
   });
 
   it('D diff (preTree..HEAD) throws → performRebase does not throw/reject, fixed-set fallback applied', async () => {
-    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import(
-      '../../src/engine/rebase.js'
-    );
+    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import('../../src/engine/rebase.js');
 
     await g(['checkout', '-q', '-b', 'feat']);
     await writeFile(join(repo, 'a.ts'), 'a1\n');
@@ -2762,9 +2744,7 @@ describe('resolveRebaseConflicts — delta classification matches the clean path
     // The feature's own claimed surface (mergeBase..preTree) must be carried
     // so gate invalidation can be delta-aware instead of invalidate-all.
     expect(outcome.featureSurface).toBeDefined();
-    expect(outcome.featureSurface).toEqual(
-      expect.arrayContaining(['feature-0.ts', 'feature-5.ts', 'shared.ts']),
-    );
+    expect(outcome.featureSurface).toEqual(expect.arrayContaining(['feature-0.ts', 'feature-5.ts', 'shared.ts']));
     expect(outcome.featureSurface).not.toContain('docs/template.md');
   });
 
@@ -2798,11 +2778,16 @@ describe('engine/rebase — resolveReviewInputs decision scoping', () => {
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await mkdir(join(root, '.docs', 'decisions'), { recursive: true });
     await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'active' }));
-    await writeFile(join(root, '.docs', 'plans', 'active.md'), '# plan\n\nBound by `.docs/decisions/adr-2026-01-01-cited.md` and adr-2026-01-02-bare.\n');
+    await writeFile(
+      join(root, '.docs', 'plans', 'active.md'),
+      '# plan\n\nBound by `.docs/decisions/adr-2026-01-01-cited.md` and adr-2026-01-02-bare.\n',
+    );
     await writeFile(join(root, '.docs', 'decisions', 'adr-2026-01-01-cited.md'), 'cited\n');
     await writeFile(join(root, '.docs', 'decisions', 'adr-2026-01-03-upstream.md'), 'upstream\n');
   });
-  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
 
   it('binds only decision records the feature cites, never every ADR in the checkout', async () => {
     const { resolveReviewInputs } = await import('../../src/engine/rebase.js');
@@ -2812,9 +2797,12 @@ describe('engine/rebase — resolveReviewInputs decision scoping', () => {
     expect(inputs).toContain('.docs/decisions/adr-2026-01-01-cited.md');
     expect(inputs).toContain('.docs/decisions/adr-2026-01-02-bare.md');
     expect(inputs).not.toContain('.docs/decisions/adr-2026-01-03-upstream.md');
-    expect(classifyGateInvalidation(['.docs/decisions/adr-2026-01-03-upstream.md'], [], true, inputs).invalidated).toEqual([]);
-    expect(classifyGateInvalidation(['.docs/decisions/adr-2026-01-01-cited.md'], [], true, inputs).invalidated.sort())
-      .toEqual(['architecture_review_as_built']);
+    expect(
+      classifyGateInvalidation(['.docs/decisions/adr-2026-01-03-upstream.md'], [], true, inputs).invalidated,
+    ).toEqual([]);
+    expect(
+      classifyGateInvalidation(['.docs/decisions/adr-2026-01-01-cited.md'], [], true, inputs).invalidated.sort(),
+    ).toEqual(['architecture_review_as_built']);
   });
 
   it('Task 13: treats a plan-cited ADR as a review rebase input', async () => {

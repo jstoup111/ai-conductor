@@ -42,19 +42,27 @@ function validObject(value: string | undefined): value is string {
  * intentionally has no fallback to path overlap or patch identity: inability
  * to reconstruct is not evidence that the completed resolution was unchanged.
  */
-export async function compareReplayTree(
-  git: GitRunner,
-  identity: ReplayIdentity,
-): Promise<ReplayComparison> {
-  if (!validObject(identity.preRebaseHead) || !validObject(identity.mergeBase) ||
-      !validObject(identity.target) || !validObject(identity.completedHead)) {
+export async function compareReplayTree(git: GitRunner, identity: ReplayIdentity): Promise<ReplayComparison> {
+  if (
+    !validObject(identity.preRebaseHead) ||
+    !validObject(identity.mergeBase) ||
+    !validObject(identity.target) ||
+    !validObject(identity.completedHead)
+  ) {
     return { kind: 'unproved', identity, reason: 'replay identity is missing or malformed' };
   }
 
   let merge: Awaited<ReturnType<GitRunner>>;
   let completed: Awaited<ReturnType<GitRunner>>;
   try {
-    merge = await git(['merge-tree', '--write-tree', '--merge-base', identity.mergeBase, identity.preRebaseHead, identity.target]);
+    merge = await git([
+      'merge-tree',
+      '--write-tree',
+      '--merge-base',
+      identity.mergeBase,
+      identity.preRebaseHead,
+      identity.target,
+    ]);
     if (merge.exitCode !== 0) {
       return { kind: 'unproved', identity, reason: 'clean replay reconstruction was unavailable or conflicted' };
     }
@@ -130,7 +138,12 @@ export async function verifyCompletedReplay(
     if (state.exitCode !== 0 || !state.stdout.trim()) continue;
     const path = state.stdout.trim();
     const absolute = isAbsolute(path) ? path : join(projectRoot, path);
-    if (await access(absolute).then(() => true, () => false)) {
+    if (
+      await access(absolute).then(
+        () => true,
+        () => false,
+      )
+    ) {
       return { kind: 'blocked', reason: 'rebase is still active' };
     }
   }
@@ -151,7 +164,8 @@ export async function verifyCompletedReplay(
   if (status.stdout.trim()) return { kind: 'blocked', reason: 'checkout is dirty after completed rebase' };
   const completedHead = head.exitCode === 0 ? head.stdout.trim() : '';
   if (!validObject(completedHead)) return { kind: 'blocked', reason: 'completed rebase revision is unavailable' };
-  if (targetAncestor.exitCode !== 0) return { kind: 'blocked', reason: 'completed revision is not based on the captured rebase target' };
+  if (targetAncestor.exitCode !== 0)
+    return { kind: 'blocked', reason: 'completed revision is not based on the captured rebase target' };
 
   let originalFeature;
   let completedFeature;
@@ -163,11 +177,13 @@ export async function verifyCompletedReplay(
   } catch {
     return { kind: 'blocked', reason: 'cannot inspect preserved feature content' };
   }
-  if (originalFeature.exitCode === 0) return { kind: 'blocked', reason: 'captured replay attempt has no feature content to verify' };
+  if (originalFeature.exitCode === 0)
+    return { kind: 'blocked', reason: 'captured replay attempt has no feature content to verify' };
   if (originalFeature.exitCode > 1 || completedFeature.exitCode > 1) {
     return { kind: 'blocked', reason: 'cannot inspect preserved feature content' };
   }
-  if (completedFeature.exitCode === 0) return { kind: 'blocked', reason: 'completed revision has no preserved feature content' };
+  if (completedFeature.exitCode === 0)
+    return { kind: 'blocked', reason: 'completed revision has no preserved feature content' };
 
   const identity: ReplayIdentity = { ...attempt, completedHead };
   const comparison = await compareReplayTree(git, identity);

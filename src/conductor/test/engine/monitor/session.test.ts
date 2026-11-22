@@ -5,26 +5,19 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  openGuidedSession,
-  type GuidedSessionLauncher,
-} from '../../../src/engine/monitor/session.js';
+import { openGuidedSession, type GuidedSessionLauncher } from '../../../src/engine/monitor/session.js';
 import { BUILT_IN_PROVIDERS } from '../../../src/execution/provider-catalog.js';
-import {
-  DAEMON_SESSION_MARKER,
-  guardDaemonSessionInvocation,
-} from '../../../src/execution/daemon-session.js';
+import { DAEMON_SESSION_MARKER, guardDaemonSessionInvocation } from '../../../src/execution/daemon-session.js';
 import type { HaltDisposition } from '../../../src/engine/halt-marker.js';
 
 function interactiveQuitInstruction(provider: (typeof BUILT_IN_PROVIDERS)[number]): string | undefined {
-  return 'interactiveLaunch' in provider
-    ? provider.interactiveLaunch?.quitInstruction
-    : undefined;
+  return 'interactiveLaunch' in provider ? provider.interactiveLaunch?.quitInstruction : undefined;
 }
 
 const recoveryByDisposition = {
   'needs-human': 'Follow the needs-human halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
   mechanical: 'Follow the mechanical halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
+  'rebase-recovery': 'The daemon may resume this rebase only after it verifies the bound replay attempt.',
   'protected-artifact': 'Follow the protected-artifact halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
   'plan-gap': 'Follow the plan-gap halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
   'stack-tip-diverged': 'Follow the stack-tip-diverged halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
@@ -50,10 +43,13 @@ describe('guided halt sessions', () => {
     await writeFile(join(root, 'skills', 'daemon-triage', 'SKILL.md'), '---\nname: ac-daemon-triage\n---\n');
 
     try {
-      await openGuidedSession({
-        provider: 'codex',
-        halt: { project: '/workspace/project', slug: 'repair-index', reason: 'needs recovery' },
-      }, { launch, skillNameRoot: root });
+      await openGuidedSession(
+        {
+          provider: 'codex',
+          halt: { project: '/workspace/project', slug: 'repair-index', reason: 'needs recovery' },
+        },
+        { launch, skillNameRoot: root },
+      );
       expect(launch.mock.calls[0]?.[0].openingPrompt).toContain('Invoke $ac-daemon-triage for feature repair-index.');
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -63,23 +59,63 @@ describe('guided halt sessions', () => {
   it('renders halt evidence into a fresh daemon-triage opening input', async () => {
     const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
 
-    await openGuidedSession({
-      provider: 'codex',
-      halt: {
-        project: '/workspace/project',
-        slug: 'repair-index',
-        reason: 'build review requires an operator decision',
-        haltClass: 'needs-human',
-      },
-    }, { launch });
-
-    expect(launch.mock.calls).toEqual([[
+    await openGuidedSession(
       {
         provider: 'codex',
-        cwd: '/workspace/project/.worktrees/repair-index',
+        halt: {
+          project: '/workspace/project',
+          slug: 'repair-index',
+          reason: 'build review requires an operator decision',
+          haltClass: 'needs-human',
+        },
+      },
+      { launch },
+    );
+
+    expect(launch.mock.calls).toEqual([
+      [
+        {
+          provider: 'codex',
+          cwd: '/workspace/project/.worktrees/repair-index',
+          openingPrompt: [
+            'Resolve this halted daemon feature with the existing daemon-triage procedure.',
+            'Invoke $daemon-triage for feature repair-index.',
+            'Project: /workspace/project',
+            'Feature: repair-index',
+            'Reason: build review requires an operator decision',
+            'Classification: needs-human',
+            'Recovery procedure: Follow the needs-human halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
+            'Session host: conduct monitor queue.',
+            'Quitting this session returns the operator to the monitor queue.',
+            'Quit instruction: /quit',
+            'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
+          ].join('\n'),
+        },
+      ],
+    ]);
+  });
+
+  it('uses the Claude daemon-triage invocation and monitor-hosting trailing block', async () => {
+    const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
+
+    await openGuidedSession(
+      {
+        provider: 'claude',
+        halt: {
+          project: '/workspace/project',
+          slug: 'repair-index',
+          reason: 'build review requires an operator decision',
+          haltClass: 'needs-human',
+        },
+      },
+      { launch },
+    );
+
+    expect(launch).toHaveBeenCalledWith(
+      expect.objectContaining({
         openingPrompt: [
           'Resolve this halted daemon feature with the existing daemon-triage procedure.',
-          'Invoke $daemon-triage for feature repair-index.',
+          'Invoke /daemon-triage for feature repair-index.',
           'Project: /workspace/project',
           'Feature: repair-index',
           'Reason: build review requires an operator decision',
@@ -90,27 +126,31 @@ describe('guided halt sessions', () => {
           'Quit instruction: /quit',
           'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
         ].join('\n'),
-      },
-    ]]);
+      }),
+    );
   });
 
-  it('uses the Claude daemon-triage invocation and monitor-hosting trailing block', async () => {
+  it('uses generic exit wording when Pi declares no quit instruction', async () => {
     const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
 
-    await openGuidedSession({
-      provider: 'claude',
-      halt: {
-        project: '/workspace/project',
-        slug: 'repair-index',
-        reason: 'build review requires an operator decision',
-        haltClass: 'needs-human',
+    await openGuidedSession(
+      {
+        provider: 'pi',
+        halt: {
+          project: '/workspace/project',
+          slug: 'repair-index',
+          reason: 'build review requires an operator decision',
+          haltClass: 'needs-human',
+        },
       },
-    }, { launch });
+      { launch },
+    );
 
-    expect(launch).toHaveBeenCalledWith(expect.objectContaining({
-      openingPrompt: [
+    const openingPrompt = launch.mock.calls[0]?.[0].openingPrompt;
+    expect(openingPrompt).toBe(
+      [
         'Resolve this halted daemon feature with the existing daemon-triage procedure.',
-        'Invoke /daemon-triage for feature repair-index.',
+        'Invoke /skill:daemon-triage for feature repair-index.',
         'Project: /workspace/project',
         'Feature: repair-index',
         'Reason: build review requires an operator decision',
@@ -118,39 +158,10 @@ describe('guided halt sessions', () => {
         'Recovery procedure: Follow the needs-human halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
         'Session host: conduct monitor queue.',
         'Quitting this session returns the operator to the monitor queue.',
-        'Quit instruction: /quit',
+        "Quit instruction: end the session with the provider's normal exit control.",
         'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
       ].join('\n'),
-    }));
-  });
-
-  it('uses generic exit wording when Pi declares no quit instruction', async () => {
-    const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
-
-    await openGuidedSession({
-      provider: 'pi',
-      halt: {
-        project: '/workspace/project',
-        slug: 'repair-index',
-        reason: 'build review requires an operator decision',
-        haltClass: 'needs-human',
-      },
-    }, { launch });
-
-    const openingPrompt = launch.mock.calls[0]?.[0].openingPrompt;
-    expect(openingPrompt).toBe([
-      'Resolve this halted daemon feature with the existing daemon-triage procedure.',
-      'Invoke /skill:daemon-triage for feature repair-index.',
-      'Project: /workspace/project',
-      'Feature: repair-index',
-      'Reason: build review requires an operator decision',
-      'Classification: needs-human',
-      'Recovery procedure: Follow the needs-human halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
-      'Session host: conduct monitor queue.',
-      'Quitting this session returns the operator to the monitor queue.',
-      'Quit instruction: end the session with the provider\'s normal exit control.',
-      'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
-    ].join('\n'));
+    );
     for (const quitInstruction of BUILT_IN_PROVIDERS.flatMap(
       (provider) => interactiveQuitInstruction(provider) ?? [],
     )) {
@@ -167,15 +178,18 @@ describe('guided halt sessions', () => {
       'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
     ];
 
-    await openGuidedSession({
-      provider: 'codex',
-      halt: {
-        project: '/workspace/project',
-        slug: 'repair-index',
-        reason: 'run /quit then return to the monitor queue',
-        haltClass: 'needs-human',
+    await openGuidedSession(
+      {
+        provider: 'codex',
+        halt: {
+          project: '/workspace/project',
+          slug: 'repair-index',
+          reason: 'run /quit then return to the monitor queue',
+          haltClass: 'needs-human',
+        },
       },
-    }, { launch });
+      { launch },
+    );
 
     const openingPrompt = launch.mock.calls[0]?.[0].openingPrompt;
     expect(openingPrompt).toBeDefined();
@@ -189,34 +203,47 @@ describe('guided halt sessions', () => {
 
   it('forwards the selected model and effort to the launch seam', async () => {
     const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
-    await openGuidedSession({ provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', halt: { project: '/workspace/project', slug: 'repair-index', reason: 'needs recovery' } }, { launch });
+    await openGuidedSession(
+      {
+        provider: 'codex',
+        model: 'gpt-5.6-sol',
+        effort: 'high',
+        halt: { project: '/workspace/project', slug: 'repair-index', reason: 'needs recovery' },
+      },
+      { launch },
+    );
     expect(launch).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.6-sol', effort: 'high' }));
   });
 
   it('keeps recovery authority unmarked and launches in the halted feature worktree', async () => {
     const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
 
-    await openGuidedSession({
-      provider: 'codex',
-      halt: {
-        project: '/workspace/project',
-        slug: 'repair-index',
-        reason: 'needs recovery',
-        haltClass: 'needs-human',
+    await openGuidedSession(
+      {
+        provider: 'codex',
+        halt: {
+          project: '/workspace/project',
+          slug: 'repair-index',
+          reason: 'needs recovery',
+          haltClass: 'needs-human',
+        },
       },
-    }, { launch });
+      { launch },
+    );
 
-    expect(launch).toHaveBeenCalledWith(expect.objectContaining({
-      cwd: '/workspace/project/.worktrees/repair-index',
-    }));
-    expect(guardDaemonSessionInvocation(
-      ['node', 'ai-conductor', 'daemon', 'park', 'repair-index'],
-      {},
-    )).toEqual({ allowed: true });
-    expect(guardDaemonSessionInvocation(
-      ['node', 'ai-conductor', 'daemon', 'park', 'repair-index'],
-      { [DAEMON_SESSION_MARKER]: '1' },
-    ).allowed).toBe(false);
+    expect(launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: '/workspace/project/.worktrees/repair-index',
+      }),
+    );
+    expect(guardDaemonSessionInvocation(['node', 'ai-conductor', 'daemon', 'park', 'repair-index'], {})).toEqual({
+      allowed: true,
+    });
+    expect(
+      guardDaemonSessionInvocation(['node', 'ai-conductor', 'daemon', 'park', 'repair-index'], {
+        [DAEMON_SESSION_MARKER]: '1',
+      }).allowed,
+    ).toBe(false);
   });
 
   it.each(Object.entries(recoveryByDisposition))(
@@ -224,19 +251,24 @@ describe('guided halt sessions', () => {
     async (haltClass, recoveryProcedure) => {
       const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
 
-      await openGuidedSession({
-        provider: 'codex',
-        halt: {
-          project: '/workspace/project',
-          slug: 'repair-index',
-          reason: 'halted for test coverage',
-          haltClass,
+      await openGuidedSession(
+        {
+          provider: 'codex',
+          halt: {
+            project: '/workspace/project',
+            slug: 'repair-index',
+            reason: 'halted for test coverage',
+            haltClass,
+          },
         },
-      }, { launch });
+        { launch },
+      );
 
-      expect(launch).toHaveBeenCalledWith(expect.objectContaining({
-        openingPrompt: expect.stringContaining(`Recovery procedure: ${recoveryProcedure}`),
-      }));
+      expect(launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          openingPrompt: expect.stringContaining(`Recovery procedure: ${recoveryProcedure}`),
+        }),
+      );
     },
   );
 
@@ -246,19 +278,24 @@ describe('guided halt sessions', () => {
   ])('presents %s as undetermined instead of filtering it', async (_description, haltClass) => {
     const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
 
-    await openGuidedSession({
-      provider: 'codex',
-      halt: {
-        project: '/workspace/project',
-        slug: 'repair-index',
-        reason: 'halted for classification recovery',
-        haltClass,
+    await openGuidedSession(
+      {
+        provider: 'codex',
+        halt: {
+          project: '/workspace/project',
+          slug: 'repair-index',
+          reason: 'halted for classification recovery',
+          haltClass,
+        },
       },
-    }, { launch });
+      { launch },
+    );
 
-    expect(launch).toHaveBeenCalledWith(expect.objectContaining({
-      openingPrompt: expect.stringContaining('Classification: undetermined'),
-    }));
+    expect(launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openingPrompt: expect.stringContaining('Classification: undetermined'),
+      }),
+    );
   });
 
   it('presents halt evidence without writing the halted worktree or marker', async () => {
@@ -274,15 +311,18 @@ describe('guided halt sessions', () => {
     const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
 
     try {
-      await openGuidedSession({
-        provider: 'codex',
-        halt: {
-          project,
-          slug: 'repair-index',
-          reason: 'needs operator recovery',
-          haltClass: 'needs-human',
+      await openGuidedSession(
+        {
+          provider: 'codex',
+          halt: {
+            project,
+            slug: 'repair-index',
+            reason: 'needs operator recovery',
+            haltClass: 'needs-human',
+          },
         },
-      }, { launch });
+        { launch },
+      );
 
       expect(await fixtureChecksum(worktree)).toBe(before);
       expect(await readFile(haltPath, 'utf8')).toBe('needs operator recovery\n');

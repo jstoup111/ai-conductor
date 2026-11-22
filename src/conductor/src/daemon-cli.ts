@@ -2582,14 +2582,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         });
       },
       reconcileVerifiedRebaseRecoveries: async () => {
-        const verified = new Map<string, Extract<Awaited<ReturnType<typeof evaluateRebaseRecoveryHalt>>, { kind: 'verified' }>>();
+        const verified = new Map<
+          string,
+          Extract<Awaited<ReturnType<typeof evaluateRebaseRecoveryHalt>>, { kind: 'verified' }>
+        >();
         await admitVerifiedRebaseRecoveries({
           listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
           worktreePath: (slug) => join(worktreeBase, slug),
           readAttempt: (slug) => readRebaseRecoveryAttempt(join(worktreeBase, slug)),
           verify: async (slug) => {
             const result = await evaluateRebaseRecoveryHalt({
-              worktreePath: join(worktreeBase, slug), feature: slug,
+              worktreePath: join(worktreeBase, slug),
+              feature: slug,
               git: makeGitRunner(join(worktreeBase, slug)),
             });
             if (result.kind === 'verified') verified.set(slug, result);
@@ -2604,16 +2608,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           readExecutionChild: async (slug) => (await readRebaseRecoveryAttempt(join(worktreeBase, slug)))?.child,
           isOperatorParked: (slug) => isOperatorParked(projectRoot, slug),
           readHaltClass: (slug) => readRawHaltClass(join(worktreeBase, slug)),
-          acquireFeatureDispatchLease: (slug) => acquireFeatureDispatchLease(projectRoot, slug, 'verified rebase recovery'),
+          acquireFeatureDispatchLease: (slug) =>
+            acquireFeatureDispatchLease(projectRoot, slug, 'verified rebase recovery'),
           recheckScheduler: async (slug) => !(await isOperatorParked(projectRoot, slug)),
           admit: async (slug) => {
             const result = verified.get(slug);
             if (!result) throw new Error('verified replay result disappeared before admission');
             const worktreePath = join(worktreeBase, slug);
             const git = makeGitRunner(worktreePath);
-            const verdict = await applyRebaseVerdicts(worktreePath, {
-              kind: 'changed', changedCodePaths: [], featureSurface: [], replay: result.replay,
-            }, false, makeRekickBuildPreVerify(worktreePath, slug), git);
+            const verdict = await applyRebaseVerdicts(
+              worktreePath,
+              {
+                kind: 'changed',
+                changedCodePaths: [],
+                featureSurface: [],
+                replay: result.replay,
+              },
+              false,
+              makeRekickBuildPreVerify(worktreePath, slug),
+              git,
+            );
             if (!verdict.replay) throw new Error('verified replay produced no transition identity');
             const transition = await applyRebaseTransition({
               projectRoot: worktreePath,

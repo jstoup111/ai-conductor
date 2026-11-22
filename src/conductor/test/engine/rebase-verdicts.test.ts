@@ -153,18 +153,13 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       manualTest: await readVerdict(projectRoot, 'manual_test'),
     }).toEqual({
       preVerified: ['build', 'test_suite'],
-      kickedBack: ['build_review',
-        'test_suite',
-        'manual_test',
-        'prd_audit',
-        'architecture_review_as_built',
-      ],
+      kickedBack: ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
       buildReview: expect.objectContaining({ satisfied: false, reason: 'invalidated by file-changing rebase' }),
       manualTest: expect.objectContaining({ satisfied: false, reason: 'invalidated by file-changing rebase' }),
     });
   });
 
-  it('uses classifyGateInvalidation\'s partition as the invalidation source', async () => {
+  it("uses classifyGateInvalidation's partition as the invalidation source", async () => {
     invalidationOverride.result = {
       preserved: ['test_suite', 'build_review'],
       invalidated: ['manual_test'],
@@ -186,22 +181,29 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
 
   it.each([
     ['a failing verdict', { satisfied: false, checkedAt: 1, reason: 'judge rejected the feature' }],
-    ['an ordinary repair kickback', {
-      satisfied: false,
-      checkedAt: 1,
-      reason: 'repair required',
-      kickback: { from: 'build' as const, evidence: 'ordinary repair' },
-    }],
+    [
+      'an ordinary repair kickback',
+      {
+        satisfied: false,
+        checkedAt: 1,
+        reason: 'repair required',
+        kickback: { from: 'build' as const, evidence: 'ordinary repair' },
+      },
+    ],
     ['a skipped verdict', { satisfied: true, checkedAt: 1, reason: 'skipped: tier policy' }],
   ])('does not turn %s into a preserved PASS', async (_caseName, original) => {
     invalidationOverride.result = { preserved: ['build_review'], invalidated: [] };
     await writeVerdict(projectRoot, 'build_review', original);
 
-    const result = await applyRebaseVerdicts(projectRoot, {
-      kind: 'changed',
-      changedCodePaths: ['src/feature-change.ts'],
-      featureSurface: ['src/feature-change.ts'],
-    }, false);
+    const result = await applyRebaseVerdicts(
+      projectRoot,
+      {
+        kind: 'changed',
+        changedCodePaths: ['src/feature-change.ts'],
+        featureSurface: ['src/feature-change.ts'],
+      },
+      false,
+    );
 
     if (original.reason?.startsWith('skipped: ')) {
       expect(result.kickedBack).not.toContain('build_review');
@@ -214,11 +216,15 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
   it('invalidates a preservation candidate with no original verdict evidence', async () => {
     invalidationOverride.result = { preserved: ['build_review'], invalidated: [] };
 
-    const result = await applyRebaseVerdicts(projectRoot, {
-      kind: 'changed',
-      changedCodePaths: ['src/feature-change.ts'],
-      featureSurface: ['src/feature-change.ts'],
-    }, false);
+    const result = await applyRebaseVerdicts(
+      projectRoot,
+      {
+        kind: 'changed',
+        changedCodePaths: ['src/feature-change.ts'],
+        featureSurface: ['src/feature-change.ts'],
+      },
+      false,
+    );
 
     expect(result.kickedBack).toContain('build_review');
     expect(await readVerdict(projectRoot, 'build_review')).toMatchObject({
@@ -230,18 +236,25 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
   it('reopens an otherwise applicable PASS when it lacks bounded original-judge authority', async () => {
     invalidationOverride.result = { preserved: ['build_review'], invalidated: [] };
     const original = { satisfied: true, checkedAt: 2, reason: 'later reviewed PASS' };
-    await writeFile(join(projectRoot, '.pipeline', 'build-review.json'), JSON.stringify({
-      verdict: 'PASS',
-      rubric: { testQuality: false },
-      findings: {},
-    }));
+    await writeFile(
+      join(projectRoot, '.pipeline', 'build-review.json'),
+      JSON.stringify({
+        verdict: 'PASS',
+        rubric: { testQuality: false },
+        findings: {},
+      }),
+    );
     await writeVerdict(projectRoot, 'build_review', original);
 
-    const result = await applyRebaseVerdicts(projectRoot, {
-      kind: 'changed',
-      changedCodePaths: ['src/feature-change.ts'],
-      featureSurface: ['src/feature-change.ts'],
-    }, false);
+    const result = await applyRebaseVerdicts(
+      projectRoot,
+      {
+        kind: 'changed',
+        changedCodePaths: ['src/feature-change.ts'],
+        featureSurface: ['src/feature-change.ts'],
+      },
+      false,
+    );
 
     expect(result.kickedBack).toContain('build_review');
     expect(await readVerdict(projectRoot, 'build_review')).toMatchObject({

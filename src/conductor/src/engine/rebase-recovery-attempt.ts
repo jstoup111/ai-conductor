@@ -18,13 +18,21 @@ const OBJECT_ID = /^[0-9a-f]{40,64}$/i;
 function validAttempt(value: unknown): value is RebaseRecoveryAttempt {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
-  return attempt.version === 1 &&
-    typeof attempt.generation === 'string' && attempt.generation.length > 0 &&
-    typeof attempt.feature === 'string' && attempt.feature.trim().length > 0 &&
-    typeof attempt.preRebaseHead === 'string' && OBJECT_ID.test(attempt.preRebaseHead) &&
-    typeof attempt.mergeBase === 'string' && OBJECT_ID.test(attempt.mergeBase) &&
-    typeof attempt.target === 'string' && OBJECT_ID.test(attempt.target) &&
-    (attempt.child === undefined || (typeof attempt.child === 'number' && Number.isSafeInteger(attempt.child) && attempt.child >= 0));
+  return (
+    attempt.version === 1 &&
+    typeof attempt.generation === 'string' &&
+    attempt.generation.length > 0 &&
+    typeof attempt.feature === 'string' &&
+    attempt.feature.trim().length > 0 &&
+    typeof attempt.preRebaseHead === 'string' &&
+    OBJECT_ID.test(attempt.preRebaseHead) &&
+    typeof attempt.mergeBase === 'string' &&
+    OBJECT_ID.test(attempt.mergeBase) &&
+    typeof attempt.target === 'string' &&
+    OBJECT_ID.test(attempt.target) &&
+    (attempt.child === undefined ||
+      (typeof attempt.child === 'number' && Number.isSafeInteger(attempt.child) && attempt.child >= 0))
+  );
 }
 
 /** Missing, partial, or malformed evidence is deliberately not recoverable. */
@@ -42,10 +50,18 @@ export async function persistRebaseRecoveryAttempt(
   projectRoot: string,
   seed: ReplayIdentitySeed,
   child?: number,
-): Promise<{ kind: 'persisted'; attempt: RebaseRecoveryAttempt } | { kind: 'not-applicable' } | { kind: 'failed'; reason: string }> {
+): Promise<
+  | { kind: 'persisted'; attempt: RebaseRecoveryAttempt }
+  | { kind: 'not-applicable' }
+  | { kind: 'failed'; reason: string }
+> {
   let feature: unknown;
   try {
-    feature = (JSON.parse(await readFile(join(projectRoot, '.pipeline', 'conduct-state.json'), 'utf8')) as { feature_desc?: unknown }).feature_desc;
+    feature = (
+      JSON.parse(await readFile(join(projectRoot, '.pipeline', 'conduct-state.json'), 'utf8')) as {
+        feature_desc?: unknown;
+      }
+    ).feature_desc;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'not-applicable' };
     return { kind: 'failed', reason: error instanceof Error ? error.message : String(error) };
@@ -81,11 +97,14 @@ export function matchesRebaseRecoveryAttempt(
   live: RebaseRecoveryAttempt | undefined,
   expected: RebaseRecoveryAttempt | undefined,
 ): boolean {
-  return live !== undefined && expected !== undefined &&
+  return (
+    live !== undefined &&
+    expected !== undefined &&
     live.generation === expected.generation &&
     live.feature === expected.feature &&
     live.child === expected.child &&
     live.preRebaseHead === expected.preRebaseHead &&
     live.mergeBase === expected.mergeBase &&
-    live.target === expected.target;
+    live.target === expected.target
+  );
 }

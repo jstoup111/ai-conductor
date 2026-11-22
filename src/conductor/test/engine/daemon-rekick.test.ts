@@ -1135,11 +1135,15 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     await expect(rekickSweep(deps, SHA_B)).resolves.toEqual({ cleared: [], skipped: ['rebase'] });
 
     const episodeClears: string[] = [];
-    await expect(recoverEpisodeHalts({
-      stampedHalts: async () => ['rebase'],
-      readHaltClass: async () => 'rebase-recovery',
-      clearMarker: async (slug) => { episodeClears.push(slug); },
-    })).resolves.toEqual([]);
+    await expect(
+      recoverEpisodeHalts({
+        stampedHalts: async () => ['rebase'],
+        readHaltClass: async () => 'rebase-recovery',
+        clearMarker: async (slug) => {
+          episodeClears.push(slug);
+        },
+      }),
+    ).resolves.toEqual([]);
 
     // Both daemon retry admission boundaries use this shared operator-action
     // predicate before a progress retry or before clearing for dispatch.
@@ -1156,7 +1160,12 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       version: 1,
       gates: {
         build_review: {
-          count: 1, cumulative: 5, treeHash: null, lastReason: 'cap', priorVerdict: false, resolvedBefore: 0,
+          count: 1,
+          cumulative: 5,
+          treeHash: null,
+          lastReason: 'cap',
+          priorVerdict: false,
+          resolvedBefore: 0,
           capEvidence: { gate: 'build_review', consumed: 5, limit: 5, latestReason: 'cap', haltGeneration: 'g1' },
           resumeAuthorization: { adjustmentId: 'a1', haltGeneration: 'g1', consumed: false },
         },
@@ -1164,14 +1173,16 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     } as never);
     try {
       const clearHalt = vi.fn(async () => 'confirmed' as const);
-      await expect(consumeResumeAuthorizations({
-        listHaltedWorktrees: async () => ['feature'],
-        worktreePath: () => worktree,
-        isOperatorParked: async () => false,
-        readLiveHaltClass: async () => 'rebase-recovery',
-        readLiveHaltGeneration: async () => 'g1',
-        clearHalt,
-      } as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations({
+          listHaltedWorktrees: async () => ['feature'],
+          worktreePath: () => worktree,
+          isOperatorParked: async () => false,
+          readLiveHaltClass: async () => 'rebase-recovery',
+          readLiveHaltGeneration: async () => 'g1',
+          clearHalt,
+        } as never),
+      ).resolves.toEqual([]);
       expect(clearHalt).not.toHaveBeenCalled();
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
     } finally {
@@ -1199,6 +1210,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       'needs-human': 'retain',
       'plan-gap': 'retain',
       'protected-artifact': 'retain',
+      'rebase-recovery': 'retain',
       unclassified: 'retain',
       mechanical: 'retry',
       'kickback-cap': 'retain',
@@ -1773,24 +1785,46 @@ describe('evaluateRebaseRecoveryHalt', () => {
       await rm(join(root, '.git'), { recursive: true, force: true });
 
       const dirtyResults = [
-        { exitCode: 0, stdout: '.git/rebase-merge\n' }, { exitCode: 0, stdout: '.git/rebase-apply\n' },
-        { exitCode: 0, stdout: ' M changed.ts\n' }, { exitCode: 0, stdout: `${'d'.repeat(40)}\n` }, { exitCode: 0 },
+        { exitCode: 0, stdout: '.git/rebase-merge\n' },
+        { exitCode: 0, stdout: '.git/rebase-apply\n' },
+        { exitCode: 0, stdout: ' M changed.ts\n' },
+        { exitCode: 0, stdout: `${'d'.repeat(40)}\n` },
+        { exitCode: 0 },
       ];
-      const firstDirty = await evaluateRebaseRecoveryHalt({ worktreePath: root, feature: 'feature', git: scriptedGit(dirtyResults) });
-      const repeatedDirty = await evaluateRebaseRecoveryHalt({ worktreePath: root, feature: 'feature', git: scriptedGit(dirtyResults) });
+      const firstDirty = await evaluateRebaseRecoveryHalt({
+        worktreePath: root,
+        feature: 'feature',
+        git: scriptedGit(dirtyResults),
+      });
+      const repeatedDirty = await evaluateRebaseRecoveryHalt({
+        worktreePath: root,
+        feature: 'feature',
+        git: scriptedGit(dirtyResults),
+      });
       expect(firstDirty).toEqual({ kind: 'retained', reason: 'checkout is dirty after completed rebase' });
       expect(repeatedDirty).toEqual(firstDirty);
 
-      const mismatchedFeature = await evaluateRebaseRecoveryHalt({ worktreePath: root, feature: 'other', git: scriptedGit([]) });
-      expect(mismatchedFeature).toEqual({ kind: 'retained', reason: 'rebase recovery attempt feature does not match the halted feature' });
+      const mismatchedFeature = await evaluateRebaseRecoveryHalt({
+        worktreePath: root,
+        feature: 'other',
+        git: scriptedGit([]),
+      });
+      expect(mismatchedFeature).toEqual({
+        kind: 'retained',
+        reason: 'rebase recovery attempt feature does not match the halted feature',
+      });
 
       const unverifiable = await evaluateRebaseRecoveryHalt({
         worktreePath: root,
         feature: 'feature',
         git: scriptedGit([
-          { exitCode: 0, stdout: '.git/rebase-merge\n' }, { exitCode: 0, stdout: '.git/rebase-apply\n' },
-          { exitCode: 0, stdout: '' }, { exitCode: 0, stdout: `${'d'.repeat(40)}\n` }, { exitCode: 0 },
-          { exitCode: 2 }, { exitCode: 1 },
+          { exitCode: 0, stdout: '.git/rebase-merge\n' },
+          { exitCode: 0, stdout: '.git/rebase-apply\n' },
+          { exitCode: 0, stdout: '' },
+          { exitCode: 0, stdout: `${'d'.repeat(40)}\n` },
+          { exitCode: 0 },
+          { exitCode: 2 },
+          { exitCode: 1 },
         ]),
       });
       expect(unverifiable).toEqual({ kind: 'retained', reason: 'cannot inspect preserved feature content' });
@@ -1808,42 +1842,65 @@ describe('evaluateRebaseRecoveryHalt', () => {
 
 describe('validateRebaseRecoveryAdmission', () => {
   const attempt = {
-    version: 1 as const, generation: 'g1', feature: 'feature', child: 7,
-    preRebaseHead: 'a'.repeat(40), mergeBase: 'b'.repeat(40), target: 'c'.repeat(40),
+    version: 1 as const,
+    generation: 'g1',
+    feature: 'feature',
+    child: 7,
+    preRebaseHead: 'a'.repeat(40),
+    mergeBase: 'b'.repeat(40),
+    target: 'c'.repeat(40),
   };
   const base = {
-    expected: attempt, liveAttempt: attempt, expectedHead: 'd'.repeat(40), liveHead: 'd'.repeat(40),
-    expectedChild: 7, liveChild: 7, operatorParked: false, independentBlocker: false, liveHaltClass: 'rebase-recovery',
+    expected: attempt,
+    liveAttempt: attempt,
+    expectedHead: 'd'.repeat(40),
+    liveHead: 'd'.repeat(40),
+    expectedChild: 7,
+    liveChild: 7,
+    operatorParked: false,
+    independentBlocker: false,
+    liveHaltClass: 'rebase-recovery',
   };
 
   // Covers: task:3
   it('retains a park or any replaced recovery identity before admission', () => {
-    expect(validateRebaseRecoveryAdmission({ ...base, operatorParked: true })).toEqual(
-      { kind: 'retained', reason: 'feature is operator-parked' },
-    );
-    expect(validateRebaseRecoveryAdmission({ ...base, independentBlocker: true })).toEqual(
-      { kind: 'retained', reason: 'an independent halt blocker is present' },
-    );
-    expect(validateRebaseRecoveryAdmission({ ...base, liveHaltClass: 'needs-human' })).toEqual(
-      { kind: 'retained', reason: 'rebase recovery halt was replaced' },
-    );
-    expect(validateRebaseRecoveryAdmission({ ...base, liveHead: 'e'.repeat(40) })).toEqual(
-      { kind: 'retained', reason: 'completed revision changed before admission' },
-    );
-    expect(validateRebaseRecoveryAdmission({ ...base, liveChild: 8 })).toEqual(
-      { kind: 'retained', reason: 'execution child changed before admission' },
-    );
-    expect(validateRebaseRecoveryAdmission({ ...base, liveAttempt: { ...attempt, generation: 'g2' } })).toEqual(
-      { kind: 'retained', reason: 'rebase recovery attempt changed before admission' },
-    );
+    expect(validateRebaseRecoveryAdmission({ ...base, operatorParked: true })).toEqual({
+      kind: 'retained',
+      reason: 'feature is operator-parked',
+    });
+    expect(validateRebaseRecoveryAdmission({ ...base, independentBlocker: true })).toEqual({
+      kind: 'retained',
+      reason: 'an independent halt blocker is present',
+    });
+    expect(validateRebaseRecoveryAdmission({ ...base, liveHaltClass: 'needs-human' })).toEqual({
+      kind: 'retained',
+      reason: 'rebase recovery halt was replaced',
+    });
+    expect(validateRebaseRecoveryAdmission({ ...base, liveHead: 'e'.repeat(40) })).toEqual({
+      kind: 'retained',
+      reason: 'completed revision changed before admission',
+    });
+    expect(validateRebaseRecoveryAdmission({ ...base, liveChild: 8 })).toEqual({
+      kind: 'retained',
+      reason: 'execution child changed before admission',
+    });
+    expect(validateRebaseRecoveryAdmission({ ...base, liveAttempt: { ...attempt, generation: 'g2' } })).toEqual({
+      kind: 'retained',
+      reason: 'rebase recovery attempt changed before admission',
+    });
     expect(validateRebaseRecoveryAdmission(base)).toEqual({ kind: 'admitted' });
   });
 });
 
 describe('admitVerifiedRebaseRecoveries', () => {
   const attempt = {
-    version: 1 as const, generation: 'g1', feature: 'feature', child: 7,
-    preRebaseHead: 'a'.repeat(40), mergeBase: 'b'.repeat(40), target: 'c'.repeat(40),
+    version: 1 as const,
+    generation: 'g1',
+    feature: 'feature',
+    child: 7,
+    preRebaseHead: 'a'.repeat(40),
+    mergeBase: 'b'.repeat(40),
+    target: 'c'.repeat(40),
   };
 
   // Covers: task:3
@@ -1854,22 +1911,28 @@ describe('admitVerifiedRebaseRecoveries', () => {
     let liveChild = 7;
     let haltClass = 'rebase-recovery';
     const admitted: string[] = [];
-    const acquire = vi.fn(async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }));
+    const acquire = vi.fn(async () => ({
+      kind: 'acquired' as const,
+      lease: { release: async () => ({ ok: true as const }) },
+    }));
 
-    const run = async (duringVerification: () => void) => admitVerifiedRebaseRecoveries({
-      listHaltedWorktrees: async () => ['feature'],
-      worktreePath: () => '/feature',
-      readAttempt: async () => liveAttempt,
-      verify: async () => ({ kind: 'verified' as const }),
-      readHead: async () => liveHead,
-      readExecutionChild: async () => liveChild,
-      isOperatorParked: async () => parked,
-      readHaltClass: async () => haltClass,
-      acquireFeatureDispatchLease: acquire,
-      beforeAdmission: async () => duringVerification(),
-      recheckScheduler: async () => !parked,
-      admit: async (slug) => { admitted.push(slug); },
-    });
+    const run = async (duringVerification: () => void) =>
+      admitVerifiedRebaseRecoveries({
+        listHaltedWorktrees: async () => ['feature'],
+        worktreePath: () => '/feature',
+        readAttempt: async () => liveAttempt,
+        verify: async () => ({ kind: 'verified' as const }),
+        readHead: async () => liveHead,
+        readExecutionChild: async () => liveChild,
+        isOperatorParked: async () => parked,
+        readHaltClass: async () => haltClass,
+        acquireFeatureDispatchLease: acquire,
+        beforeAdmission: async () => duringVerification(),
+        recheckScheduler: async () => !parked,
+        admit: async (slug) => {
+          admitted.push(slug);
+        },
+      });
 
     parked = true;
     await run(() => {});
@@ -1877,42 +1940,61 @@ describe('admitVerifiedRebaseRecoveries', () => {
     expect(acquire).not.toHaveBeenCalled();
 
     parked = false;
-    await run(() => { parked = true; });
+    await run(() => {
+      parked = true;
+    });
     expect(admitted).toEqual([]);
 
     parked = false;
-    await run(() => { haltClass = 'needs-human'; });
+    await run(() => {
+      haltClass = 'needs-human';
+    });
     expect(admitted).toEqual([]);
 
     haltClass = 'rebase-recovery';
-    await run(() => { liveHead = 'e'.repeat(40); });
+    await run(() => {
+      liveHead = 'e'.repeat(40);
+    });
     expect(admitted).toEqual([]);
 
     liveHead = 'd'.repeat(40);
-    await run(() => { liveChild = 8; });
+    await run(() => {
+      liveChild = 8;
+    });
     expect(admitted).toEqual([]);
 
     liveChild = 7;
-    await run(() => { liveAttempt = { ...attempt, generation: 'g2' }; });
+    await run(() => {
+      liveAttempt = { ...attempt, generation: 'g2' };
+    });
     expect(admitted).toEqual([]);
   });
 
   // Covers: task:3
   it('admits only the verified feature and leaves an independent halted feature untouched', async () => {
     const admitted: string[] = [];
-    const attempts = new Map([['one', { ...attempt, feature: 'one', child: undefined }], ['two', { ...attempt, feature: 'two', child: undefined }]]);
+    const attempts = new Map([
+      ['one', { ...attempt, feature: 'one', child: undefined }],
+      ['two', { ...attempt, feature: 'two', child: undefined }],
+    ]);
     const outcome = await admitVerifiedRebaseRecoveries({
       listHaltedWorktrees: async () => ['one', 'two'],
       worktreePath: (slug) => `/${slug}`,
       readAttempt: async (slug) => attempts.get(slug),
-      verify: async (slug) => slug === 'one' ? { kind: 'verified' as const } : { kind: 'retained' as const, reason: 'independent blocker' },
+      verify: async (slug) =>
+        slug === 'one' ? { kind: 'verified' as const } : { kind: 'retained' as const, reason: 'independent blocker' },
       readHead: async () => 'd'.repeat(40),
       readExecutionChild: async () => undefined,
       isOperatorParked: async () => false,
-      readHaltClass: async (slug) => slug === 'one' ? 'rebase-recovery' : 'needs-human',
-      acquireFeatureDispatchLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }),
+      readHaltClass: async (slug) => (slug === 'one' ? 'rebase-recovery' : 'needs-human'),
+      acquireFeatureDispatchLease: async () => ({
+        kind: 'acquired' as const,
+        lease: { release: async () => ({ ok: true as const }) },
+      }),
       recheckScheduler: async () => true,
-      admit: async (slug) => { admitted.push(slug); },
+      admit: async (slug) => {
+        admitted.push(slug);
+      },
     });
     expect(outcome).toEqual(['one']);
     expect(admitted).toEqual(['one']);
@@ -1922,22 +2004,26 @@ describe('admitVerifiedRebaseRecoveries', () => {
   it('consumes one matching recovery exactly once across a restart-shaped second maintenance pass', async () => {
     let haltClass = 'rebase-recovery';
     const events: Array<{ type: 'halt_cleared'; cause: 'verified-rebase' }> = [];
-    const run = () => admitVerifiedRebaseRecoveries({
-      listHaltedWorktrees: async () => ['feature'],
-      worktreePath: () => '/feature',
-      readAttempt: async () => attempt,
-      verify: async () => ({ kind: 'verified' as const }),
-      readHead: async () => 'd'.repeat(40),
-      readExecutionChild: async () => 7,
-      isOperatorParked: async () => false,
-      readHaltClass: async () => haltClass,
-      acquireFeatureDispatchLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }),
-      recheckScheduler: async () => true,
-      admit: async () => {
-        haltClass = '';
-        events.push({ type: 'halt_cleared', cause: 'verified-rebase' });
-      },
-    });
+    const run = () =>
+      admitVerifiedRebaseRecoveries({
+        listHaltedWorktrees: async () => ['feature'],
+        worktreePath: () => '/feature',
+        readAttempt: async () => attempt,
+        verify: async () => ({ kind: 'verified' as const }),
+        readHead: async () => 'd'.repeat(40),
+        readExecutionChild: async () => 7,
+        isOperatorParked: async () => false,
+        readHaltClass: async () => haltClass,
+        acquireFeatureDispatchLease: async () => ({
+          kind: 'acquired' as const,
+          lease: { release: async () => ({ ok: true as const }) },
+        }),
+        recheckScheduler: async () => true,
+        admit: async () => {
+          haltClass = '';
+          events.push({ type: 'halt_cleared', cause: 'verified-rebase' });
+        },
+      });
     await run();
     await run();
     expect(events).toEqual([{ type: 'halt_cleared', cause: 'verified-rebase' }]);

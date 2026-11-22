@@ -6,7 +6,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
-import { readVerdict, validRebaseOperationRecord, writeVerdict, type RebasePreservedCandidate } from '../../src/engine/gate-verdicts.js';
+import {
+  readVerdict,
+  validRebaseOperationRecord,
+  writeVerdict,
+  type RebasePreservedCandidate,
+} from '../../src/engine/gate-verdicts.js';
 import { applyRebaseTransition, completeInterruptedRebaseOperation } from '../../src/engine/rebase-transition.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { classifyRebaseOperation, rebaseOperationPublicationBlocker } from '../../src/engine/gate-code-validity.js';
@@ -55,7 +60,9 @@ async function writeApplyingOperation(
 }
 
 const dirs: string[] = [];
-afterEach(async () => { while (dirs.length) await rm(dirs.pop()!, { recursive: true, force: true }); });
+afterEach(async () => {
+  while (dirs.length) await rm(dirs.pop()!, { recursive: true, force: true });
+});
 
 function selectorSteps(names: readonly StepName[]): StepDefinition[] {
   return names.map((name) => ({ name })) as unknown as StepDefinition[];
@@ -107,8 +114,15 @@ describe('applyRebaseTransition', () => {
     const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
     dirs.push(dir);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done', manual_test: 'skipped', acceptance_specs: 'done' }));
-    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeFile(
+      join(dir, '.pipeline/conduct-state.json'),
+      JSON.stringify({ build_review: 'done', manual_test: 'skipped', acceptance_specs: 'done' }),
+    );
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
     await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 2, reason: 'approved' });
     const startedAt = Date.now();
     const result = await applyRebaseTransition({
@@ -123,7 +137,9 @@ describe('applyRebaseTransition', () => {
       preservedCandidates: [preservedCandidate('prd_audit')],
     });
     expect(result.stateResult).toBe('applied');
-    expect(JSON.parse(await (await import('node:fs/promises')).readFile(join(dir, '.pipeline/conduct-state.json'), 'utf8'))).toMatchObject({ build_review: 'pending', manual_test: 'skipped', acceptance_specs: 'done' });
+    expect(
+      JSON.parse(await (await import('node:fs/promises')).readFile(join(dir, '.pipeline/conduct-state.json'), 'utf8')),
+    ).toMatchObject({ build_review: 'pending', manual_test: 'skipped', acceptance_specs: 'done' });
     const appliedOperation = (await readVerdict(dir, 'rebase'))?.rebaseOperation;
     expect(appliedOperation).toMatchObject({ id: 'operation-1', status: 'applied' });
     expect(appliedOperation?.appliedAt).toSatisfy((value) => Number.isFinite(value) && value >= startedAt);
@@ -146,7 +162,11 @@ describe('applyRebaseTransition', () => {
     dirs.push(dir);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done' }));
-    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
     const input = {
       projectRoot: dir,
       stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
@@ -167,14 +187,36 @@ describe('applyRebaseTransition', () => {
     dirs.push(dir);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done' }));
-    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
-      version: 1, gates: { build_review: { count: 1, cumulative: 2, laps: 3, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 } },
-    }));
-    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeFile(
+      join(dir, '.pipeline/kickback-ledger.json'),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          build_review: {
+            count: 1,
+            cumulative: 2,
+            laps: 3,
+            treeHash: null,
+            lastReason: '',
+            priorVerdict: true,
+            resolvedBefore: 0,
+          },
+        },
+      }),
+    );
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
     const input = {
-      projectRoot: dir, stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
-      operationId: 'credited-operation', replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
-      invalidated: ['build_review'] as const, preserved: [] as const, preservedCandidates: [] as const,
+      projectRoot: dir,
+      stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
+      operationId: 'credited-operation',
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['build_review'] as const,
+      preserved: [] as const,
+      preservedCandidates: [] as const,
     };
     expect((await applyRebaseTransition(input)).convergenceCredit).toEqual({ gate: 'build_review' });
     // A receipted operation performs no second refund, so it claims none.
@@ -191,17 +233,38 @@ describe('applyRebaseTransition', () => {
     dirs.push(dir);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done' }));
-    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
-      version: 1, gates: { build_review: { count: 1, cumulative: 2, laps: 3, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 } },
-    }));
-    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeFile(
+      join(dir, '.pipeline/kickback-ledger.json'),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          build_review: {
+            count: 1,
+            cumulative: 2,
+            laps: 3,
+            treeHash: null,
+            lastReason: '',
+            priorVerdict: true,
+            resolvedBefore: 0,
+          },
+        },
+      }),
+    );
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
 
     const result = await applyRebaseTransition({
       projectRoot: dir,
       stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
       operationId: 'repair-operation',
       replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
-      invalidated: ['build_review'], preserved: [], preservedCandidates: [], cause: 'feature-repair',
+      invalidated: ['build_review'],
+      preserved: [],
+      preservedCandidates: [],
+      cause: 'feature-repair',
     });
 
     expect(result.convergenceCredit).toBeUndefined();
@@ -225,7 +288,7 @@ describe('applyRebaseTransition', () => {
     });
 
     expect(result.stateResult).toBe('refused');
-    expect((await readVerdict(dir, 'rebase'))).toBeNull();
+    expect(await readVerdict(dir, 'rebase')).toBeNull();
   });
 
   it('uses the caller-owned state path instead of assuming the pipeline default', async () => {
@@ -259,11 +322,16 @@ describe('applyRebaseTransition', () => {
     const stateFilePath = join(dir, '.pipeline/children/2/conduct-state.json');
     await mkdir(join(dir, '.pipeline', 'children', '2'), { recursive: true });
     await writeFile(stateFilePath, JSON.stringify({ build_review: 'done' }));
-    await writeVerdict(dir, 'build_review', {
-      satisfied: false,
-      checkedAt: 1,
-      kickback: { from: 'rebase', evidence: 'changed replay' },
-    }, parseChildId(2)!);
+    await writeVerdict(
+      dir,
+      'build_review',
+      {
+        satisfied: false,
+        checkedAt: 1,
+        kickback: { from: 'rebase', evidence: 'changed replay' },
+      },
+      parseChildId(2)!,
+    );
 
     const result = await applyRebaseTransition({
       projectRoot: dir,
@@ -282,8 +350,9 @@ describe('applyRebaseTransition', () => {
       kickback: { from: 'rebase' },
     });
     expect(await readVerdict(dir, 'build_review')).toBeNull();
-    expect(JSON.parse(await (await import('node:fs/promises')).readFile(stateFilePath, 'utf8')))
-      .toMatchObject({ build_review: 'pending' });
+    expect(JSON.parse(await (await import('node:fs/promises')).readFile(stateFilePath, 'utf8'))).toMatchObject({
+      build_review: 'pending',
+    });
   });
 
   it('does not attach an older replay preservation record to a newer ordinary verdict', async () => {
@@ -335,8 +404,16 @@ describe('applyRebaseTransition', () => {
     const statePath = join(dir, '.pipeline/conduct-state.json');
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(statePath, JSON.stringify({ test_suite: 'done', prd_audit: 'pending' }));
-    await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
-    const retainedFailure = { satisfied: false, checkedAt: 1, reason: 'prd-audit found blocking criterion grades: S2.1 (FIXABLE)' };
+    await writeVerdict(dir, 'test_suite', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
+    const retainedFailure = {
+      satisfied: false,
+      checkedAt: 1,
+      reason: 'prd-audit found blocking criterion grades: S2.1 (FIXABLE)',
+    };
     await writeVerdict(dir, 'prd_audit', retainedFailure);
 
     const result = await applyRebaseTransition({
@@ -350,7 +427,10 @@ describe('applyRebaseTransition', () => {
     });
 
     expect(result.stateResult).toBe('applied');
-    expect((await readVerdict(dir, 'rebase'))?.rebaseOperation).toMatchObject({ id: 'retained-failure-operation', status: 'applied' });
+    expect((await readVerdict(dir, 'rebase'))?.rebaseOperation).toMatchObject({
+      id: 'retained-failure-operation',
+      status: 'applied',
+    });
     expect(await readVerdict(dir, 'prd_audit')).toEqual(retainedFailure);
   });
 
@@ -360,7 +440,11 @@ describe('applyRebaseTransition', () => {
     const statePath = join(dir, '.pipeline/conduct-state.json');
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(statePath, JSON.stringify({ test_suite: 'done' }));
-    await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeVerdict(dir, 'test_suite', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
     const store = createFilesystemConductStateStore(statePath);
     const applyBatch = store.applyBatch.bind(store);
     store.applyBatch = async (batch) => {
@@ -369,9 +453,13 @@ describe('applyRebaseTransition', () => {
     };
 
     const result = await applyRebaseTransition({
-      projectRoot: dir, stateStore: store, operationId: 'raced-operation',
+      projectRoot: dir,
+      stateStore: store,
+      operationId: 'raced-operation',
       replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
-      invalidated: ['test_suite'], preserved: [], preservedCandidates: [],
+      invalidated: ['test_suite'],
+      preserved: [],
+      preservedCandidates: [],
     });
 
     expect(result.stateResult).toBe('refused');
@@ -385,7 +473,9 @@ describe('applyRebaseTransition', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(statePath, JSON.stringify({ build_review: 'done' }));
     await writeVerdict(dir, 'build_review', {
-      satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' },
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
     });
     const store = createFilesystemConductStateStore(statePath);
     const applyBatch = store.applyBatch.bind(store);
@@ -397,13 +487,19 @@ describe('applyRebaseTransition', () => {
     };
 
     const result = await applyRebaseTransition({
-      projectRoot: dir, stateStore: store, operationId: 'conflicted-operation',
+      projectRoot: dir,
+      stateStore: store,
+      operationId: 'conflicted-operation',
       replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
-      invalidated: ['build_review'], preserved: [], preservedCandidates: [],
+      invalidated: ['build_review'],
+      preserved: [],
+      preservedCandidates: [],
     });
 
     expect(result.stateResult).toBe('refused');
-    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({ build_review: 'in_progress' });
+    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({
+      build_review: 'in_progress',
+    });
     expect((await readVerdict(dir, 'rebase'))?.rebaseOperation?.status).not.toBe('applied');
   });
 });
@@ -431,7 +527,11 @@ describe('completeInterruptedRebaseOperation', () => {
         operationId: 'stamped-before-applied',
       },
     });
-    await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeVerdict(dir, 'test_suite', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
     await writeApplyingOperation(dir, {
       id: 'stamped-before-applied',
       preserved: ['build_review'],
@@ -446,7 +546,10 @@ describe('completeInterruptedRebaseOperation', () => {
       downstreamSteps: [],
     });
 
-    expect(result).toMatchObject({ stateResult: 'applied', operation: { id: 'stamped-before-applied', status: 'applied' } });
+    expect(result).toMatchObject({
+      stateResult: 'applied',
+      operation: { id: 'stamped-before-applied', status: 'applied' },
+    });
     expect((await readVerdict(dir, 'build_review'))?.preservation?.operationId).toBe('stamped-before-applied');
     await expect(classifyRebaseOperation(dir)).resolves.toEqual({ kind: 'clear' });
   });
@@ -495,11 +598,20 @@ describe('completeInterruptedRebaseOperation', () => {
     const statePath = join(dir, '.pipeline/conduct-state.json');
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(statePath, JSON.stringify({ test_suite: 'done', build_review: 'done', prd_audit: 'done' }));
-    await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeVerdict(dir, 'test_suite', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
     await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 2, reason: 'approved' });
     await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 3, reason: 'approved' });
     const evidence = [preservedCandidate('build_review', 2), preservedCandidate('prd_audit', 3)];
-    await writeApplyingOperation(dir, { id: 'complete-matching', preserved: ['build_review', 'prd_audit'], invalidated: ['test_suite'], evidence });
+    await writeApplyingOperation(dir, {
+      id: 'complete-matching',
+      preserved: ['build_review', 'prd_audit'],
+      invalidated: ['test_suite'],
+      evidence,
+    });
 
     const result = await completeInterruptedRebaseOperation({
       projectRoot: dir,
@@ -514,7 +626,9 @@ describe('completeInterruptedRebaseOperation', () => {
     for (const gate of ['build_review', 'prd_audit'] as const) {
       expect((await readVerdict(dir, gate))?.preservation?.operationId).toBe('complete-matching');
     }
-    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({ test_suite: 'pending' });
+    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({
+      test_suite: 'pending',
+    });
     expect((await readVerdict(dir, 'test_suite'))?.satisfied).toBe(false);
     await expect(classifyRebaseOperation(dir)).resolves.toEqual({ kind: 'clear' });
   });
@@ -525,10 +639,19 @@ describe('completeInterruptedRebaseOperation', () => {
     const statePath = join(dir, '.pipeline/conduct-state.json');
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(statePath, JSON.stringify({ build_review: 'done', prd_audit: 'done' }));
-    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
     await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 3, reason: 'later judgement' });
     const evidence = [preservedCandidate('prd_audit', 2)];
-    await writeApplyingOperation(dir, { id: 'complete-prd-rerun', preserved: ['prd_audit'], invalidated: ['build_review'], evidence });
+    await writeApplyingOperation(dir, {
+      id: 'complete-prd-rerun',
+      preserved: ['prd_audit'],
+      invalidated: ['build_review'],
+      evidence,
+    });
 
     const result = await completeInterruptedRebaseOperation({
       projectRoot: dir,
@@ -539,9 +662,11 @@ describe('completeInterruptedRebaseOperation', () => {
     });
 
     expect(result.operation.transition).toMatchObject({ preserved: [], invalidated: ['build_review', 'prd_audit'] });
-    expect((await readVerdict(dir, 'prd_audit'))).toMatchObject({ satisfied: false, kickback: { from: 'rebase' } });
+    expect(await readVerdict(dir, 'prd_audit')).toMatchObject({ satisfied: false, kickback: { from: 'rebase' } });
     expect((await readVerdict(dir, 'prd_audit'))?.preservation).toBeUndefined();
-    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({ prd_audit: 'pending' });
+    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({
+      prd_audit: 'pending',
+    });
     await expect(classifyRebaseOperation(dir)).resolves.toEqual({ kind: 'clear' });
   });
 
@@ -551,10 +676,19 @@ describe('completeInterruptedRebaseOperation', () => {
     const statePath = join(dir, '.pipeline/conduct-state.json');
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(statePath, JSON.stringify({ build_review: 'done', test_suite: 'done' }));
-    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
     await writeVerdict(dir, 'test_suite', { satisfied: true, checkedAt: 3, reason: 'later suite result' });
     const evidence = [preservedCandidate('test_suite', 2)];
-    await writeApplyingOperation(dir, { id: 'complete-suite-reverify', preserved: ['test_suite'], invalidated: ['build_review'], evidence });
+    await writeApplyingOperation(dir, {
+      id: 'complete-suite-reverify',
+      preserved: ['test_suite'],
+      invalidated: ['build_review'],
+      evidence,
+    });
 
     const result = await completeInterruptedRebaseOperation({
       projectRoot: dir,
@@ -567,10 +701,16 @@ describe('completeInterruptedRebaseOperation', () => {
       },
     });
 
-    expect(result.operation.transition).toMatchObject({ preserved: [], invalidated: ['build_review'], reverified: ['test_suite'] });
-    expect((await readVerdict(dir, 'test_suite'))).toMatchObject({ satisfied: true });
+    expect(result.operation.transition).toMatchObject({
+      preserved: [],
+      invalidated: ['build_review'],
+      reverified: ['test_suite'],
+    });
+    expect(await readVerdict(dir, 'test_suite')).toMatchObject({ satisfied: true });
     expect((await readVerdict(dir, 'test_suite'))?.preservation).toBeUndefined();
-    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({ test_suite: 'done' });
+    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({
+      test_suite: 'done',
+    });
     await expect(classifyRebaseOperation(dir)).resolves.toEqual({ kind: 'clear' });
   });
 
@@ -579,7 +719,10 @@ describe('completeInterruptedRebaseOperation', () => {
     dirs.push(dir);
     const statePath = join(dir, '.pipeline/conduct-state.json');
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(statePath, JSON.stringify({ build_review: 'done', prd_audit: 'done', test_suite: 'done', finish: 'done' }));
+    await writeFile(
+      statePath,
+      JSON.stringify({ build_review: 'done', prd_audit: 'done', test_suite: 'done', finish: 'done' }),
+    );
     for (const gate of ['build_review', 'prd_audit', 'test_suite'] as const) {
       await writeVerdict(dir, gate, { satisfied: true, checkedAt: 1, reason: 'pre-rebase pass' });
     }
@@ -605,12 +748,14 @@ describe('completeInterruptedRebaseOperation', () => {
     }
     expect(await rebaseOperationPublicationBlocker(dir)).toBeNull();
     const verdicts = await readAllVerdicts(dir);
-    expect(earliestUnsatisfiedGateIndex({
-      steps: selectorSteps(['build_review', 'test_suite', 'prd_audit', 'finish']),
-      state,
-      verdicts,
-      regionStart: 'build_review',
-    })).toBe(0);
+    expect(
+      earliestUnsatisfiedGateIndex({
+        steps: selectorSteps(['build_review', 'test_suite', 'prd_audit', 'finish']),
+        state,
+        verdicts,
+        regionStart: 'build_review',
+      }),
+    ).toBe(0);
   });
 
   it('fails closed for a provisional preparing record across every downstream gate', async () => {
@@ -649,11 +794,13 @@ describe('completeInterruptedRebaseOperation', () => {
     }
     expect(await rebaseOperationPublicationBlocker(dir)).toBeNull();
     const verdicts = await readAllVerdicts(dir);
-    expect(earliestUnsatisfiedGateIndex({
-      steps: selectorSteps(downstreamSteps),
-      state,
-      verdicts,
-      regionStart: 'build_review',
-    })).toBe(0);
+    expect(
+      earliestUnsatisfiedGateIndex({
+        steps: selectorSteps(downstreamSteps),
+        state,
+        verdicts,
+        regionStart: 'build_review',
+      }),
+    ).toBe(0);
   });
 });

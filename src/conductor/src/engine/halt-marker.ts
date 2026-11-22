@@ -73,9 +73,7 @@ export function isOperatorActionHalt(
 }
 
 /** True when a newly written step HALT has a class that carries its body as a reason. */
-function isStepWrittenHumanHalt(
-  haltClass: HaltDisposition,
-): haltClass is 'needs-human' | typeof PLAN_GAP_HALT_CLASS {
+function isStepWrittenHumanHalt(haltClass: HaltDisposition): haltClass is 'needs-human' | typeof PLAN_GAP_HALT_CLASS {
   return haltClass === 'needs-human' || haltClass === PLAN_GAP_HALT_CLASS;
 }
 
@@ -89,10 +87,7 @@ export type HaltMarkerWriteResult =
 // recurse into the same journal and produce a second halt record.
 const haltRecoveryInProgress = new Set<string>();
 
-async function recoverRestackBeforeHalt(
-  projectRoot: string,
-  events: ConductorEventEmitter | undefined,
-): Promise<void> {
+async function recoverRestackBeforeHalt(projectRoot: string, events: ConductorEventEmitter | undefined): Promise<void> {
   const slug = basename(projectRoot);
   const key = `${projectRoot}\0${slug}`;
   if (haltRecoveryInProgress.has(key)) return;
@@ -100,8 +95,9 @@ async function recoverRestackBeforeHalt(
   haltRecoveryInProgress.add(key);
   try {
     const read = await readRestackJournal(projectRoot, slug);
-    if (read.kind !== 'journal' || await isJournalOwnerAlive(read.journal.owner)) return;
-    if (read.journal.state !== 'ready' && read.journal.state !== 'moved' && read.journal.state !== 'rolling-back') return;
+    if (read.kind !== 'journal' || (await isJournalOwnerAlive(read.journal.owner))) return;
+    if (read.journal.state !== 'ready' && read.journal.state !== 'moved' && read.journal.state !== 'rolling-back')
+      return;
     await recoverRestackJournal({ worktree: projectRoot, slug, events, target: 'synced' });
   } catch {
     // The outer marker is the one durable failure signal.  Targeted recovery
@@ -177,7 +173,9 @@ async function writeHaltRecord(
   try {
     const result = await recordHalt(projectRoot, input, recordRemote);
     if (result.kind === 'written') {
-      await events?.emit({ type: 'halt_record_written', path: result.path ?? path, slug: input.slug, haltClass }).catch(() => {});
+      await events
+        ?.emit({ type: 'halt_record_written', path: result.path ?? path, slug: input.slug, haltClass })
+        .catch(() => {});
     } else if (result.kind === 'failed') {
       await events?.emit({ type: 'halt_record_write_failed', path, reason: result.reason }).catch(() => {});
     } else if (result.kind === 'pushFailed') {
@@ -189,17 +187,13 @@ async function writeHaltRecord(
   }
 }
 
-async function haltRecordInput(
-  projectRoot: string,
-  haltBody: string,
-  haltClass: HaltClass,
-): Promise<HaltRecordInput> {
+async function haltRecordInput(projectRoot: string, haltBody: string, haltClass: HaltClass): Promise<HaltRecordInput> {
   const slug = basename(projectRoot);
   const [branch, headSha, phaseMarker, activeChild] = await Promise.all([
     gitValue(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']),
     gitValue(projectRoot, ['rev-parse', 'HEAD']),
     readFile(join(projectRoot, '.pipeline', 'phase-active'), 'utf8').catch(() => ''),
-    resolveActiveChild(projectRoot, slug).catch(() => ({ kind: 'no-child' } as const)),
+    resolveActiveChild(projectRoot, slug).catch(() => ({ kind: 'no-child' }) as const),
   ]);
   const fields = new Map(
     phaseMarker.split('\n').flatMap((line) => {
@@ -338,7 +332,8 @@ export async function readHaltSidecarClassification(worktreePath: string): Promi
       contents === PROTECTED_ARTIFACT_HALT_CLASS ||
       contents === PLAN_GAP_HALT_CLASS ||
       contents === STACK_TIP_DIVERGED_HALT_CLASS
-    ) return contents;
+    )
+      return contents;
     return 'unclassified';
   } catch {
     return 'unclassified';

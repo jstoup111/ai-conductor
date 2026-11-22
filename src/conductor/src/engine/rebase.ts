@@ -1348,7 +1348,14 @@ export async function writeRebaseOutcomeHalt(
     const haltClass = matchesRebaseRecoveryAttempt(attempt, outcome.recoveryAttempt)
       ? 'rebase-recovery'
       : 'needs-human';
-    return writeRebaseHalt(projectRoot, outcome.conflicts, outcome.reason, events, outcome.resumeShape ?? 'paused-rebase', haltClass);
+    return writeRebaseHalt(
+      projectRoot,
+      outcome.conflicts,
+      outcome.reason,
+      events,
+      outcome.resumeShape ?? 'paused-rebase',
+      haltClass,
+    );
   }
   const quarantine = outcome.quarantine
     ? `\nQuarantined files: ${outcome.quarantine.paths.join(', ')}\nQuarantine directory: ${outcome.quarantine.directory}\n`
@@ -1694,9 +1701,7 @@ export async function performRebase(
       replaySeed,
     };
   }
-  const recoveryAttempt = persistedRecoveryAttempt.kind === 'persisted'
-    ? persistedRecoveryAttempt.attempt
-    : undefined;
+  const recoveryAttempt = persistedRecoveryAttempt.kind === 'persisted' ? persistedRecoveryAttempt.attempt : undefined;
   const { preRebaseHead: preTree, mergeBase, target } = replaySeed;
   const attachReplayIdentity = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
     if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;
