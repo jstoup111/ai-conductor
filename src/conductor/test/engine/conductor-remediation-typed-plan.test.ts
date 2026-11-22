@@ -834,6 +834,13 @@ describe('Conductor typed remediation-plan admission', () => {
     expect(ledger.outcome).toMatchObject({ kind: 'halt', haltClass: 'mechanical' });
   });
 
+  // Covers: task:9
+  it('classes a missing as-built typed verdict as mechanical', async () => {
+    const result = await fixture('codex', undefined, 2, { source: 'as-built' });
+    expect(result.outcome).toMatchObject({ kind: 'halt', haltClass: 'mechanical' });
+    expect(result.provider.invocationCount).toBe(0);
+  });
+
   // Covers: task:21
   it('retains the build-stall question verbatim on a mechanical capability halt', async () => {
     const question = 'Which verified input should unblock this stalled build?';
