@@ -811,6 +811,19 @@ describe('Conductor typed remediation-plan admission', () => {
     await expect(readdir(join(result.root, '.pipeline', 'remediation-history'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  // Covers: task:9
+  it('uses preparation-fault causes for needs-human versus mechanical remediation halts', async () => {
+    const unreadable = await fixture('codex', [{ kind: 'structured', finalStructuredResult: asBuiltOutput() }], 2, {
+      source: 'as-built', asBuiltRound: true, malformedCaseStore: true,
+    });
+    expect(unreadable.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+    const mechanical = await fixture('codex', undefined, 2, {
+      remediationProjectionDependencies: { filesystem: { mkdir, rename, writeFile: async () => { throw new Error('history failure'); } } },
+    });
+    expect(mechanical.provider.invocationCount).toBe(0);
+    expect(mechanical.outcome).toMatchObject({ kind: 'halt', haltClass: 'mechanical' });
+  });
+
   // Covers: task:21
   it('retains the build-stall question verbatim on a mechanical capability halt', async () => {
     const question = 'Which verified input should unblock this stalled build?';
