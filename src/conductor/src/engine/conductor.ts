@@ -8323,7 +8323,7 @@ export class Conductor {
             // `activateChildRegionStateForResume` below renders the existing
             // refusal after stack preflight has had first claim on recovery.
           } else {
-          // Resume derives its entry index before the ordinary loop can bind
+            // Resume derives its entry index before the ordinary loop can bind
             // a child. Bind the same settled-leaf transition as the live exit
             // and markerless reconciliation before the ordinary resume
             // selection, so its verdict and tree-attestation clamps choose
