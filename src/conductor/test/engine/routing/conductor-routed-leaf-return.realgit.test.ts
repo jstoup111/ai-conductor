@@ -397,7 +397,11 @@ describe('Conductor routed final leaf return (real local Git)', () => {
   // Covers: task:3
   async function assertPendingLeafGate(
     expected: StepName,
-    leafState: Pick<ConductState, 'acceptance_specs' | 'build' | 'test_suite' | 'build_review'>,
+    leafState: Partial<Pick<ConductState, 'acceptance_specs' | 'build' | 'test_suite' | 'build_review'>>,
+    options: {
+      readonly retainOldRootRegionSuccess?: boolean;
+      readonly unsatisfiedLeafVerdict?: StepName;
+    } = {},
   ): Promise<void> {
     const { subject, statePath, config } = await fixture();
     const git = makeGitRunner(subject.repo);
@@ -414,13 +418,22 @@ describe('Conductor routed final leaf return (real local Git)', () => {
 
     const root = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
     Object.assign(root, { feature_desc: 'demo', complexity_tier: 'M', manual_test: 'pending' });
-    delete root.acceptance_specs;
-    delete root.build;
-    delete root.test_suite;
-    delete root.build_review;
+    if (!options.retainOldRootRegionSuccess) {
+      delete root.acceptance_specs;
+      delete root.build;
+      delete root.test_suite;
+      delete root.build_review;
+    }
     await writeState(statePath, root);
     const leaf = parseChildId(2)!;
     await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', leaf), leafState);
+    if (options.unsatisfiedLeafVerdict !== undefined) {
+      await writeVerdict(subject.repo, options.unsatisfiedLeafVerdict, {
+        satisfied: false,
+        reason: 'authoritative leaf validation is negative',
+        checkedAt: Date.now(),
+      }, leaf);
+    }
 
     const dispatched: StepName[] = [];
     let stop = false;
@@ -453,6 +466,18 @@ describe('Conductor routed final leaf return (real local Git)', () => {
   it('runs pending leaf build_review before whole-feature validation on resumed return', async () => {
     await assertPendingLeafGate('build_review', {
       acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'pending',
+    });
+  });
+
+  // Covers: task:6
+  it.each([
+    ['a stale child suite status', { acceptance_specs: 'done', build: 'done', test_suite: 'stale', build_review: 'done' }, {}],
+    ['a negative child suite verdict', { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, { unsatisfiedLeafVerdict: 'test_suite' as StepName }],
+    ['missing child suite completion', { acceptance_specs: 'done', build: 'done', build_review: 'done' }, {}],
+  ] as const)('does not let old root success bypass %s on a settled leaf return', async (_caseName, leafState, options) => {
+    await assertPendingLeafGate('test_suite', leafState, {
+      retainOldRootRegionSuccess: true,
+      ...options,
     });
   });
 
