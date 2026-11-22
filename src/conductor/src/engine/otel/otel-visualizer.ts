@@ -58,9 +58,7 @@ class WarnOnceSpanExporter implements SpanExporter {
   export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
     this.inner.export(spans, (result) => {
       if (result.code !== ExportResultCode.SUCCESS) {
-        this.warnOnce(
-          `[otel] span export failed: ${result.error?.message ?? 'unknown error'}`,
-        );
+        this.warnOnce(`[otel] span export failed: ${result.error?.message ?? 'unknown error'}`);
       }
       resultCallback(result);
     });
@@ -164,7 +162,6 @@ export class OtelVisualizer implements VisualizerPlugin {
   private sigHandler: (() => void) | null = null;
 
   constructor(config: ResolvedOtelConfig, ctx: OtelVisualizerContext) {
-
     // Resolve exporters: injected (tests) > transport (production).
     let spanExporter: SpanExporter;
     if (ctx.spanExporter) {
@@ -208,10 +205,8 @@ export class OtelVisualizer implements VisualizerPlugin {
       feature: ctx.feature,
       project: ctx.project,
     };
-    this.attributes = config.enabled ? config.attributes ?? {} : {};
-    this.provenance = config.enabled
-      ? config.provenance
-      : { commit: true, pr: true, issue: true, feature: true };
+    this.attributes = config.enabled ? (config.attributes ?? {}) : {};
+    this.provenance = config.enabled ? config.provenance : { commit: true, pr: true, issue: true, feature: true };
     if (config.enabled && config.projectName) this.projectNameOverride = config.projectName;
     if (!ctx.resolvedWarningsHandled && config.enabled && config.attributeWarnings?.length) {
       ctx.onWarning?.(`[otel] ${config.attributeWarnings.join(' ')}`);
@@ -295,17 +290,13 @@ export class OtelVisualizer implements VisualizerPlugin {
     try {
       const shutdownCompleted = await this.awaitTracerShutdown();
       if (!shutdownCompleted) {
-        this.warnOnce?.(
-          `[otel] tracer shutdown timed out after ${this.exportTimeoutMillis}ms`,
-        );
+        this.warnOnce?.(`[otel] tracer shutdown timed out after ${this.exportTimeoutMillis}ms`);
       }
     } catch (err) {
       // Exporter-wrapper callback path already calls warnOnce on FAILED results.
       // This catch handles the rare case where shutdown itself throws; the
       // shared warnOnce flag ensures total warning count stays bounded to ONE.
-      this.warnOnce?.(
-        `[otel] tracer shutdown error: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      this.warnOnce?.(`[otel] tracer shutdown error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

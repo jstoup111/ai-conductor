@@ -65,9 +65,18 @@ export interface VisualizerStartContext {
 export interface ConductorEventBus {
   emit(event: import('./events.js').ConductorEvent): Promise<void>;
   emitOrThrow(event: import('./events.js').ConductorEvent): Promise<void>;
-  on(type: import('./events.js').ConductorEvent['type'], handler: (event: import('./events.js').ConductorEvent) => void | Promise<void>): void;
-  off(type: import('./events.js').ConductorEvent['type'], handler: (event: import('./events.js').ConductorEvent) => void | Promise<void>): void;
-  once(type: import('./events.js').ConductorEvent['type'], handler: (event: import('./events.js').ConductorEvent) => void | Promise<void>): void;
+  on(
+    type: import('./events.js').ConductorEvent['type'],
+    handler: (event: import('./events.js').ConductorEvent) => void | Promise<void>,
+  ): void;
+  off(
+    type: import('./events.js').ConductorEvent['type'],
+    handler: (event: import('./events.js').ConductorEvent) => void | Promise<void>,
+  ): void;
+  once(
+    type: import('./events.js').ConductorEvent['type'],
+    handler: (event: import('./events.js').ConductorEvent) => void | Promise<void>,
+  ): void;
   waitFor(type: import('./events.js').ConductorEvent['type']): Promise<import('./events.js').ConductorEvent>;
 }
 
@@ -100,10 +109,7 @@ export interface VisualizerPlugin {
    * Attach to the event emitter. Called once at run start.
    * Implementations must only call emitter.on() — never modify emission sites.
    */
-  start(
-    emitter: ConductorEventBus,
-    context: VisualizerStartContext,
-  ): void;
+  start(emitter: ConductorEventBus, context: VisualizerStartContext): void;
   /** Detach from the emitter and flush pending export data. Returns when flush completes. */
   stop(): Promise<void>;
 }
@@ -115,7 +121,10 @@ export type VisualizerFactory = (context: VisualizerFactoryContext) => Visualize
  * Error thrown when plugin manifest validation fails.
  */
 export class PluginManifestError extends Error {
-  constructor(message: string, public readonly filePath?: string) {
+  constructor(
+    message: string,
+    public readonly filePath?: string,
+  ) {
     super(message);
     this.name = 'PluginManifestError';
   }
@@ -125,7 +134,11 @@ export class PluginManifestError extends Error {
  * Error thrown when plugin harness version requirement doesn't match.
  */
 export class PluginVersionError extends Error {
-  constructor(message: string, public readonly harnessVersion: string, public readonly requiredRange: string) {
+  constructor(
+    message: string,
+    public readonly harnessVersion: string,
+    public readonly requiredRange: string,
+  ) {
     super(message);
     this.name = 'PluginVersionError';
   }
@@ -145,7 +158,11 @@ export class PluginLoadError extends Error {
  * Error thrown when requested plugin is not found in registry.
  */
 export class PluginNotFoundError extends Error {
-  constructor(message: string, public readonly kind: PluginKind, public override readonly name: string) {
+  constructor(
+    message: string,
+    public readonly kind: PluginKind,
+    public override readonly name: string,
+  ) {
     super(message);
     this.name = 'PluginNotFoundError';
   }

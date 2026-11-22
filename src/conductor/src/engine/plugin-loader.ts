@@ -23,7 +23,7 @@ import { createOtelVisualizer } from './otel/create-otel-visualizer.js';
  */
 async function loadPluginModule(
   pluginDir: string,
-  manifest: { kind: string; name: string; entrypoint: string }
+  manifest: { kind: string; name: string; entrypoint: string },
 ): Promise<unknown> {
   const entrypointPath = join(pluginDir, manifest.entrypoint);
 
@@ -34,9 +34,7 @@ async function loadPluginModule(
     // Task 10: Validate interface shape based on kind
     if (manifest.kind === 'llm_provider') {
       if (typeof plugin.invoke !== 'function') {
-        throw new PluginLoadError(
-          `Plugin ${manifest.name} missing required method: invoke`
-        );
+        throw new PluginLoadError(`Plugin ${manifest.name} missing required method: invoke`);
       }
     }
 
@@ -45,9 +43,7 @@ async function loadPluginModule(
     if (err instanceof PluginLoadError) {
       throw err;
     }
-    throw new PluginLoadError(
-      `Failed to load plugin ${manifest.name} from ${entrypointPath}: ${String(err)}`
-    );
+    throw new PluginLoadError(`Failed to load plugin ${manifest.name} from ${entrypointPath}: ${String(err)}`);
   }
 }
 
@@ -67,10 +63,7 @@ async function loadPluginModule(
  * An OBJECT entrypoint is its own product, so its `name`/`start`/`stop` shape is
  * checked here and a defect raises `PluginLoadError` naming plugin and member.
  */
-function validateVisualizerEntrypoint(
-  plugin: unknown,
-  manifest: { name: string },
-): VisualizerFactory {
+function validateVisualizerEntrypoint(plugin: unknown, manifest: { name: string }): VisualizerFactory {
   if (typeof plugin === 'function') return plugin as VisualizerFactory;
 
   const visualizer = plugin as VisualizerPlugin | undefined;
@@ -99,11 +92,7 @@ function validateVisualizerEntrypoint(
  * @param projectDir Path to project-local plugins directory (e.g., .ai-conductor/plugins/)
  * @param registry PluginRegistry to register discovered plugins into
  */
-export async function discoverPlugins(
-  globalDir: string,
-  projectDir: string,
-  registry: PluginRegistry
-): Promise<void> {
+export async function discoverPlugins(globalDir: string, projectDir: string, registry: PluginRegistry): Promise<void> {
   // Load global plugins first
   if (existsSync(globalDir)) {
     const entries = readdirSync(globalDir, { withFileTypes: true });
@@ -171,7 +160,7 @@ export async function discoverPlugins(
           if (globalPlugins.includes(manifest.name)) {
             console.debug(
               `Plugin shadowing: kind=${manifest.kind}, name=${manifest.name}; ` +
-              `project-local at ${projectDir} overrides global at ${globalDir}`
+                `project-local at ${projectDir} overrides global at ${globalDir}`,
             );
           }
 
@@ -204,12 +193,14 @@ export function registerBuiltins(
 ): void {
   // Older engine callers supplied UI construction arguments here. Keep them
   // harmless while downstream callers move to entry-level terminal composition.
-  const timeout = typeof timeoutOrLegacy === 'number'
-    ? timeoutOrLegacy
-    : legacy.find((argument): argument is number => typeof argument === 'number') ?? 10;
-  const installedProviders = installed instanceof Set
-    ? installed
-    : legacy.find((argument): argument is ReadonlySet<BuiltInProviderId> => argument instanceof Set);
+  const timeout =
+    typeof timeoutOrLegacy === 'number'
+      ? timeoutOrLegacy
+      : (legacy.find((argument): argument is number => typeof argument === 'number') ?? 10);
+  const installedProviders =
+    installed instanceof Set
+      ? installed
+      : legacy.find((argument): argument is ReadonlySet<BuiltInProviderId> => argument instanceof Set);
   const codexDoctorTimeoutMs = timeout * 1_000;
   if (!Number.isFinite(codexDoctorTimeoutMs) || codexDoctorTimeoutMs <= 0) {
     throw new Error('codex_doctor_timeout_seconds must be a finite positive number representable in milliseconds');
@@ -233,11 +224,11 @@ export function registerBuiltins(
         metrics: ctx.startContext.metrics,
         installProcessSignalHandlers: ctx.startContext.installProcessSignalHandlers,
         spanExporter: ctx.otelSpanExporter,
-        env: (ctx.startContext as import('../types/plugin.js').VisualizerStartContext & { env?: NodeJS.ProcessEnv }).env,
+        env: (ctx.startContext as import('../types/plugin.js').VisualizerStartContext & { env?: NodeJS.ProcessEnv })
+          .env,
         resolvedWarningsHandled: ctx.resolvedWarningsHandled,
       },
       ctx.emitter as import('./conductor-event-emitter.js').ConductorEventEmitter,
     );
   });
-
 }

@@ -1560,7 +1560,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // One daemon process owns both dispatcher root mutations and every
   // in-process self-host executor's fingerprint window.
   const liveBoundaryCoordinator = isSelfHost ? new LiveBoundaryCoordinator() : undefined;
-  const coordinatedRootMutation = <T>(mutation: () => Promise<T>, deferLog: (reason: string) => void): Promise<T> =>
+  const coordinatedRootMutation = <T,>(mutation: () => Promise<T>, deferLog: (reason: string) => void): Promise<T> =>
     liveBoundaryCoordinator ? liveBoundaryCoordinator.runMutation(mutation, deferLog) : mutation();
   if (isSelfHost) {
     log('self-host mode active — harness self-build guardrails enabled for this daemon.');

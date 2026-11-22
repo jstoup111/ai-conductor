@@ -55,7 +55,7 @@ vi.mock('../../src/engine/otel/wire.js', async (importOriginal) => {
         const slug = context.feature;
         if (slug === undefined) return null;
         const eventTypes = ['step_interrupted', 'loop_halt', 'feature_complete'] as const;
-        const listeners: Array<[typeof eventTypes[number], (event: { type: string }) => void]> = [];
+        const listeners: Array<[(typeof eventTypes)[number], (event: { type: string }) => void]> = [];
         for (const type of eventTypes) {
           events.on(type, (event) => {
             const seen = seams.featureBusEvents.get(slug) ?? [];
@@ -81,7 +81,9 @@ vi.mock('../../src/engine/otel/wire.js', async (importOriginal) => {
         // Match the production visualizer's default: absent an explicit
         // daemon-owned lifecycle, SIGTERM stops and detaches this subscriber.
         if (context.installProcessSignalHandlers !== false) {
-          signalHandler = () => { void stop(); };
+          signalHandler = () => {
+            void stop();
+          };
           process.on('SIGTERM', signalHandler);
         }
         return {
