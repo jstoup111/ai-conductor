@@ -401,8 +401,9 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     options: {
       readonly retainOldRootRegionSuccess?: boolean;
       readonly unsatisfiedLeafVerdict?: StepName;
+      readonly failExpectedGate?: boolean;
     } = {},
-  ): Promise<void> {
+  ): Promise<{ readonly dispatched: readonly StepName[]; readonly subject: SweepRepository; readonly statePath: string; readonly leaf: number }> {
     const { subject, statePath, config } = await fixture();
     const git = makeGitRunner(subject.repo);
     const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
@@ -446,6 +447,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
         dispatched.push(step);
         expect((conductor as unknown as { activeRegionChild?: number }).activeRegionChild).toBe(leaf);
         stop = true;
+        if (options.failExpectedGate) return { success: false, output: 'injected leaf validation failure' };
         return { success: true };
       } },
     });
@@ -455,6 +457,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect(dispatched).toEqual([expected]);
     expect(dispatched).not.toContain('manual_test');
     expect(dispatched).not.toContain('build');
+    return { dispatched, subject, statePath, leaf };
   }
 
   it('runs pending leaf test_suite before whole-feature validation on resumed return', async () => {
@@ -467,6 +470,20 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     await assertPendingLeafGate('build_review', {
       acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'pending',
     });
+  });
+
+  // Covers: task:7
+  it('keeps a failed leaf validation pending before whole-feature validation', async () => {
+    const { subject, statePath, leaf } = await assertPendingLeafGate('test_suite', {
+      acceptance_specs: 'done', build: 'done', test_suite: 'pending', build_review: 'done',
+    }, { failExpectedGate: true });
+
+    const childState = await readState(pipelinePathFor(subject.repo, 'conduct-state.json', parseChildId(leaf)!));
+    if (!childState.ok) throw new Error('leaf state is unreadable');
+    expect(childState.value.test_suite).toBe('pending');
+    const rootState = await readState(statePath);
+    if (!rootState.ok) throw new Error('root state is unreadable');
+    expect(rootState.value).not.toHaveProperty('test_suite');
   });
 
   // Covers: task:6
