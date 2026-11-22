@@ -63,6 +63,7 @@ async function subject(
       scratchRoot: string;
       teardown: () => Promise<void>;
     }>;
+    readonly prepareManagedSessionObservation?: (input: unknown) => Promise<void>;
   } = {},
 ) {
   const claudeResults = options.claudeResults ?? [
@@ -135,14 +136,29 @@ async function subject(
         sessionStore,
         providerAttempt: lifecycle,
         remediationClosureHeadReader: readHead,
-        ...(options.prepareCandidateSelfHost === undefined
+        ...(options.prepareCandidateSelfHost === undefined && options.prepareManagedSessionObservation === undefined
           ? {}
           : {
               providerExecution: {
                 configuredProviders: ['claude'],
                 runtimes,
                 sessions: sessionStore,
-                prepareCandidateSelfHost: options.prepareCandidateSelfHost,
+                ...(options.prepareCandidateSelfHost === undefined
+                  ? {}
+                  : { prepareCandidateSelfHost: options.prepareCandidateSelfHost }),
+                ...(options.prepareManagedSessionObservation === undefined
+                  ? {}
+                  : {
+                      prepareManagedSessionObservation: options.prepareManagedSessionObservation,
+                      managedSessionContext: {
+                        projectRoot: projectDir,
+                        worktreeRoot: projectDir,
+                        producerRoot: join(projectDir, '.producer'),
+                        dispatchId: 'dispatch-1',
+                        provider: 'codex',
+                        scope: { kind: 'feature', featureSlug: 'feature' },
+                      },
+                    }),
               },
             }),
       },
@@ -322,6 +338,25 @@ describe('DefaultStepRunner.dispatchRemediationClosureJudgement', () => {
         }),
       }),
     );
+  });
+
+  it('proves managed observation for a daemon-managed Codex closure judgement instead of skipping to Claude', async () => {
+    const prepareManagedSessionObservation = vi.fn(async (_input: unknown) => {});
+    const { runner, codexInvoke, claudeInvoke } = await subject({
+      reviewProviders: ['codex', 'claude'],
+      prepareManagedSessionObservation,
+    });
+
+    await expect(runner.dispatchRemediationClosureJudgement(input)).resolves.toMatchObject({ kind: 'valid' });
+
+    expect(prepareManagedSessionObservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'codex',
+        readOnlyReview: true,
+      }),
+    );
+    expect(codexInvoke).toHaveBeenCalledTimes(1);
+    expect(claudeInvoke).not.toHaveBeenCalled();
   });
 
   it('isolates concurrent Codex closure-judgement scratch homes by feature worktree', async () => {

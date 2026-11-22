@@ -3033,6 +3033,7 @@ export class DefaultStepRunner implements StepRunner {
               providerAvailability: this.providerExecutionContext?.providerAvailability,
               withCandidateSafety: this.withCandidateSafety,
               prepareCandidateSelfHost: this.prepareCandidateSelfHost,
+              prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
               onAttempt: this.providerAttempt,
               onAuxiliaryAttemptFailed: this.providerExecutionContext?.onAuxiliaryAttemptFailed,
               onCandidateStart: this.providerCandidateStart,
