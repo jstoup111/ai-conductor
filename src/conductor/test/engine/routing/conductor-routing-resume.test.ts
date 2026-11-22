@@ -1157,7 +1157,10 @@ describe('routed round conductor resume', () => {
       branch: 'feat/daemon-demo',
     };
     await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', leaf.child), {
-      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'done',
     });
     let cursorReads = 0;
     const exits: string[] = [];
