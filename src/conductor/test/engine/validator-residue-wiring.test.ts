@@ -180,7 +180,9 @@ describe('serial validation residue wiring', () => {
     const { dir, statePath } = await fixture();
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('validator_residue_quarantined', (event) => events.push(event));
+    emitter.on('validator_residue_quarantined', (event) => {
+      events.push(event);
+    });
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
         if (step === 'manual_test') {
@@ -411,7 +413,9 @@ describe('grouped validation residue wiring', () => {
     const { dir, statePath } = await groupFixture();
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('validator_residue_quarantined', (event) => events.push(event));
+    emitter.on('validator_residue_quarantined', (event) => {
+      events.push(event);
+    });
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
         if (step === 'architecture_review_as_built') {
