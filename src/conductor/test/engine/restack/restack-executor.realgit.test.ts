@@ -3,6 +3,8 @@
 // Covers: task:rem-as-built-R21
 // Covers: task:8
 // Covers: task:rem-as-built-rem-as-built-R16
+// Covers: task:rem-prd-audit-rem-S9.2
+// Covers: task:rem-prd-audit-rem-S9.6
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,8 +16,11 @@ import { EventPersister } from '../../../src/engine/event-persister.js';
 import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { readVerdict } from '../../../src/engine/gate-verdicts.js';
 import { installDaemonBotCoAuthor } from '../../../src/engine/bot-co-author.js';
+import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
+import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
+import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
@@ -83,7 +88,54 @@ async function revList(git: (args: string[]) => Promise<{ stdout: string }>, ran
   return (await git(['rev-list', '--reverse', range])).stdout.split('\n').filter(Boolean);
 }
 
+function child(value: number) {
+  const parsed = parseChildId(value);
+  if (!parsed) throw new Error(`invalid child ${value}`);
+  return parsed;
+}
+
 describe('runRestack (real local Git)', () => {
+  it('remaps every deferred placement boundary in the applied feature-repair transaction', async () => {
+    const subject = await fixture();
+    const git = makeGitRunner(subject.repo);
+    const roundId = parseRoundId('r1');
+    if (!roundId) throw new Error('invalid round id');
+    const created = await createRouteRecord(subject.repo, 'demo', {
+      roundId,
+      kind: 'audit',
+      sealedAuthored: 1,
+      execution: 'leaf',
+      items: [{ findingId: 'deferred', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] }],
+      allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
+    }, { git });
+    expect(created.kind).toBe('created');
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+    if (stored.kind !== 'record') throw new Error('could not read deferred route');
+    const recorded = await writeRoutingTransaction(subject.repo, 'demo', [{
+      kind: 'update-record', previous: stored,
+      record: {
+        ...stored.record, phase: 'closed', hosts: { [child(1)]: 'done' },
+        placements: { [child(1)]: { state: 'deferred', leafEntryTip: subject.c2, exitTip: subject.l1 } },
+      },
+    }], { git });
+    expect(recorded.kind).toBe('updated');
+
+    await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git }))
+      .resolves.toMatchObject({ kind: 'applied' });
+
+    const remapped = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+    expect(remapped).toMatchObject({
+      kind: 'record',
+      record: {
+        placements: { [child(1)]: {
+          state: 'deferred',
+          leafEntryTip: await subject.git(['rev-parse', 'feat/c2/demo']).then((result) => result.stdout.trim()),
+          exitTip: await subject.git(['rev-parse', 'feat/daemon-demo']).then((result) => result.stdout.trim()),
+        } },
+      },
+    });
+  });
+
   it('preserves a historical raw message while daemon co-author configuration is active', async () => {
     const subject = await fixture();
     const trailer = 'Co-authored-by: conductor-bot <4242+conductor-bot@users.noreply.github.com>';
