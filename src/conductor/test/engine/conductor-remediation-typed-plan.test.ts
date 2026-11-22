@@ -20,6 +20,7 @@ import { createRemediationPlanProviderFixture } from './remediation-plan-fixture
 
 const roots: string[] = [];
 const typedPlanReadCalls = vi.hoisted(() => [] as unknown[][]);
+const remediationProjectionResults = vi.hoisted(() => [] as unknown[]);
 
 vi.mock('../../src/engine/remediation-plan-store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/remediation-plan-store.js')>();
@@ -32,8 +33,21 @@ vi.mock('../../src/engine/remediation-plan-store.js', async (importOriginal) => 
   };
 });
 
+vi.mock('../../src/engine/remediation-projection.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/remediation-projection.js')>();
+  return {
+    ...actual,
+    buildRemediationProjection: async (...args: Parameters<typeof actual.buildRemediationProjection>) => {
+      const result = await actual.buildRemediationProjection(...args);
+      remediationProjectionResults.push(result);
+      return result;
+    },
+  };
+});
+
 afterEach(async () => {
   typedPlanReadCalls.splice(0);
+  remediationProjectionResults.splice(0);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -362,6 +376,33 @@ describe('Conductor typed remediation-plan admission', () => {
     await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+
+  // Covers: task:4
+  it('projects a zero-work child stall from child 3’s regional question evidence', async () => {
+    const result = await fixture('claude', [{ kind: 'structured', finalStructuredResult: buildStallOutput() }], 2, {
+      activeChild: 3,
+      source: 'build_stall_zero_work',
+      evidenceFile: '.pipeline/children/3/build-stall-question.md',
+      stallQuestion: 'Which repair unblocks child 3 after zero work?',
+    });
+
+    expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(remediationProjectionResults).toContainEqual(
+      expect.objectContaining({
+        ok: true,
+        projection: expect.objectContaining({
+          evidence: expect.objectContaining({
+            excerpts: [
+              expect.objectContaining({
+                path: '.pipeline/children/3/build-stall-question.md',
+                content: 'Which repair unblocks child 3 after zero work?',
+              }),
+            ],
+          }),
+        }),
+      }),
+    );
   });
 
   // Covers: task:3

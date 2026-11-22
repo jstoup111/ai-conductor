@@ -4952,7 +4952,7 @@ export class Conductor {
         config: this.config,
         git: this.prdAuditGit(),
         includedGates: remediationEvidenceSources.map((evidence) => evidence.gate),
-        ...(hintSource.source === 'build_stall'
+        ...(hintSource.source === 'build_stall' || hintSource.source === 'build_stall_zero_work'
           ? { evidenceFile: remediationEvidenceSources.find((evidence) => evidence.gate === 'build')?.evidenceFile }
           : {}),
         ...(prdAuditOverScopeRoute?.kind === 'refusal-rework' ? { refusals: prdAuditOverScopeRoute.refusals } : {}),
@@ -12241,6 +12241,10 @@ export class Conductor {
             }
           }
         }
+        // Adopt compatibility inputs before durable recovery reads its child
+        // region. Otherwise an open action case with only a legacy flat work
+        // order is reported as missing before its owning region can receive it.
+        if (step.name === 'build') await this.adoptLegacyRemediationInputs();
         if (step.name === 'build' && this.buildReviewAdjudicationEnabled()) {
           // Durable, not process-local: this is the clause an in-memory hint
           // alone can never satisfy (Task 18 Done-when 5).

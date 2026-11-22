@@ -313,7 +313,10 @@ describe('child-scoped build-review remediation cases', () => {
   });
 
   // Covers: task:12, task:13
-  it('adopts and retires flat remediation inputs at BUILD dispatch when adjudication is disabled', async () => {
+  it.each([
+    { label: 'with adjudication disabled', adjudicationEnabled: false },
+    { label: 'before adjudicated durable recovery', adjudicationEnabled: true },
+  ])('adopts a legacy flat work order at BUILD dispatch $label', async ({ adjudicationEnabled }) => {
     const root = await projectRoot();
     const child3 = parseChildId(3)!;
     const child4 = parseChildId(4)!;
@@ -361,7 +364,7 @@ describe('child-scoped build-review remediation cases', () => {
         },
       },
       events: new ConductorEventEmitter(),
-      config: { build_review: { adjudication: { enabled: false } } },
+      config: { build_review: { adjudication: { enabled: adjudicationEnabled } } },
       fromStep: 'build',
       verifyArtifacts: false,
       maxRetries: 2,
@@ -371,6 +374,9 @@ describe('child-scoped build-review remediation cases', () => {
     await conductor.run();
 
     expect(dispatched.filter((step) => step === 'build')).toHaveLength(2);
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain(
+      'BUILD durable remediation recovery halted',
+    );
     await expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(buildReviewWorkOrderPath(root, child4), 'utf8')).resolves.toContain(
       'Repair adopted child 4 on retry',
