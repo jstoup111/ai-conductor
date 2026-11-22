@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-22T00:04:32.990Z
 Slug: late-gate-fixes-restack-the-whole-stack-every-repa
 Class: needs-human
 Halting step: unknown
