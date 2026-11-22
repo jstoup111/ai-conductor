@@ -158,6 +158,10 @@ describe('SpoolDrainer', () => {
         throw new CredentialUnavailableError('authorization', 'Command credential source credential is unavailable: command exited with exit code 3.');
       },
       fetch: async () => { throw new Error('credential failure must not POST'); },
+      // delay() deliberately subtracts elapsed time before reaching the sleep
+      // boundary. Pin the injected clock so this backoff-sequence assertion
+      // observes the requested schedule rather than wall-clock rounding.
+      now: () => 0,
       sleep: async (delay) => { delays.push(delay); }, random: () => 0,
     });
     const draining = drainer.drainUntilStopped();
