@@ -1,20 +1,19 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-11-22T00:04:22.551Z
+Status: halted
 Slug: child-executed-features-lose-closing-otel-telemetr
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: rebase
+Phase: SHIP
 Branch: feat/daemon-child-executed-features-lose-closing-otel-telemetr
-Head SHA: 02cef2ccfc36634275d4d262167f220da14106cb
-Halted at: 2026-11-22T00:03:35.301Z
+Head SHA: cc9d2e1730635baa0098944086c245376d7f2dac
+Halted at: 2026-11-22T00:12:24.006Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-BUILD durable remediation recovery halted: work order foreign-effect
+completed BUILD evidence is unavailable after rebase: 1/8 tasks pending/not completed: rem-prd-audit-refusal-5f461969-00a1-4a92-81b0-cc06292a7662 — rem-prd-audit-refusal-5f461969-00a1-4a92-81b0-cc06292a7662 "Untrack .pipeline/task-status.json with `git rm --cached .pipeline/task-status.json` (keep the on-disk file) and commit. Never force-add .pipeline or .memory paths (#3708). Afterwards `git ls-files .pipeline` prints nothing and `git diff 1cc7745a69 HEAD -- .pipeline` is empty. Change no other files."
+Recover .pipeline task evidence before resuming; do not redispatch completed BUILD blindly.
 ```
