@@ -151,6 +151,7 @@ async function fixture(
     asBuiltCases?: readonly Record<string, unknown>[];
     attemptRunId?: string;
     corruptKickbackLedger?: boolean;
+    malformedCaseStore?: boolean;
     remediationProjectionLimitOverrides?: Partial<RemediationProjectionLimits>;
     remediationProjectionDependencies?: RemediationProjectionDependencies;
   } = {},
@@ -259,6 +260,7 @@ async function fixture(
     await writeFile(join(root, evidenceFile), options.stallQuestion, 'utf8');
   }
   if (options.corruptKickbackLedger) await writeFile(join(root, '.pipeline', 'kickback-ledger.json'), '{', 'utf8');
+  if (options.malformedCaseStore) await writeFile(join(root, '.pipeline', 'remediation-cases.json'), '{', 'utf8');
   const state = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
   // This focused planner seam normally runs after Conductor.run has captured
   // the mutation baseline. Seed that lifecycle-owned baseline so a mechanical
@@ -782,6 +784,17 @@ describe('Conductor typed remediation-plan admission', () => {
     expect(result.outcome).toMatchObject({ kind: 'halt' });
     expect(result.provider.invocationCount).toBe(0);
     await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('kickback ledger');
+    await expect(readdir(join(result.root, '.pipeline', 'remediation-history'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:5
+  it('halts needs-human without history when the as-built case store is unreadable', async () => {
+    const result = await fixture('codex', [{ kind: 'structured', finalStructuredResult: asBuiltOutput() }], 2, {
+      source: 'as-built', asBuiltRound: true, malformedCaseStore: true,
+    });
+    expect(result.outcome).toMatchObject({ kind: 'halt' });
+    expect(result.provider.invocationCount).toBe(0);
+    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/remediation case store.*unreadable/);
     await expect(readdir(join(result.root, '.pipeline', 'remediation-history'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
