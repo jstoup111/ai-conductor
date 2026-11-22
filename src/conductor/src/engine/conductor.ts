@@ -6173,11 +6173,13 @@ export class Conductor {
       // the persisted repair obligation derive from this same value (AB-3).
       // Name the typed plan before the admission is persisted so restart
       // recovery replays the exact instruction that BUILD receives.
-      const repairInstruction = await this.buildTypedRemediationPlanInput(buildRemediationHint(
-        routedFixes,
-        hintSource.source,
-        remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
-      ));
+      const repairInstruction = await this.buildTypedRemediationPlanInput(
+        buildRemediationHint(
+          routedFixes,
+          hintSource.source,
+          remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
+        ),
+      );
       let buildPredicateDiagnostic = '';
       const disposition = await this.resolveDecideEntryDisposition({
         target,
@@ -6468,6 +6470,9 @@ export class Conductor {
   }
 
   /** Name the admitted typed gap plan only while it remains readable in this BUILD region. */
+  private buildTypedRemediationPlanInput(retryHint: string): Promise<string>;
+  private buildTypedRemediationPlanInput(retryHint: undefined): Promise<undefined>;
+  private buildTypedRemediationPlanInput(retryHint: string | undefined): Promise<string | undefined>;
   private async buildTypedRemediationPlanInput(retryHint: string | undefined): Promise<string | undefined> {
     const path = remediationTypedPlanPath(this.projectRoot, this.activeRegionChild);
     try {
