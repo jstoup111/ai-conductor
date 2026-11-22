@@ -118,6 +118,7 @@ persistent one is diagnosable.
 
 #### Happy Path
 - Given a first attempt that returns no structured result or a rejected plan, and a retry that returns a valid plan, when gap planning settles, then the valid plan is used and the rejected attempt's diagnostics are recorded.
+- Given a first attempt that returns no structured result or a rejected plan, when the retry is dispatched, then its prompt carries the unchanged dispatch context plus the prior attempt's named fault (capped in length), so the fresh one-shot can correct the rejected field instead of repeating it.
 - Given a valid first attempt, when gap planning settles, then no retry occurs.
 
 #### Negative Paths

@@ -23,19 +23,16 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-const plan = Array.from({ length: 8 }, (_, index) => [
-  `### Task ${index + 1}: Authored task ${index + 1}`,
-  '**Done when:**',
-  `- Task ${index + 1} is complete.`,
-].join('\n')).join('\n\n');
+const plan = Array.from({ length: 8 }, (_, index) =>
+  [`### Task ${index + 1}: Authored task ${index + 1}`, '**Done when:**', `- Task ${index + 1} is complete.`].join(
+    '\n',
+  ),
+).join('\n\n');
 
 const realisticPlan = Array.from({ length: 8 }, (_, index) => {
   const id = index + 1;
-  if (id !== 8) return [
-    `### Task ${id}: Authored task ${id}`,
-    '**Done when:**',
-    `- Task ${id} is complete.`,
-  ].join('\n');
+  if (id !== 8)
+    return [`### Task ${id}: Authored task ${id}`, '**Done when:**', `- Task ${id} is complete.`].join('\n');
   return [
     '### Task 8: Project typed sources, refusals and explicit absence',
     '**Done when:**',
@@ -97,9 +94,7 @@ function refusalOutput(overrides: Record<string, unknown> = {}) {
 
 async function fixture(
   key: 'claude' | 'codex',
-  outcomes: readonly RemediationPlanProviderOutcome[] = [
-    { kind: 'structured', finalStructuredResult: output() },
-  ],
+  outcomes: readonly RemediationPlanProviderOutcome[] = [{ kind: 'structured', finalStructuredResult: output() }],
   maxRetries = 2,
   options: {
     nativeSchema?: boolean;
@@ -121,41 +116,56 @@ async function fixture(
   ]);
   await writeFile(planPath, `${options.planText ?? plan}\n`, 'utf8');
   await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }), 'utf8');
-  await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({
-    tasks: Array.from({ length: 8 }, (_, index) => ({ id: String(index + 1), status: 'completed' })),
-  }), 'utf8');
-  await persistPrdAuditVerdict(root, {
-    complete: true,
-    judgment: {
-      version: 'v1',
-      criterionJudgments: ['S1.1', 'S1.2'].map((criterion, index) => ({
-        criterion: { storyId: '1', ordinal: index + 1 },
-        criterionId: criterion,
-        grade: 'FIXABLE' as const,
-        evidence: `${criterion} has a repairable gap.`,
-        rationale: `${criterion} requires repair.`,
-        requirementAssociations: [],
-        evidenceTaskIds: [String(index + 1)],
-        ownerTaskId: String(index + 1),
-      })),
-      noOwnerObservations: [],
+  await writeFile(
+    join(root, '.pipeline', 'task-status.json'),
+    JSON.stringify({
+      tasks: Array.from({ length: 8 }, (_, index) => ({ id: String(index + 1), status: 'completed' })),
+    }),
+    'utf8',
+  );
+  await persistPrdAuditVerdict(
+    root,
+    {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: ['S1.1', 'S1.2'].map((criterion, index) => ({
+          criterion: { storyId: '1', ordinal: index + 1 },
+          criterionId: criterion,
+          grade: 'FIXABLE' as const,
+          evidence: `${criterion} has a repairable gap.`,
+          rationale: `${criterion} requires repair.`,
+          requirementAssociations: [],
+          evidenceTaskIds: [String(index + 1)],
+          ownerTaskId: String(index + 1),
+        })),
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
     },
-    diagnostics: [],
-    recordedDispositions: [],
-  }, { attemptId: 'fixture-prd-audit', codeStamp: null });
+    { attemptId: 'fixture-prd-audit', codeStamp: null },
+  );
   // This is intentionally contradictory legacy prose. The conductor must not
   // read it after the typed-plan migration.
-  await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-    dispositions: [{ id: 'S1.1', disposition: 'halt', category: 'unanswerable', rationale: 'legacy conflict', tasks: [] }],
-  }), 'utf8');
+  await writeFile(
+    join(root, '.pipeline', 'remediation.json'),
+    JSON.stringify({
+      dispositions: [
+        { id: 'S1.1', disposition: 'halt', category: 'unanswerable', rationale: 'legacy conflict', tasks: [] },
+      ],
+    }),
+    'utf8',
+  );
 
   const provider = createRemediationPlanProviderFixture({
     key,
     outcomes,
   });
   if (options.nativeSchema === false) {
-    (provider.runtime as { nativeSchemaCapability: { nativeOutputSchema: boolean } })
-      .nativeSchemaCapability = { nativeOutputSchema: false };
+    (provider.runtime as { nativeSchemaCapability: { nativeOutputSchema: boolean } }).nativeSchemaCapability = {
+      nativeOutputSchema: false,
+    };
   }
   const config = {
     llm_provider: key,
@@ -202,19 +212,21 @@ async function fixture(
   // halt can persist through the same state transition port.
   await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify(state), 'utf8');
   (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...state };
-  const outcome = options.skipPlanRemediation ? { kind: 'none' } : await (conductor as unknown as {
-    planRemediation(
-      state: ConductState,
-      steps: typeof ALL_STEPS,
-      context: string,
-      source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
-    ): Promise<{ kind: string; target?: string; hint?: string }>;
-  }).planRemediation(
-    state,
-    ALL_STEPS,
-    'PRD audit reported repairable criteria.',
-    { source, evidence: [{ gate: source.includes('stall') ? 'build' : 'prd_audit', evidenceFile }] } as never,
-  );
+  const outcome = options.skipPlanRemediation
+    ? { kind: 'none' }
+    : await (
+        conductor as unknown as {
+          planRemediation(
+            state: ConductState,
+            steps: typeof ALL_STEPS,
+            context: string,
+            source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
+          ): Promise<{ kind: string; target?: string; hint?: string }>;
+        }
+      ).planRemediation(state, ALL_STEPS, 'PRD audit reported repairable criteria.', {
+        source,
+        evidence: [{ gate: source.includes('stall') ? 'build' : 'prd_audit', evidenceFile }],
+      } as never);
   return {
     root,
     planPath,
@@ -230,33 +242,32 @@ async function fixture(
 }
 
 describe('Conductor typed remediation-plan admission', () => {
-  async function refusalRound(
-    outcomes: readonly RemediationPlanProviderOutcome[],
-    maxRetries = 2,
-  ) {
+  async function refusalRound(outcomes: readonly RemediationPlanProviderOutcome[], maxRetries = 2) {
     const result = await fixture('claude', outcomes, maxRetries, { skipPlanRemediation: true });
-    (result.conductor as unknown as {
-      routeCurrentPrdAuditOverScope: () => Promise<unknown>;
-    }).routeCurrentPrdAuditOverScope = async () => ({
+    (
+      result.conductor as unknown as {
+        routeCurrentPrdAuditOverScope: () => Promise<unknown>;
+      }
+    ).routeCurrentPrdAuditOverScope = async () => ({
       kind: 'refusal-rework',
       refusals: [refusal],
       refused: [],
       findings: [],
       detail: 'OVER_SCOPE visible behavior on S9.1.',
     });
-    const outcome = await (result.conductor as unknown as {
-      planRemediation(
-        state: ConductState,
-        steps: typeof ALL_STEPS,
-        context: string,
-        source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
-      ): Promise<{ kind: string; target?: string; reason?: string; detail?: string }>;
-    }).planRemediation(
-      result.state,
-      ALL_STEPS,
-      'PRD audit requires refusal rework.',
-      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
-    );
+    const outcome = await (
+      result.conductor as unknown as {
+        planRemediation(
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          context: string,
+          source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
+        ): Promise<{ kind: string; target?: string; reason?: string; detail?: string }>;
+      }
+    ).planRemediation(result.state, ALL_STEPS, 'PRD audit requires refusal rework.', {
+      source: 'prd-audit',
+      evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+    });
     return { ...result, outcome };
   }
 
@@ -265,9 +276,7 @@ describe('Conductor typed remediation-plan admission', () => {
     const result = await refusalRound([{ kind: 'structured', finalStructuredResult: refusalOutput() }]);
 
     expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
-    expect(await readFile(result.planPath, 'utf8')).toContain(
-      '### Task rem-prd-audit-refusal-decision-refused-9:',
-    );
+    expect(await readFile(result.planPath, 'utf8')).toContain('### Task rem-prd-audit-refusal-decision-refused-9:');
   });
 
   // Covers: task:29
@@ -276,12 +285,12 @@ describe('Conductor typed remediation-plan admission', () => {
     ['existing-task', { disposition: 'existing-task', tasks: [], boundTaskIds: ['1'] }],
     ['omission', null],
   ])('rejects a refusal answered with %s without appending unrelated work', async (_label, override) => {
-    const result = await refusalRound([{
-      kind: 'structured',
-      finalStructuredResult: override === null
-        ? output()
-        : refusalOutput(override),
-    }]);
+    const result = await refusalRound([
+      {
+        kind: 'structured',
+        finalStructuredResult: override === null ? output() : refusalOutput(override),
+      },
+    ]);
 
     expect(result.outcome).toMatchObject({ kind: 'halt' });
     expect(await readFile(result.planPath, 'utf8')).not.toContain('rem-prd-audit-refusal-decision-refused-9');
@@ -313,8 +322,10 @@ describe('Conductor typed remediation-plan admission', () => {
         tasks: Array<{ id: string; status: string }>;
       };
       expect(taskStatus.tasks.find((task) => task.id === '1')?.status).toBe('pending');
-      expect(JSON.parse(await readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')))
-        .toMatchObject({ source: 'prd-audit', dispositions: expect.any(Array) });
+      expect(JSON.parse(await readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8'))).toMatchObject({
+        source: 'prd-audit',
+        dispositions: expect.any(Array),
+      });
     },
   );
 
@@ -354,14 +365,16 @@ describe('Conductor typed remediation-plan admission', () => {
   it('retries a rejected structured plan and records its validator diagnostic', async () => {
     const rejected = {
       version: 'v1',
-      dispositions: [{
-        reference: { kind: 'prd-criterion', id: 'S1.1' },
-        disposition: 'invented-disposition',
-        category: null,
-        rationale: 'This is not a supported engine disposition.',
-        tasks: [],
-        boundTaskIds: [],
-      }],
+      dispositions: [
+        {
+          reference: { kind: 'prd-criterion', id: 'S1.1' },
+          disposition: 'invented-disposition',
+          category: null,
+          rationale: 'This is not a supported engine disposition.',
+          tasks: [],
+          boundTaskIds: [],
+        },
+      ],
     };
     const result = await fixture('claude', [
       { kind: 'structured', finalStructuredResult: rejected },
@@ -374,6 +387,36 @@ describe('Conductor typed remediation-plan admission', () => {
   });
 
   // Covers: task:20
+  it("carries the rejected attempt's validator diagnostic into the retry prompt", async () => {
+    const rejected = {
+      version: 'v1',
+      dispositions: [
+        {
+          reference: { kind: 'prd-criterion', id: 'S1.1' },
+          disposition: 'invented-disposition',
+          category: null,
+          rationale: 'This is not a supported engine disposition.',
+          tasks: [],
+          boundTaskIds: [],
+        },
+      ],
+    };
+    const result = await fixture('claude', [
+      { kind: 'structured', finalStructuredResult: rejected },
+      { kind: 'structured', finalStructuredResult: output() },
+    ]);
+
+    expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    const [first, retry] = result.provider.calls;
+    expect(first?.systemPrompt).toContain('RETRY: PRD audit reported repairable criteria.');
+    expect(first?.systemPrompt).not.toContain('PRIOR REMEDIATION ATTEMPT REJECTED');
+    expect(retry?.systemPrompt).toContain(
+      'PRIOR REMEDIATION ATTEMPT REJECTED (engine-owned): structured-result-rejected:',
+    );
+    expect(retry?.systemPrompt).toContain('invented-disposition');
+  });
+
+  // Covers: task:20
   it('does not retry a valid first gap-plan attempt', async () => {
     const result = await fixture('codex');
 
@@ -383,10 +426,14 @@ describe('Conductor typed remediation-plan admission', () => {
 
   // Covers: task:27
   it('re-dispatches after restart with a fresh attempt, retains its receipt, and rejects the prior plan on a no-result retry', async () => {
-    const result = await fixture('claude', [
-      { kind: 'structured', finalStructuredResult: output() },
-      { kind: 'chat', output: 'the restarted attempt omitted its structured result' },
-    ], 1);
+    const result = await fixture(
+      'claude',
+      [
+        { kind: 'structured', finalStructuredResult: output() },
+        { kind: 'chat', output: 'the restarted attempt omitted its structured result' },
+      ],
+      1,
+    );
     const firstPlan = JSON.parse(await readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')) as {
       attemptId: string;
     };
@@ -403,19 +450,19 @@ describe('Conductor typed remediation-plan admission', () => {
       config: result.config,
     });
     (restarted as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...result.state };
-    const restartedOutcome = await (restarted as unknown as {
-      planRemediation(
-        state: ConductState,
-        steps: typeof ALL_STEPS,
-        context: string,
-        source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
-      ): Promise<{ kind: string; reason?: string }>;
-    }).planRemediation(
-      result.state,
-      ALL_STEPS,
-      'PRD audit reported repairable criteria after restart.',
-      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
-    );
+    const restartedOutcome = await (
+      restarted as unknown as {
+        planRemediation(
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          context: string,
+          source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
+        ): Promise<{ kind: string; reason?: string }>;
+      }
+    ).planRemediation(result.state, ALL_STEPS, 'PRD audit reported repairable criteria after restart.', {
+      source: 'prd-audit',
+      evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+    });
 
     expect(result.provider.invocationCount).toBe(2);
     expect(result.provider.calls[1]?.sessionId).not.toBe(result.provider.calls[0]?.sessionId);
@@ -430,12 +477,15 @@ describe('Conductor typed remediation-plan admission', () => {
       pendingRepair: firstLedger.pendingRepair,
     });
 
-    const budgets = [{
-      gate: 'prd_audit' as const,
-      lapCap: 2,
-      growthCap: 2, authoredSource: 'plan' as const,
-      growth: { authored: 8, added: 0, byGate: {}, remaining: 2 },
-    }];
+    const budgets = [
+      {
+        gate: 'prd_audit' as const,
+        lapCap: 2,
+        growthCap: 2,
+        authoredSource: 'plan' as const,
+        growth: { authored: 8, added: 0, byGate: {}, remaining: 2 },
+      },
+    ];
     await expect(settlePendingRepair(result.root, budgets)).resolves.toEqual({ kind: 'settled' });
     await expect(settlePendingRepair(result.root, budgets)).resolves.toEqual({ kind: 'none' });
     await expect(readKickbackLedger(result.root)).resolves.toMatchObject({
@@ -458,10 +508,14 @@ describe('Conductor typed remediation-plan admission', () => {
 
   // Covers: task:23
   it('returns the final named mechanical fault when every typed gap-plan attempt is unusable', async () => {
-    const result = await fixture('claude', [
-      { kind: 'chat', output: 'first attempt omitted structured output' },
-      { kind: 'throw', error: new Error('last planner fault') },
-    ], 2);
+    const result = await fixture(
+      'claude',
+      [
+        { kind: 'chat', output: 'first attempt omitted structured output' },
+        { kind: 'throw', error: new Error('last planner fault') },
+      ],
+      2,
+    );
 
     expect(result.provider.invocationCount).toBe(2);
     expect(result.outcome).toMatchObject({ kind: 'none', reason: expect.stringContaining('last planner fault') });
@@ -473,10 +527,12 @@ describe('Conductor typed remediation-plan admission', () => {
     ['rate limit', { rateLimited: true }],
     ['model unavailable', { modelUnavailable: true }],
   ] as const)('keeps %s handling ahead of missing-plan diagnostics', async (_name, condition) => {
-    const result = await fixture('claude', [{
-      kind: 'provider-condition',
-      result: { success: false, output: 'provider condition', exitCode: 1, ...condition },
-    }]);
+    const result = await fixture('claude', [
+      {
+        kind: 'provider-condition',
+        result: { success: false, output: 'provider condition', exitCode: 1, ...condition },
+      },
+    ]);
 
     expect(result.outcome).toMatchObject({ kind: 'none' });
     expect(result.blockedReasons).not.toContain('remediation planner produced no current typed plan');
@@ -492,7 +548,9 @@ describe('Conductor typed remediation-plan admission', () => {
     await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(
       /candidate set \[claude\].*nativeSchemaCapability\.nativeOutputSchema/s,
     );
-    await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   // Covers: task:21, task:rem-prd-audit-rem-prd-audit-s1-1-1
@@ -509,7 +567,9 @@ describe('Conductor typed remediation-plan admission', () => {
     await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(
       /source prd-audit, dimension tasks \(actual \d+, limit \d+\)/,
     );
-    await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   // Covers: task:21

@@ -9,6 +9,10 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import {
+  REMEDIATION_RETRY_FAULT_CHAR_CAP,
+  withPriorRemediationAttemptFault,
+} from '../../src/engine/remediation-hints.js';
 
 describe('rejected remediation dispositions', () => {
   let projectRoot: string;
@@ -47,21 +51,25 @@ describe('rejected remediation dispositions', () => {
 
     expect(calls).toBe(1);
     expect(outcome).toMatchObject({ kind: 'none' });
-    expect(events).toEqual(rejected.map((rejection) => ({
-      type: 'remediation_disposition_rejected',
-      ...rejection,
-    })));
+    expect(events).toEqual(
+      rejected.map((rejection) => ({
+        type: 'remediation_disposition_rejected',
+        ...rejection,
+      })),
+    );
     expect(gateBlocked).toEqual([]);
     expect(await readFile(join(projectRoot, '.docs/plans/feature.md'), 'utf8')).toBe('# Implementation plan\n');
   });
 
   it('emits every rejection again for each rejected retry without routing or halting from plan contents', async () => {
-    const rejected = [{
-      gapId: 'AB-unknown-disposition',
-      disposition: 'unknown-disposition',
-      accepted: ['build', 'plan'],
-      field: 'disposition',
-    }] as const;
+    const rejected = [
+      {
+        gapId: 'AB-unknown-disposition',
+        disposition: 'unknown-disposition',
+        accepted: ['build', 'plan'],
+        field: 'disposition',
+      },
+    ] as const;
     const { outcome, events, gateBlocked, calls } = await remediate(rejected, 2);
 
     expect(calls).toBe(2);
@@ -86,8 +94,12 @@ describe('rejected remediation dispositions', () => {
     const events: ConductorEvent[] = [];
     const gateBlocked: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('remediation_disposition_rejected', (event) => { events.push(event); });
-    emitter.on('gate_blocked', (event) => { gateBlocked.push(event); });
+    emitter.on('remediation_disposition_rejected', (event) => {
+      events.push(event);
+    });
+    emitter.on('gate_blocked', (event) => {
+      gateBlocked.push(event);
+    });
     let calls = 0;
     const runner: StepRunner = {
       run: async () => {
@@ -108,14 +120,16 @@ describe('rejected remediation dispositions', () => {
       verifyArtifacts: false,
       maxRetries,
     });
-    const outcome = await (conductor as unknown as {
-      planRemediation: (
-        state: ConductState,
-        steps: typeof ALL_STEPS,
-        context: string,
-        source: { source: string; evidence: readonly [] },
-      ) => Promise<{ kind: string; target?: StepName; detail?: string; evidence?: string; haltClass?: string }>;
-    }).planRemediation(
+    const outcome = await (
+      conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          context: string,
+          source: { source: string; evidence: readonly [] },
+        ) => Promise<{ kind: string; target?: StepName; detail?: string; evidence?: string; haltClass?: string }>;
+      }
+    ).planRemediation(
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'test remediation',
@@ -123,4 +137,24 @@ describe('rejected remediation dispositions', () => {
     );
     return { outcome, events, gateBlocked, calls };
   }
+});
+
+describe('withPriorRemediationAttemptFault', () => {
+  it('appends the prior fault after the unchanged dispatch context', () => {
+    const prompt = withPriorRemediationAttemptFault(
+      'Plan remediation per the /remediate skill.',
+      'structured-result-rejected: x',
+    );
+
+    expect(prompt.startsWith('Plan remediation per the /remediate skill.\n\n')).toBe(true);
+    expect(prompt).toContain('PRIOR REMEDIATION ATTEMPT REJECTED (engine-owned): structured-result-rejected: x');
+  });
+
+  it('caps an oversized fault so the retry prompt stays bounded', () => {
+    const fault = 'd'.repeat(REMEDIATION_RETRY_FAULT_CHAR_CAP + 500);
+    const prompt = withPriorRemediationAttemptFault('context', fault);
+
+    expect(prompt).toContain(`${'d'.repeat(REMEDIATION_RETRY_FAULT_CHAR_CAP)}… (truncated)`);
+    expect(prompt).not.toContain('d'.repeat(REMEDIATION_RETRY_FAULT_CHAR_CAP + 1));
+  });
 });
