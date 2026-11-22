@@ -4,6 +4,19 @@ spec_hash: 43b167fc798be9a304871b7fe2feb17773d2f067d35b033a8bc6be24fec6bab4
 pr: https://github.com/jstoup111/ai-conductor/pull/3710
 shipped: 2026-11-22
 engine_version: 20261122T020604Z-3379a47ff8d4
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "Layout-only churn beyond the planned files. It changes no operator-visible output, CLI result, or persisted state."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "These are fail-closed hardening changes that let a shared dispatch snapshot abandon timed-out preparations and verify each live-checkout root against its own containment verdict. They serve Story 1 criterion 5 and Story 2 criteria 5 to 7."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
