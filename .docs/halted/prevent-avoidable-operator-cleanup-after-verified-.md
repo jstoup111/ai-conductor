@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-22T22:13:16.623Z
 Slug: prevent-avoidable-operator-cleanup-after-verified-
 Class: needs-human
 Halting step: unknown
