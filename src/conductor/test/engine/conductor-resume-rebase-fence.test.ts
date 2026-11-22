@@ -1,4 +1,4 @@
-// Covers: task:2, task:10
+// Covers: task:2, task:4, task:10
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -212,7 +212,11 @@ describe('Conductor resume rebase-operation fence', () => {
     await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('completes an applying operation before its first resumed dispatch and is idempotent on the next resume', async () => {
+  // Covers Task 4's restart during transition recording: the first restart
+  // completes the durable transition and dispatches its reopened next gate;
+  // repeating the same restart neither dispatches again nor rewrites the
+  // preserved gate evidence.
+  it('continues an interrupted rebase transition once across two restarts, dispatching the reopened next step once and retaining valid preserved evidence', async () => {
     const suite = { satisfied: true as const, checkedAt: 10 };
     await writeVerdict(projectRoot, 'test_suite', suite);
     await writeVerdict(projectRoot, 'build_review', {
@@ -231,7 +235,8 @@ describe('Conductor resume rebase-operation fence', () => {
         operationAtFirstDispatch = (await readVerdict(projectRoot, 'rebase'))?.rebaseOperation;
       }
     });
-    await expect(resume(successfulRunner)).resolves.toEqual(['build_review']);
+    const nextStepRunner = { run: vi.fn(async () => ({ success: true })) } satisfies StepRunner;
+    await expect(resume(nextStepRunner)).resolves.toEqual(['build_review']);
     expect(completeInterruptedRebaseOperation).toHaveBeenCalledWith(
       expect.objectContaining({
         operation: validatedOperation,
@@ -249,7 +254,8 @@ describe('Conductor resume rebase-operation fence', () => {
         async (gate) => [gate, await readFile(join(gateDirectory, `${gate}.json`), 'utf8')] as const,
       ),
     );
-    await expect(resume(successfulRunner)).resolves.toEqual([]);
+    await expect(resume(nextStepRunner)).resolves.toEqual([]);
+    expect(nextStepRunner.run).toHaveBeenCalledTimes(1);
     const after = await Promise.all(
       ['rebase', 'test_suite', 'build_review'].map(
         async (gate) => [gate, await readFile(join(gateDirectory, `${gate}.json`), 'utf8')] as const,
