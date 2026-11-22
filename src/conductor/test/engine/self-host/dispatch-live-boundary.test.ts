@@ -155,7 +155,10 @@ describe('DispatchLiveBoundary', () => {
   // Covers: task:2
   it('starts a fresh fingerprint when revocation abandons a stalled acquire', async () => {
     let revoke!: () => void;
-    const never = new Promise<typeof live>(() => {});
+    let resolveStale!: (surface: typeof live) => void;
+    const never = new Promise<typeof live>((resolve) => {
+      resolveStale = resolve;
+    });
     const fingerprintLiveCheckout = vi.fn().mockReturnValueOnce(never).mockResolvedValueOnce(live);
     const h = harness({ fingerprintLiveCheckout });
     const stale = h.boundary.acquire({
@@ -179,7 +182,31 @@ describe('DispatchLiveBoundary', () => {
     await replacement.release();
     await h.boundary.end();
     expect(fingerprintLiveCheckout).toHaveBeenCalledTimes(2);
-    void stale.catch(() => {});
+    resolveStale(live);
+    await expect(stale).rejects.toBeInstanceOf(DispatchLiveBoundaryExpiredError);
+  });
+
+  // Covers: task:2, task:3
+  it('does not start ownerless fingerprints when revocation precedes callback registration', async () => {
+    const h = harness();
+    const stale = h.boundary.acquire({
+      liveCheckout: '/live',
+      providerHome: '/claude',
+      provider: 'claude',
+      onRevoked: (callback) => {
+        callback();
+        return () => {};
+      },
+      probe: h.probe,
+    });
+
+    await expect(stale).rejects.toBeInstanceOf(DispatchLiveBoundaryExpiredError);
+    await h.boundary.end();
+
+    expect(h.fingerprintLiveCheckout).not.toHaveBeenCalled();
+    expect(h.fingerprintProviderState).not.toHaveBeenCalled();
+    expect(h.probe).not.toHaveBeenCalled();
+    expect(h.verify).not.toHaveBeenCalled();
   });
 
   // Covers: task:2, task:3

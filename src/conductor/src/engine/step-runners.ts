@@ -6094,7 +6094,7 @@ export class DefaultStepRunner implements StepRunner {
               cwd: materialized?.headPath ?? this.projectDir,
               dangerouslySkipPermissions: true,
             }),
-            (options) =>
+            (options, onPreparationRevoked) =>
               executeAuxiliaryProviderCandidates({
                 step: 'build_review',
                 executionContext,
@@ -6116,6 +6116,7 @@ export class DefaultStepRunner implements StepRunner {
                 withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
                 prepareCandidateSelfHost:
                   this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+                onPreparationRevoked,
                 prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
                 onAttempt: this.providerAttempt,
                 onAuxiliaryAttemptFailed: this.providerExecutionContext?.onAuxiliaryAttemptFailed,

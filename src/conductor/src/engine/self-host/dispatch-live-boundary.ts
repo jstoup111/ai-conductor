@@ -111,6 +111,11 @@ export class DispatchLiveBoundary {
       void finishAcquire().finally(() => unregisterRevocation?.());
     };
     unregisterRevocation = args.onRevoked?.(abandon);
+    // The lifecycle supervisor may already have timed out before it accepts
+    // this callback.  Its registration contract invokes us synchronously in
+    // that case, so never open a window or create cache entries with no
+    // preparation attempt left to own them.
+    if (!active) throw new DispatchLiveBoundaryExpiredError();
     try {
       this.openWindow();
       live = this.memoize(this.liveSurfaces, args.liveCheckout, () =>
