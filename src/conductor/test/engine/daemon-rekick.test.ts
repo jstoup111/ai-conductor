@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import {
   clearHaltForResume,
   consumeResumeAuthorizations,
+  evaluateRebaseRecoveryHalt,
   recoverEpisodeHalts,
   resolveHaltRetention,
   rekickSweep,
@@ -1723,6 +1724,85 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
     await expect(readFile(join(p, 'HALT'), 'utf-8')).resolves.toBe(haltBody);
     await expect(access(join(p, 'HALT.rekicked'))).rejects.toThrow();
     await expect(access(join(p, 'REKICK'))).rejects.toThrow();
+  });
+});
+
+// ── Verified recovery admission preflight ───────────────────────────────────
+
+describe('evaluateRebaseRecoveryHalt', () => {
+  const attempt = {
+    version: 1,
+    generation: 'attempt-2',
+    feature: 'feature',
+    preRebaseHead: 'a'.repeat(40),
+    mergeBase: 'b'.repeat(40),
+    target: 'c'.repeat(40),
+  } as const;
+
+  function scriptedGit(results: Array<{ exitCode: number; stdout?: string }>) {
+    let index = 0;
+    return async () => {
+      const result = results[index++] ?? { exitCode: 1 };
+      return { exitCode: result.exitCode, stdout: result.stdout ?? '', stderr: '' };
+    };
+  }
+
+  async function withAttempt(run: (root: string) => Promise<void>): Promise<void> {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-recovery-evaluate-'));
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.pipeline', 'rebase-recovery-attempt.json'), `${JSON.stringify(attempt)}\n`);
+      await run(root);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  // Covers: task:2
+  it('retains every blocked completed-rebase candidate with a specific diagnostic and performs zero dispatches on repeats', async () => {
+    await withAttempt(async (root) => {
+      await mkdir(join(root, '.git', 'rebase-merge'), { recursive: true });
+      const active = await evaluateRebaseRecoveryHalt({
+        worktreePath: root,
+        feature: 'feature',
+        git: scriptedGit([{ exitCode: 0, stdout: '.git/rebase-merge\n' }]),
+      });
+      expect(active).toEqual({ kind: 'retained', reason: 'rebase is still active' });
+      await rm(join(root, '.git'), { recursive: true, force: true });
+
+      const dirtyResults = [
+        { exitCode: 0, stdout: '.git/rebase-merge\n' }, { exitCode: 0, stdout: '.git/rebase-apply\n' },
+        { exitCode: 0, stdout: ' M changed.ts\n' }, { exitCode: 0, stdout: `${'d'.repeat(40)}\n` }, { exitCode: 0 },
+      ];
+      const firstDirty = await evaluateRebaseRecoveryHalt({ worktreePath: root, feature: 'feature', git: scriptedGit(dirtyResults) });
+      const repeatedDirty = await evaluateRebaseRecoveryHalt({ worktreePath: root, feature: 'feature', git: scriptedGit(dirtyResults) });
+      expect(firstDirty).toEqual({ kind: 'retained', reason: 'checkout is dirty after completed rebase' });
+      expect(repeatedDirty).toEqual(firstDirty);
+
+      const mismatchedFeature = await evaluateRebaseRecoveryHalt({ worktreePath: root, feature: 'other', git: scriptedGit([]) });
+      expect(mismatchedFeature).toEqual({ kind: 'retained', reason: 'rebase recovery attempt feature does not match the halted feature' });
+
+      const unverifiable = await evaluateRebaseRecoveryHalt({
+        worktreePath: root,
+        feature: 'feature',
+        git: scriptedGit([
+          { exitCode: 0, stdout: '.git/rebase-merge\n' }, { exitCode: 0, stdout: '.git/rebase-apply\n' },
+          { exitCode: 0, stdout: '' }, { exitCode: 0, stdout: `${'d'.repeat(40)}\n` }, { exitCode: 0 },
+          { exitCode: 2 }, { exitCode: 1 },
+        ]),
+      });
+      expect(unverifiable).toEqual({ kind: 'retained', reason: 'cannot inspect preserved feature content' });
+    });
+
+    const missingRoot = await mkdtemp(join(tmpdir(), 'rebase-recovery-missing-'));
+    try {
+      let dispatches = 0;
+      const missing = await evaluateRebaseRecoveryHalt({ worktreePath: missingRoot, feature: 'feature' });
+      expect(missing).toEqual({ kind: 'retained', reason: 'rebase recovery attempt evidence is missing or invalid' });
+      expect(dispatches).toBe(0);
+    } finally {
+      await rm(missingRoot, { recursive: true, force: true });
+    }
   });
 });
 

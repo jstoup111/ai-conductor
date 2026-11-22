@@ -44,6 +44,8 @@ import { emitRestackRefused } from './restack/restack-events.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
+import { readRebaseRecoveryAttempt } from './rebase-recovery-attempt.js';
+import { verifyCompletedReplay } from './rebase-replay.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { ALL_STEPS } from './steps.js';
@@ -78,6 +80,29 @@ export const RETAINED_HALT_CLASSES: ReadonlySet<string> = new Set([
   OVER_SCOPE_HALT_CLASS,
   KICKBACK_CAP_HALT_CLASS,
 ]);
+
+/**
+ * Read-only daemon-side evaluation of an evidenced rebase halt.  This helper
+ * deliberately never clears a marker or dispatches work: its caller owns the
+ * later conditional admission transaction.  Consequently a repeated blocked
+ * evaluation consumes no build attempts.
+ */
+export async function evaluateRebaseRecoveryHalt(opts: {
+  worktreePath: string;
+  feature: string;
+  child?: number;
+  git?: GitRunner;
+}): Promise<{ kind: 'verified' } | { kind: 'retained'; reason: string }> {
+  const attempt = await readRebaseRecoveryAttempt(opts.worktreePath);
+  if (!attempt) return { kind: 'retained', reason: 'rebase recovery attempt evidence is missing or invalid' };
+  if (attempt.feature !== opts.feature) return { kind: 'retained', reason: 'rebase recovery attempt feature does not match the halted feature' };
+  if (attempt.child !== opts.child) return { kind: 'retained', reason: 'rebase recovery attempt execution child does not match the halted feature' };
+
+  const verified = await verifyCompletedReplay(opts.git ?? makeGitRunner(opts.worktreePath), opts.worktreePath, attempt);
+  return verified.kind === 'accepted'
+    ? { kind: 'verified' }
+    : { kind: 'retained', reason: verified.reason };
+}
 
 /**
  * The single retention decision every automatic path shares (sealed Story 3).
