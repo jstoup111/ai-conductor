@@ -237,8 +237,9 @@ deterministically.
 #### Happy Path
 - Given `skills/remediate/SKILL.md`, when the stall-question guidance is read, then it
   explains the judgment only: the input is a question (not a gap list); an answerable
-  question is answered in the rationale of a `build` with no new tasks; an unanswerable one
-  halts under the existing category taxonomy; the verify-claims/halt-on-uncertain rule
+  question is answered in the rationale of a `build` with no new tasks; a question made moot
+  because BUILD has no work owed gets the `no-work-owed` verdict; an unanswerable one halts
+  under the existing category taxonomy; the verify-claims/halt-on-uncertain rule
   applies unchanged — it carries no id grammar or disposition field shape.
 - Given a build-stall result whose reference is `stall:<slug>`, answered with `build`, no new
   tasks, and the answer in its rationale, when the engine validator checks it, then the plan
