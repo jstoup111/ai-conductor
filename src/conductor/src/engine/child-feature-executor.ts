@@ -204,7 +204,7 @@ export function createChildProcessFeatureExecutor(
           return;
         }
         handshake = 'accepted';
-        const trace = message.otelProjection && attachment.acceptOtelProjection?.()
+        const trace = message.otelProjection && deps.acceptOtelProjection !== undefined && attachment.acceptOtelProjection?.()
           ? deps.acceptOtelProjection?.(order.slug, launchedOrder)
           : undefined;
         if (trace === undefined) attachment.useSupervisorOtel?.();

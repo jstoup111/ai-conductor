@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EventPersister } from './event-persister.js';
@@ -254,7 +254,7 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
             const childOtel = projection && loaded?.ok
               ? startChildOtelProjection({
                   config: loaded.config, trace: projection.trace, engineVersionId, slug: order.slug,
-                  mainRoot: resolve(worktree.path, '../..'), events, sendMeter: (message) => port.send(message),
+                  mainRoot: resolvePath(worktree.path, '../..'), events, sendMeter: (message) => port.send(message),
                 })
               : undefined;
             let outcome: FeatureExecutionOutcome;
