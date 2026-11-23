@@ -13,17 +13,17 @@ export interface SpoolBatch {
 
 export type SpoolWriteResult =
   | (SpoolBatch & {
-    rejectedOversize: false;
-    rejectedItems: 0;
-    evictedBatches: number;
-    evictedItems: number;
-  })
+      rejectedOversize: false;
+      rejectedItems: 0;
+      evictedBatches: number;
+      evictedItems: number;
+    })
   | {
-    rejectedOversize: true;
-    rejectedItems: number;
-    evictedBatches: 0;
-    evictedItems: 0;
-  };
+      rejectedOversize: true;
+      rejectedItems: number;
+      evictedBatches: 0;
+      evictedItems: 0;
+    };
 
 interface SpoolFileHandle {
   writeFile(data: Uint8Array): Promise<void>;
@@ -76,7 +76,10 @@ export class SpoolStore {
   private readonly randomBytes: (size: number) => Buffer;
   private readonly maxBytes: number | undefined;
 
-  constructor(private readonly root: string, options: SpoolStoreOptions = {}) {
+  constructor(
+    private readonly root: string,
+    options: SpoolStoreOptions = {},
+  ) {
     this.filesystem = options.filesystem ?? filesystem;
     this.now = options.now ?? Date.now;
     this.pid = options.pid ?? process.pid;
@@ -111,14 +114,15 @@ export class SpoolStore {
       // Keep the just-fsynced batch private while accounting for it. Once the
       // rename publishes it, write() must return immediately so an SDK success
       // callback cannot race a drainer through more store I/O.
-      if (this.maxBytes === undefined) {
+      const maxBytes = this.maxBytes;
+      if (maxBytes === undefined) {
         await this.filesystem.rename(temporaryPath, path);
       } else {
         await this.withCapLock(async () => {
           await this.removeStaleTemporaryFiles();
           let totalBytes = await this.totalBytes();
           for (const oldest of await this.allBatches()) {
-            if (totalBytes + body.byteLength <= this.maxBytes) break;
+            if (totalBytes + body.byteLength <= maxBytes) break;
             await this.delete(oldest);
             totalBytes -= oldest.size;
             evictedBatches += 1;
@@ -149,25 +153,27 @@ export class SpoolStore {
       throw error;
     }
 
-    const entries = await Promise.all(names
-      .filter((name) => name.endsWith('.pb'))
-      .sort()
-      .map(async (name) => {
-        const path = join(directory, name);
-        try {
-          return {
-            name,
-            path,
-            size: (await this.filesystem.stat(path)).size,
-            items: this.itemsFromName(name),
-          };
-        } catch (error) {
-          // A drainer may delete a batch after readdir but before stat. It was
-          // already delivered, so it must not make a concurrent listing fail.
-          if (isMissing(error)) return undefined;
-          throw error;
-        }
-      }));
+    const entries = await Promise.all(
+      names
+        .filter((name) => name.endsWith('.pb'))
+        .sort()
+        .map(async (name) => {
+          const path = join(directory, name);
+          try {
+            return {
+              name,
+              path,
+              size: (await this.filesystem.stat(path)).size,
+              items: this.itemsFromName(name),
+            };
+          } catch (error) {
+            // A drainer may delete a batch after readdir but before stat. It was
+            // already delivered, so it must not make a concurrent listing fail.
+            if (isMissing(error)) return undefined;
+            throw error;
+          }
+        }),
+    );
     return entries.filter((batch): batch is SpoolBatch => batch !== undefined);
   }
 
@@ -218,26 +224,32 @@ export class SpoolStore {
 
   /** Keep crash-orphaned publication files from bypassing the spool byte cap. */
   private async removeStaleTemporaryFiles(): Promise<void> {
-    await Promise.all((['traces', 'metrics'] as const).map(async (signal) => {
-      const directory = this.directory(signal);
-      let names: string[];
-      try {
-        names = await this.filesystem.readdir(directory);
-      } catch (error) {
-        if (isMissing(error)) return;
-        throw error;
-      }
-      await Promise.all(names.filter((name) => name.endsWith('.tmp')).map(async (name) => {
-        const path = join(directory, name);
+    await Promise.all(
+      (['traces', 'metrics'] as const).map(async (signal) => {
+        const directory = this.directory(signal);
+        let names: string[];
         try {
-          if (this.now() - (await this.filesystem.stat(path)).mtimeMs >= TEMPORARY_FILE_GRACE_MS) {
-            await this.filesystem.rm(path, { force: true });
-          }
+          names = await this.filesystem.readdir(directory);
         } catch (error) {
-          if (!isMissing(error)) throw error;
+          if (isMissing(error)) return;
+          throw error;
         }
-      }));
-    }));
+        await Promise.all(
+          names
+            .filter((name) => name.endsWith('.tmp'))
+            .map(async (name) => {
+              const path = join(directory, name);
+              try {
+                if (this.now() - (await this.filesystem.stat(path)).mtimeMs >= TEMPORARY_FILE_GRACE_MS) {
+                  await this.filesystem.rm(path, { force: true });
+                }
+              } catch (error) {
+                if (!isMissing(error)) throw error;
+              }
+            }),
+        );
+      }),
+    );
   }
 
   private itemsFromName(name: string): number {

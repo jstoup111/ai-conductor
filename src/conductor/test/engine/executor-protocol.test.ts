@@ -58,7 +58,11 @@ describe('engine/executor-protocol', () => {
       { kind: 'event', scope: 'root', payload: '{not json' },
       /event.*payload.*JSON/i,
     ],
-    ['an OTel projection without a boolean start result', { kind: 'otel-projection', started: 'yes' }, /started.*boolean/i],
+    [
+      'an OTel projection without a boolean start result',
+      { kind: 'otel-projection', started: 'yes' },
+      /started.*boolean/i,
+    ],
   ])('returns malformed rather than throwing for %s', (_caseName, raw, reason) => {
     expect(() => parseExecutorMessage(raw)).not.toThrow();
     expect(parseExecutorMessage(raw)).toMatchObject({ kind: 'malformed', reason: expect.stringMatching(reason) });

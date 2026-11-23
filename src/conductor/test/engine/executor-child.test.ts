@@ -557,7 +557,9 @@ describe('executor child entrypoint', () => {
 
     const projection = port.sent.findIndex((message) => (message as { kind?: string }).kind === 'otel-projection');
     const firstFeatureEvent = port.sent.findIndex(
-      (message) => (message as { kind?: string; scope?: string }).kind === 'event' && (message as { scope?: string }).scope === 'feature',
+      (message) =>
+        (message as { kind?: string; scope?: string }).kind === 'event' &&
+        (message as { scope?: string }).scope === 'feature',
     );
     expect(port.sent[projection]).toEqual({ kind: 'otel-projection', started: false });
     expect(projection).toBeGreaterThanOrEqual(0);
