@@ -16,6 +16,9 @@ export interface SpoolRuntime {
   drainer: SpoolDrainer;
 }
 
+/** A child process may append to the shared spool but must never drain it. */
+export interface SpoolWriterRuntime { store: SpoolStore; }
+
 /** Injectable credential seams for the locally-owned spool runtime. */
 export interface SpoolRuntimeOptions {
   environment?: NodeJS.ProcessEnv;
@@ -77,6 +80,10 @@ export function createSpoolRuntime(
       events,
     });
   return { store, lease, drainer };
+}
+
+export function createSpoolWriterRuntime(directory: string, config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>): SpoolWriterRuntime {
+  return { store: new SpoolStore(directory, { maxBytes: config.spool?.maxBytes }) };
 }
 
 /** Builds direct exporters unless this OTLP process can anchor its spool in Git's main checkout. */

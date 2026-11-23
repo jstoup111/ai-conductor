@@ -502,7 +502,7 @@ describe('executor child entrypoint', () => {
     );
 
     expect(port.sent).toEqual([
-      { kind: 'hello', protocolVersion: EXECUTOR_PROTOCOL_VERSION, engineVersionId: VERSION },
+      { kind: 'hello', protocolVersion: EXECUTOR_PROTOCOL_VERSION, engineVersionId: VERSION, otelProjection: true },
     ]);
     expect(calls).toEqual([]);
     port.dispatch({ kind: 'work-order', order });

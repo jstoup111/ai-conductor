@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EventPersister } from './event-persister.js';
@@ -17,6 +17,8 @@ import {
   createWorktreeLifecycleProxy,
   teeExecutorConsole,
 } from './executor-proxies.js';
+import { loadMergedConfig } from './config.js';
+import { startChildOtelProjection } from './otel/child-otel.js';
 
 export interface ExecutorChildDeps {
   /**
@@ -185,7 +187,7 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
       else pendingSupervisorFeatureEvents.push(parsed.message.payload);
     }
   });
-  port.send({ kind: 'hello', protocolVersion: EXECUTOR_PROTOCOL_VERSION, engineVersionId });
+  port.send({ kind: 'hello', protocolVersion: EXECUTOR_PROTOCOL_VERSION, engineVersionId, otelProjection: true });
   await new Promise<void>((resolve) => {
     finishWaitingForOrder = resolve;
     const receive = (raw?: unknown) => {
@@ -193,6 +195,7 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
       if (parsed.kind !== 'ok' || parsed.message.kind !== 'work-order' || started) return;
       started = true;
       const order = parsed.message.order;
+      const projection = parsed.message.otelProjection;
       // New supervisors provide this in the protocol envelope. Retain the
       // WorkOrder fallback so a new child remains compatible with a
       // supervisor that predates the envelope field.
@@ -247,16 +250,28 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
               supervisorEngineVersionId:
                 deps.supervisorEngineVersionId ?? order.supervisorEngineVersionId ?? order.engineVersionId,
             });
-            const outcome = controller.signal.aborted
-              ? { slug: order.slug, status: 'parked' as const, reason: String(controller.signal.reason ?? 'stopped') }
-              : await deps.run({
-                  order,
-                  engineVersionId,
-                  effectiveConcurrency,
-                  events,
-                  signal: controller.signal,
-                  preemptionRequested: () => yieldRequested,
-                });
+            const loaded = projection ? await loadMergedConfig(worktree.path) : undefined;
+            const childOtel = projection && loaded?.ok
+              ? startChildOtelProjection({
+                  config: loaded.config, trace: projection.trace, engineVersionId, slug: order.slug,
+                  mainRoot: resolve(worktree.path, '../..'), events, sendMeter: (message) => port.send(message),
+                })
+              : undefined;
+            let outcome: FeatureExecutionOutcome;
+            try {
+              outcome = controller.signal.aborted
+                ? { slug: order.slug, status: 'parked' as const, reason: String(controller.signal.reason ?? 'stopped') }
+                : await deps.run({
+                    order,
+                    engineVersionId,
+                    effectiveConcurrency,
+                    events,
+                    signal: controller.signal,
+                    preemptionRequested: () => yieldRequested,
+                  });
+            } finally {
+              await childOtel?.stop();
+            }
             await sendOutcome(outcome);
             if (deps.waitForSupervisorVisualizerClose === true) {
               await new Promise<void>((resolve) => {

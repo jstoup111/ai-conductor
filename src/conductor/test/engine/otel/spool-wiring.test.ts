@@ -1,4 +1,4 @@
-// Covers: task:7, task:10, task:15, task:19
+// Covers: task:4, task:7, task:10, task:15, task:19
 import { execFile as execFileCallback } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { access, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createSpoolRuntime,
+  createSpoolWriterRuntime,
   resolveSpoolDir,
   warnDisabledSpoolBacklog,
   warnSpoolUnavailable,
@@ -26,6 +27,18 @@ const DEFAULT_PROVENANCE = { commit: true, pr: true, issue: true, feature: true 
 // The collector is fixture-owned; bypass the ambient test marker only for
 // this direct construction, never by mutating process.env.
 const loopbackOtelEnv: NodeJS.ProcessEnv = {};
+
+describe('createSpoolWriterRuntime', () => {
+  it('owns only the store for a child writer', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'spool-writer-'));
+    temporaryDirectories.push(directory);
+    const runtime = createSpoolWriterRuntime(directory, { enabled: true, exporter: 'otlp', spool: { enabled: true } } as never);
+    await runtime.store.write('traces', Buffer.from('child-batch'));
+    expect(await readdir(join(directory, 'traces'))).toHaveLength(1);
+    expect(runtime).not.toHaveProperty('lease');
+    expect(runtime).not.toHaveProperty('drainer');
+  });
+});
 
 async function endpoint(server: Server): Promise<string> {
   servers.push(server);

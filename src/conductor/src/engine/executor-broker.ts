@@ -3,6 +3,7 @@ import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EVENT_SINKS } from './event-sinks.js';
 import { createForwardingFeatureEventEmitter } from './event-persister.js';
 import { parseExecutorMessage } from './executor-protocol.js';
+import type { BrokeredInstrumentHost } from './otel/brokered-meter.js';
 import type { ProviderAvailability } from './provider-availability.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { LiveBoundaryCoordinator, LiveBoundaryWindow } from './self-host/live-boundary-coordinator.js';
@@ -30,6 +31,9 @@ export interface ExecutorBrokerDeps {
     context: ExecutorFeatureTraceContext,
     events: ConductorEventEmitter,
   ) => (() => void | Promise<void>) | undefined;
+  instrumentHost?: BrokeredInstrumentHost;
+  acceptedChildren?: Set<string>;
+  knownEventTypes?: ReadonlySet<string>;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -38,6 +42,8 @@ export interface ExecutorBrokerAttachment {
   events: ConductorEventEmitter;
   /** Stops optional visualizers before the supervisor publishes dispatch end. */
   close(): void | Promise<void>;
+  acceptOtelProjection?(): boolean;
+  useSupervisorOtel?(): void;
 }
 
 /**
@@ -112,19 +118,22 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       // ephemeral subscribers (currently the slug-aware daemon renderer) to
       // the proxy bus before it forwards to the root spine.
       const detachFeatureEventRenderer = deps.attachFeatureEventRenderer?.(slug, featureEvents);
-      const detachFeatureOtelVisualizer =
-        engineVersionId === undefined
-          ? undefined
-          : deps.attachFeatureOtelVisualizer?.(
-              {
-                slug,
-                engineVersionId,
-                ...(typeof identity === 'string' || identity?.sourceRef === undefined
-                  ? {}
-                  : { sourceRef: identity.sourceRef }),
-              },
-              featureEvents,
-            );
+      let detachFeatureOtelVisualizer: (() => void | Promise<void>) | undefined;
+      let otelProjectionAccepted = false;
+      let meterHandler: ReturnType<BrokeredInstrumentHost['forDispatch']> | undefined;
+      const attachSupervisorVisualizer = () => {
+        if (detachFeatureOtelVisualizer || otelProjectionAccepted || engineVersionId === undefined) return;
+        detachFeatureOtelVisualizer = deps.attachFeatureOtelVisualizer?.({ slug, engineVersionId,
+          ...(typeof identity === 'string' || identity?.sourceRef === undefined ? {} : { sourceRef: identity.sourceRef }),
+        }, featureEvents);
+      };
+      const acceptOtelProjection = () => {
+        if (!deps.instrumentHost) return false;
+        otelProjectionAccepted = true;
+        deps.acceptedChildren?.add(slug);
+        meterHandler = deps.instrumentHost.forDispatch(slug);
+        return true;
+      };
       const respond = (requestId: string, result: unknown) => port.send({ kind: 'response', requestId, result });
       const release = () => {
         for (const window of windows.values()) window.close();
@@ -284,12 +293,13 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
             port.send({ kind: 'event', scope: 'feature', payload: event });
           }
         } else if (message.kind === 'request') void request(message.requestId, message.method, message.params);
+        else if (message.kind === 'meter') { if (otelProjectionAccepted) meterHandler?.handle(message); }
         else if (message.kind === 'event') {
           // Dispatch lifecycle is supervisor-owned once per claim. Never let
           // a child replay or duplicate these root events during a relaunch.
           if (message.payload.type === 'feature_dispatch_started' || message.payload.type === 'feature_dispatch_ended')
             return;
-          if (!(message.payload.type in EVENT_SINKS)) return; // preserve unknowns in child ledger only
+          if (!(deps.knownEventTypes ?? new Set(Object.keys(EVENT_SINKS))).has(message.payload.type)) return; // preserve unknowns in child ledger only
           void (message.scope === 'feature' ? featureEvents : deps.rootEvents).emit(message.payload as ConductorEvent);
         } else if (message.kind === 'log') deps.featureLogFor(slug)(`[executor:${message.level}] ${message.message}`);
       };
@@ -313,6 +323,8 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           pendingWorktreeAcquires.clear();
           release();
           await detachFeatureOtelVisualizer?.();
+          meterHandler?.close();
+          deps.acceptedChildren?.delete(slug);
           featureEvents.off('renderer_error', persistSupervisorRendererError);
           detachFeatureEventRenderer?.();
           ports.delete(port);
@@ -324,7 +336,8 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       port.on('disconnect', () => close('executor supervisor channel disconnected'));
       attachments.add(close);
       broadcastState();
-      return { events: featureEvents, close };
+      if (!deps.instrumentHost) attachSupervisorVisualizer();
+      return { events: featureEvents, close, acceptOtelProjection, useSupervisorOtel: attachSupervisorVisualizer };
     },
     abortAll() {
       for (const close of [...attachments]) close('executor broker aborted');

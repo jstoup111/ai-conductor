@@ -31,6 +31,7 @@ export class MetricsListener {
     private readonly recorder: MetricsRecorder,
     private readonly now: () => number = () => Date.now(),
     private readonly featureName?: string,
+    private readonly isChildProjected: (slug: string) => boolean = () => false,
   ) {}
 
   /** The handler table is the source of truth for both subscription and projection. */
@@ -130,7 +131,18 @@ export class MetricsListener {
     if (missing.length > 0) throw new Error(`MetricsListener lacks handlers for OTel event type(s): ${missing.join(', ')}`);
     for (const type of otelEventTypes()) {
       const projection = MetricsListener.METRICS_HANDLERS[type];
-      const handler: EventHandler = (event) => { try { projection(this, event as MetricsEvent); } catch { /* metrics are best effort */ } };
+      const handler: EventHandler = (event) => {
+        try {
+          const slug = this.featureOf(event as ConductorEvent);
+          const lifecycle = event.type === 'feature_dispatch_started' || event.type === 'feature_dispatch_ended';
+          const terminal = event.type === 'feature_complete' || event.type === 'loop_halt';
+          if (slug !== undefined && this.isChildProjected(slug) && !lifecycle) {
+            if (terminal) this.terminal.add(slug);
+            return;
+          }
+          projection(this, event as MetricsEvent);
+        } catch { /* metrics are best effort */ }
+      };
       this.handlers.push([type, handler]);
       emitter.on(type, handler);
     }

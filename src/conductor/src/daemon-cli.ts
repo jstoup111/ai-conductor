@@ -8,7 +8,7 @@ import {
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { existsSync, realpathSync, readFileSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { access, mkdir, readFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -109,6 +109,7 @@ import {
 import { formatBotCoAuthorSkipped } from './engine/bot-co-author.js';
 import { installDaemonProcessServices } from './engine/daemon-process-bootstrap.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
+import { buildDispatchTraceIdentity } from './engine/otel/child-otel.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { LiveBoundaryCoordinator } from './engine/self-host/live-boundary-coordinator.js';
@@ -1769,19 +1770,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     featureEvents: ConductorEventEmitter,
   ): (() => Promise<void>) => {
     const pipelineDir = join(projectRoot, '.worktrees', trace.slug, '.pipeline');
-    const persistedRunId = (() => {
-      try {
-        return readFileSync(join(pipelineDir, 'conduct-session-id'), 'utf8').trim();
-      } catch {
-        return '';
-      }
-    })();
+    const dispatchTrace = buildDispatchTraceIdentity(projectRoot, trace.slug, { harnessVersion: daemonHarnessVersion, sourceRef: trace.sourceRef });
     const visualizerContext = {
       pipelineDir,
-      runId: persistedRunId || createSessionEventIdentity(),
+      runId: dispatchTrace.runId,
       feature: trace.slug,
       project: projectRoot,
-      branch: leafBranchFor(trace.slug),
+      branch: dispatchTrace.branch,
       engineVersion: trace.engineVersionId,
       metrics: false,
       harnessVersion: daemonHarnessVersion,
@@ -1873,6 +1868,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     featureLogFor,
     attachFeatureEventRenderer: (slug, featureEvents) => attachFeatureEventRenderer(featureEvents, featureLogFor(slug)),
     attachFeatureOtelVisualizer: attachChildFeatureOtelVisualizer,
+    ...(daemonOtel ? { instrumentHost: daemonOtel.instrumentHost, acceptedChildren: daemonOtel.acceptedChildren } : {}),
     log,
   });
   const childExecutor = createChildProcessFeatureExecutor({
@@ -1884,6 +1880,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     supervisorEngineVersionId: resolveEngineVersion(engineRoot.ownEngineDir),
     rootEvents: events,
     attachBroker: executorBroker.attach,
+    ...(daemonOtel ? { acceptOtelProjection: (slug, order) => buildDispatchTraceIdentity(projectRoot, slug, { harnessVersion: daemonHarnessVersion, sourceRef: order.sourceRef }) } : {}),
     dispatchStartTimeoutMs: resolveDispatchStartTimeoutSeconds(config) * 1_000,
     teardownTimeoutMs: resolveTeardownTimeoutSeconds(config) * 1_000,
     onProtocolMismatch: () => {

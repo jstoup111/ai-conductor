@@ -9,7 +9,7 @@ import { readHaltSidecarClassification } from './halt-marker.js';
 import { classifyDispatchKind } from './daemon-runner.js';
 import type { FeatureExecutionOutcome, FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
-import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage, type ExecutorMessage } from './executor-protocol.js';
+import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage, type ExecutorMessage, type ExecutorOtelProjectionTrace } from './executor-protocol.js';
 import type { ExecutorIpcPort } from './executor-proxies.js';
 import type { ExecutorBrokerAttachment } from './executor-broker.js';
 import { removeExecutorRecord, writeExecutorRecord } from './executor-records.js';
@@ -30,6 +30,7 @@ export interface ChildFeatureExecutorDeps {
   supervisorEngineVersionId: string;
   rootEvents: ConductorEventEmitter;
   attachBroker: (slug: string, port: ExecutorIpcPort, order?: WorkOrder) => ExecutorBrokerAttachment;
+  acceptOtelProjection?: (slug: string, order: WorkOrder) => ExecutorOtelProjectionTrace | undefined;
   fork?: (modulePath: string, args: string[], options: { silent: true; execArgv?: string[] }) => ForkedExecutor;
   dispatchStartTimeoutMs?: number;
   teardownTimeoutMs?: number;
@@ -203,6 +204,10 @@ export function createChildProcessFeatureExecutor(
           return;
         }
         handshake = 'accepted';
+        const trace = message.otelProjection && attachment.acceptOtelProjection?.()
+          ? deps.acceptOtelProjection?.(order.slug, launchedOrder)
+          : undefined;
+        if (trace === undefined) attachment.useSupervisorOtel?.();
         void recordPublished.then(() => {
           // The handshake permits work only once the live child is durably
           // pinned.  Do not send after a record failure or an early exit.
@@ -214,6 +219,7 @@ export function createChildProcessFeatureExecutor(
             ...(launchedOrder.effectiveConcurrency === undefined
               ? {}
               : { effectiveConcurrency: launchedOrder.effectiveConcurrency }),
+            ...(trace === undefined ? {} : { otelProjection: { trace } }),
           } satisfies ExecutorMessage);
         });
         return;

@@ -21,7 +21,8 @@ import { buildResource } from './resource.js';
 import { buildExporters, isExportRefused } from './transport.js';
 import { MetricsRecorder } from './metrics.js';
 import { MetricsListener } from './metrics-listener.js';
-import { createSpoolRuntime, resolveSpoolDirSync, type SpoolRuntime, warnDisabledSpoolBacklog, warnSpoolUnavailable } from './spool-wiring.js';
+import { createSpoolRuntime, resolveSpoolDirSync, type SpoolRuntime, type SpoolWriterRuntime, warnDisabledSpoolBacklog, warnSpoolUnavailable } from './spool-wiring.js';
+import { createBrokeredInstrumentHost, type BrokeredInstrumentHost } from './brokered-meter.js';
 
 const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
 
@@ -147,7 +148,7 @@ export function wireOtelVisualizer(
   config: HarnessConfig,
   context: OtelVisualizerStartContext,
   events: ConductorEventEmitter,
-  spoolRuntime?: SpoolRuntime,
+  spoolRuntime?: SpoolRuntime | SpoolWriterRuntime,
   registryFactory: (events: ConductorEventEmitter) => PluginRegistry = createOtelVisualizerRegistry,
 ): VisualizerPlugin | null {
   const resolved = resolveOtelConfig(config, context.pipelineDir);
@@ -214,7 +215,7 @@ export function wireOtelVisualizer(
 export function wireDaemonOtel(
   config: HarnessConfig,
   context: { mainRoot: string; project: string; projectName: string; workerName?: string; harnessVersion?: string; rootEvents: ConductorEventEmitter; env?: NodeJS.ProcessEnv },
-): { flush: () => Promise<void>; stop: () => Promise<void>; spoolRuntime?: SpoolRuntime } | null {
+): { flush: () => Promise<void>; stop: () => Promise<void>; spoolRuntime?: SpoolRuntime; instrumentHost: BrokeredInstrumentHost; acceptedChildren: Set<string> } | null {
   const resolved = resolveOtelConfig(config, join(context.mainRoot, '.pipeline'));
   if (!resolved.enabled) return null;
   emitResolvedWarnings(resolved, context.rootEvents);
@@ -240,9 +241,13 @@ export function wireDaemonOtel(
     projectName: resolved.projectName ?? context.projectName ?? basename(context.mainRoot), workerName,
     ...(Object.prototype.hasOwnProperty.call(context, 'harnessVersion') ? { harnessVersion: context.harnessVersion } : {}),
   }, 'metrics'), readers: [reader] });
-  const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('conductor', '1.0.0'), {
+  const acceptedChildren = new Set<string>();
+  const meter = provider.getMeter('conductor', '1.0.0');
+  const identity = { project: resolved.projectName ?? context.projectName ?? 'unknown', worker: workerName };
+  const listener = new MetricsListener(new MetricsRecorder(meter, {
     project: resolved.projectName ?? context.projectName ?? 'unknown', worker: workerName,
-  }, resolved.attributes));
+  }, resolved.attributes), undefined, undefined, (slug) => acceptedChildren.has(slug));
+  const instrumentHost = createBrokeredInstrumentHost(meter, identity);
   listener.start(context.rootEvents);
   const activeSpoolRuntime = spoolRuntime;
   const leaseStart = activeSpoolRuntime?.lease.acquire();
@@ -269,6 +274,8 @@ export function wireDaemonOtel(
       await spoolRuntime?.lease.release().catch((error) => reportSpoolFailure(context.rootEvents, error));
     })(),
     ...(spoolRuntime ? { spoolRuntime } : {}),
+    instrumentHost,
+    acceptedChildren,
   };
 }
 
