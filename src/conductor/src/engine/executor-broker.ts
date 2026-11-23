@@ -121,6 +121,12 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       let detachFeatureOtelVisualizer: (() => void | Promise<void>) | undefined;
       let otelProjectionAccepted = false;
       let meterHandler: ReturnType<BrokeredInstrumentHost['forDispatch']> | undefined;
+      // Starting the child projection constructs its synchronous metric
+      // instruments before the child can report that startup succeeded. Keep
+      // those declarations until that confirmation makes this attachment the
+      // meter host; records only follow feature events, which are sent after
+      // the confirmation.
+      const pendingMeterMessages: Array<Extract<ExecutorMessage, { kind: 'meter' }>> = [];
       const attachSupervisorVisualizer = () => {
         if (detachFeatureOtelVisualizer || otelProjectionAccepted || engineVersionId === undefined) return;
         detachFeatureOtelVisualizer = deps.attachFeatureOtelVisualizer?.(
@@ -139,6 +145,8 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
         otelProjectionAccepted = true;
         deps.acceptedChildren?.add(slug);
         meterHandler = deps.instrumentHost.forDispatch(slug);
+        for (const message of pendingMeterMessages) meterHandler.handle(message);
+        pendingMeterMessages.length = 0;
         return true;
       };
       const respond = (requestId: string, result: unknown) => port.send({ kind: 'response', requestId, result });
@@ -302,6 +310,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
         } else if (message.kind === 'request') void request(message.requestId, message.method, message.params);
         else if (message.kind === 'meter') {
           if (otelProjectionAccepted) meterHandler?.handle(message);
+          else if (message.op === 'create') pendingMeterMessages.push(message);
         } else if (message.kind === 'event') {
           // Dispatch lifecycle is supervisor-owned once per claim. Never let
           // a child replay or duplicate these root events during a relaunch.
@@ -332,6 +341,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           release();
           await detachFeatureOtelVisualizer?.();
           meterHandler?.close();
+          pendingMeterMessages.length = 0;
           deps.acceptedChildren?.delete(slug);
           featureEvents.off('renderer_error', persistSupervisorRendererError);
           detachFeatureEventRenderer?.();

@@ -99,8 +99,9 @@ describe('executor broker', () => {
     const channel = pair();
     const acceptedChildren = new Set<string>();
     const attachFeatureOtelVisualizer = vi.fn(() => () => {});
+    const meterHandler = { handle: vi.fn(), close: vi.fn() };
     const instrumentHost = {
-      forDispatch: vi.fn(() => ({ handle: vi.fn(), close: vi.fn() })),
+      forDispatch: vi.fn(() => meterHandler),
     };
     const broker = createExecutorBroker({
       rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
@@ -118,10 +119,21 @@ describe('executor broker', () => {
     });
     expect(acceptedChildren).not.toContain('feature');
     expect(attachFeatureOtelVisualizer).not.toHaveBeenCalled();
+    const instrument = {
+      kind: 'meter' as const,
+      op: 'create' as const,
+      instrumentId: 'starting',
+      name: 'conductor.step.duration',
+      instrumentKind: 'histogram' as const,
+    };
+    channel.child.send(instrument);
+    channel.flush();
+    expect(meterHandler.handle).not.toHaveBeenCalled();
 
     expect(attachment.confirmOtelProjection?.()).toBe(true);
     expect(acceptedChildren).toContain('feature');
     expect(attachFeatureOtelVisualizer).not.toHaveBeenCalled();
+    expect(meterHandler.handle).toHaveBeenCalledWith(instrument);
   });
 
   it.each(['token-unavailable', 'identity-read-failed', 'worktree-write-failed', 'resolver-absent'] as const)(
