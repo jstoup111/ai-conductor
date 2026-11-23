@@ -18,18 +18,18 @@
 <body><main>
   <h1>Child OTel BUILD evidence review</h1>
   <p>Question: do Tasks 5–11 have defensible Done-when test evidence after the cited-test refusal?</p>
-  <div class="finding">Task 9 checks 1 and 3 now cite a direct test. All remaining named checks retain an explicit <strong>unverified</strong> disposition because the repository contains no test asserting the complete requested behavior.</div>
+  <div class="finding">Tasks 6 and 9 now have direct, passing coverage for every listed check. Tasks 5, 7, 8, 10 and 11 retain an explicit <strong>unverified</strong> disposition: the recorded reasons were re-reviewed and remain accurate rather than being promoted without proof.</div>
   <div class="scroll"><table>
     <thead><tr><th>Task</th><th>Disposition</th><th>Evidence / confirmed gap</th></tr></thead>
     <tbody>
       <tr><td>5</td><td class="unverified">5 checks unverified</td><td><code>child-otel.test.ts</code> tests only fresh trace identity; it does not exercise file export, spool fallback, event flags, flush order, or configured meter attributes.</td></tr>
-      <tr><td>6</td><td><span class="verified">1 check cited</span>; 3 unverified</td><td><code>buildDispatchTraceIdentity</code> fresh-id test covers the no-worktree case. No test negotiates accepted/absent capability or protocol-1 exchange.</td></tr>
+      <tr><td>6</td><td class="verified">4 checks verified</td><td><code>child-feature-executor.test.ts</code> now negotiates a capable protocol-1 child without a mismatch and covers both legacy-child and non-accepting-supervisor envelopes. <code>child-otel.test.ts</code> covers persisted session identity and fresh fallback ids.</td></tr>
       <tr><td>7</td><td class="unverified">4 checks unverified</td><td><code>spool-wiring.test.ts</code> proves writer ownership, not child lifecycle, outcome ordering, no-acceptance behavior, or SIGTERM export.</td></tr>
       <tr><td>8</td><td class="unverified">4 checks unverified</td><td>The broker tests do not assert accepted attachment behavior, meter routing after close, malformed meter logging, or injected known-type filtering.</td></tr>
-      <tr><td>9</td><td><span class="verified">checks 1 and 3 cited</span>; check 2 unverified</td><td><code>metrics-listener.test.ts</code> “suppresses child-projected feature metrics while retaining dispatch lifecycle metrics” asserts step/shipment suppression plus dispatch and halt metrics. It does not prove the projected-slug no-terminal fallback.</td></tr>
+      <tr><td>9</td><td class="verified">3 checks verified</td><td><code>metrics-listener.test.ts</code> “suppresses child-projected feature metrics while retaining dispatch lifecycle metrics” asserts step/shipment suppression, terminal run-close suppression, the projected-slug no-terminal fallback, dispatch, and halt metrics.</td></tr>
       <tr><td>10</td><td class="unverified">2 checks unverified</td><td>The daemon wiring test only covers an absent OTel configuration, not returned host/accepted-set behavior or an in-memory capable child under disabled OTel.</td></tr>
       <tr><td>11</td><td class="unverified">5 checks unverified</td><td>The lifecycle integration test covers child audit-trail gate verdicts; it does not cover skewed-pair export, exactly-once metrics, compatibility fallback, trace/order, or unknown <code>otel:false</code> suppression.</td></tr>
     </tbody>
   </table></div>
-  <p>Verification run: <code>ai-conductor scoped-run</code> over the six named OTel/executor test files plus the daemon-parity acceptance test completed successfully. This was a targeted BUILD review; aggregate-suite ownership remains with <code>test_suite</code>. The repository has no <code>scripts/check-report-contrast.mjs</code>, so the prescribed contrast check could not run.</p>
+  <p>Verification: the seven named OTel/executor test files passed (115 tests). Production typecheck, test typecheck (with a 6 GiB Node heap; the default 4 GiB process exhausted memory), lint, and format checks passed. This was a targeted BUILD review; aggregate-suite ownership remains with <code>test_suite</code>. The repository has no <code>scripts/check-report-contrast.mjs</code>, so the prescribed contrast check could not run.</p>
 </main></body></html>
