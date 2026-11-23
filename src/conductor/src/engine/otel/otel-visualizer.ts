@@ -99,6 +99,12 @@ export interface OtelVisualizerContext {
   exportTimeoutMillis?: number;
   /** Environment used for the OTLP test-export guard. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Defaults to true. A caller that owns a dispatch shutdown lifecycle can
+   * disable process listeners and stop this visualizer after event forwarding
+   * has drained.
+   */
+  installProcessSignalHandlers?: boolean;
 }
 
 /** Default export timeout (ms). An endpoint that does not respond within this
@@ -116,6 +122,7 @@ export class OtelVisualizer implements VisualizerPlugin {
   private readonly onWarning?: (msg: string) => void;
   private readonly exportTimeoutMillis: number;
   private readonly now: () => number;
+  private readonly installProcessSignalHandlers: boolean;
   /** Compatibility only for legacy direct callers that omit start context. */
   private readonly legacyStartContext: VisualizerStartContext;
   /** Configured `otel.project_name` overrides the trace Resource project name. */
@@ -191,6 +198,7 @@ export class OtelVisualizer implements VisualizerPlugin {
     this.onWarning = ctx.onWarning;
     this.exportTimeoutMillis = ctx.exportTimeoutMillis ?? EXPORT_TIMEOUT_MS;
     this.now = ctx.now ?? (() => Date.now());
+    this.installProcessSignalHandlers = ctx.installProcessSignalHandlers ?? true;
     this.legacyStartContext = {
       runId: ctx.runId,
       pipelineDir: ctx.pipelineDir,
@@ -230,11 +238,13 @@ export class OtelVisualizer implements VisualizerPlugin {
     // still triggers a best-effort flush. Both signals are handled by the same
     // function. stop() is idempotent — a second signal during flush returns the
     // existing stopPromise rather than starting a second flush.
-    this.sigHandler = (): void => {
-      void this.stop();
-    };
-    process.on('SIGINT', this.sigHandler);
-    process.on('SIGTERM', this.sigHandler);
+    if (this.installProcessSignalHandlers) {
+      this.sigHandler = (): void => {
+        void this.stop();
+      };
+      process.on('SIGINT', this.sigHandler);
+      process.on('SIGTERM', this.sigHandler);
+    }
   }
 
   /**

@@ -1,4 +1,4 @@
-// Covers: task:7, task:8, task:9, task:10, task:11
+// Covers: task:2, task:7, task:8, task:9, task:10, task:11
 import { describe, expect, it } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
@@ -257,6 +257,86 @@ describe('executor broker', () => {
     fixture.broker.abortAll();
     channel.flush();
     await expect(wait).rejects.toThrow(/aborted/);
+  });
+
+  // Covers: task:1
+  it('keeps an aborted child attachment forwarding events until its own close', async () => {
+    const stopped: string[] = [];
+    const channel = pair();
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
+      attachFeatureOtelVisualizer: (trace) => () => {
+        stopped.push(trace.slug);
+      },
+    });
+    const proxy = createRateLimitEpisodeProxy(createExecutorRequestClient(channel.child), () => 1_000);
+    const attachment = broker.attach('b', channel.supervisor, 'v1');
+    const received: unknown[] = [];
+    attachment.events.on('bot_co_author_skipped', (event) => {
+      received.push(event);
+    });
+    channel.flush();
+    proxy.enter(2_000);
+    channel.flush();
+
+    const clear = proxy.clear();
+    channel.flush();
+    broker.abortAll();
+    channel.flush();
+    await expect(clear).rejects.toThrow('executor broker aborted');
+    expect(stopped).toEqual([]);
+
+    channel.child.send({
+      kind: 'event',
+      scope: 'feature',
+      payload: { type: 'bot_co_author_skipped', reason: 'token-unavailable' },
+    });
+    channel.flush();
+    expect(received).toEqual([{ type: 'bot_co_author_skipped', reason: 'token-unavailable' }]);
+
+    await attachment.close();
+    expect(stopped).toEqual(['b']);
+  });
+
+  // Covers: task:2
+  it('drops a collected child event before either attached visualizer can record it', async () => {
+    const recorded: Record<string, unknown[]> = { a: [], b: [] };
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
+      attachFeatureOtelVisualizer: ({ slug }, events) => {
+        events.on('bot_co_author_skipped', (event) => {
+          recorded[slug]!.push(event);
+        });
+        return () => {};
+      },
+    });
+    const a = pair();
+    const b = pair();
+    const attachmentA = broker.attach('a', a.supervisor, 'v1');
+    broker.attach('b', b.supervisor, 'v1');
+    const receivedByA: unknown[] = [];
+    attachmentA.events.on('bot_co_author_skipped', (event) => {
+      receivedByA.push(event);
+    });
+
+    await attachmentA.close();
+    a.child.send({
+      kind: 'event',
+      scope: 'feature',
+      payload: { type: 'bot_co_author_skipped', reason: 'token-unavailable' },
+    });
+    a.flush();
+
+    expect(receivedByA).toEqual([]);
+    expect(recorded).toEqual({ a: [], b: [] });
   });
 
   it('rejects a child rate-limit clear when its supervisor channel disconnects', async () => {

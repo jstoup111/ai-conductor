@@ -1217,6 +1217,11 @@ reported the same way.
   delivery with one warning.
 - **SIGHUP.** The daemon flushes active dispatch and daemon OTel providers into the spool and
   releases the lease, bounded by 5 s, then re-raises SIGHUP.
+- **SIGINT.** The daemon flushes active dispatch OTel providers, bounded by 5 s, then re-raises
+  SIGINT.
+- **SIGTERM.** Child dispatches keep exporting their closing events while they wind down; each
+  dispatch's telemetry stops only when its child exits.
+- **Dispatch end.** The daemon flushes its metrics after each dispatch's `feature_dispatch_ended`.
 
 A `max_bytes` that is not a positive integer disables telemetry with
 `otel.spool.max_bytes must be a positive integer number of bytes.`

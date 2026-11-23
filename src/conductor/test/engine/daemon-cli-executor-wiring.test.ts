@@ -1,6 +1,6 @@
-// Covers: task:21, task:28
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+// Covers: task:5, task:21, task:28
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,7 @@ import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 const seams = vi.hoisted(() => ({
   childFactory: vi.fn(),
   sweepExecutorRecordsOnBoot: vi.fn(),
+  wireDaemonOtel: vi.fn(),
 }));
 
 vi.mock('../../src/engine/child-feature-executor.js', async (importOriginal) => ({
@@ -27,16 +28,27 @@ vi.mock('../../src/engine/executor-records.js', async (importOriginal) => ({
   sweepExecutorRecordsOnBoot: seams.sweepExecutorRecordsOnBoot,
 }));
 
+vi.mock('../../src/engine/otel/wire.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/otel/wire.js')>()),
+  wireDaemonOtel: seams.wireDaemonOtel,
+}));
+
 const workDirs: string[] = [];
 const originalConsoleLog = console.log;
 const originalConsoleWarn = console.warn;
 const originalConsoleError = console.error;
 
-function executor(): FeatureExecutor & { stopAll(): Promise<void>; requestYield(slug: string): boolean } {
+type ChildExecutor = FeatureExecutor & {
+  execute: Mock<FeatureExecutor['execute']>;
+  stopAll: Mock<() => Promise<void>>;
+  requestYield: Mock<(slug: string) => boolean>;
+};
+
+function executor(): ChildExecutor {
   return {
-    execute: vi.fn(async (order: WorkOrder) => ({ slug: order.slug, status: 'done' as const })),
-    stopAll: vi.fn(async () => {}),
-    requestYield: vi.fn(() => true),
+    execute: vi.fn<FeatureExecutor['execute']>(async (order: WorkOrder) => ({ slug: order.slug, status: 'done' })),
+    stopAll: vi.fn<() => Promise<void>>(async () => {}),
+    requestYield: vi.fn<(slug: string) => boolean>(() => true),
   };
 }
 
@@ -60,6 +72,7 @@ function workOrder(slug: string): WorkOrder {
 beforeEach(() => {
   seams.childFactory.mockReset();
   seams.sweepExecutorRecordsOnBoot.mockReset().mockResolvedValue(undefined);
+  seams.wireDaemonOtel.mockReset().mockReturnValue(null);
   vi.spyOn(process, 'once').mockImplementation((() => process) as typeof process.once);
   vi.spyOn(process, 'on').mockImplementation((() => process) as typeof process.on);
 });
@@ -73,6 +86,91 @@ afterEach(async () => {
 });
 
 describe('daemon executor-isolation composition', () => {
+  // Covers: task:5
+  it('flushes enabled daemon metrics after the child dispatch ends and before the scheduler collects it', async () => {
+    const root = await project();
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(join(root, '.ai-conductor', 'config.yml'), 'otel:\n  exporter: file\n');
+    let releaseFlush!: () => void;
+    const heldFlush = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    const order: string[] = [];
+    const child = executor();
+    child.execute.mockImplementation(async (work) => {
+      order.push('feature_dispatch_ended');
+      return { slug: work.slug, status: 'done' };
+    });
+    seams.childFactory.mockReturnValue(child);
+    const flush = vi.fn(() => {
+      order.push('flush');
+      return heldFlush;
+    });
+    seams.wireDaemonOtel.mockReturnValue({ flush, stop: vi.fn(async () => {}) });
+    const schedulerCompletion = vi.fn();
+
+    const run = runDaemonMode({
+      projectRoot: root,
+      concurrency: 1,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+      workSource: { discover: async () => [{ slug: 'child-feature' }] },
+      watch: false,
+      runDaemon: async (deps) => {
+        const [item] = await deps.discoverBacklog({ refresh: false });
+        const outcome = await deps.featureExecution!.executor.execute(workOrder(item!.slug));
+        schedulerCompletion();
+        order.push('scheduler_completion');
+        return { processed: [outcome], stoppedReason: 'backlog_drained' };
+      },
+    });
+
+    await vi.waitFor(() => expect(order).toEqual(['feature_dispatch_ended', 'flush']));
+    expect(seams.wireDaemonOtel).toHaveBeenCalledWith(
+      expect.objectContaining({ otel: { exporter: 'file' } }),
+      expect.anything(),
+    );
+    expect(schedulerCompletion).not.toHaveBeenCalled();
+
+    releaseFlush();
+    await run;
+
+    expect(order).toEqual(['feature_dispatch_ended', 'flush', 'scheduler_completion']);
+  });
+
+  // Covers: task:6
+  it('returns the child outcome unchanged without flushing when daemon OTel is disabled', async () => {
+    const root = await project();
+    const child = executor();
+    const flush = vi.fn(async () => {});
+    const outcome = { slug: 'child-feature', status: 'done' as const };
+    child.execute.mockResolvedValue(outcome);
+    seams.childFactory.mockReturnValue(child);
+    seams.wireDaemonOtel.mockReturnValue(null);
+    const schedulerOutcomes: FeatureExecutionOutcome[] = [];
+
+    await runDaemonMode({
+      projectRoot: root,
+      concurrency: 1,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+      workSource: { discover: async () => [{ slug: outcome.slug }] },
+      watch: false,
+      runDaemon: async (deps) => {
+        const [item] = await deps.discoverBacklog({ refresh: false });
+        schedulerOutcomes.push(await deps.featureExecution!.executor.execute(workOrder(item!.slug)));
+        return { processed: schedulerOutcomes, stoppedReason: 'backlog_drained' };
+      },
+    });
+
+    expect(schedulerOutcomes).toEqual([outcome]);
+    expect(flush).not.toHaveBeenCalled();
+  });
+
   // Covers: task:28
   it('passes an injected child fork to the sole daemon executor', async () => {
     const root = await project();
@@ -118,7 +216,7 @@ describe('daemon executor-isolation composition', () => {
     const daemon = await import('../../src/engine/daemon.js');
     vi.spyOn(daemon, 'runDaemon').mockImplementation(async (deps) => {
       calls.push('runDaemon');
-      expect(deps.featureExecution?.executor).toBe(child);
+      expect(deps.featureExecution?.executor).toMatchObject({ execute: expect.any(Function) });
       expect(deps.requestYield?.('running-child')).toBe(true);
       expect(child.requestYield).toHaveBeenCalledWith('running-child');
       return { processed: [], stoppedReason: 'backlog_drained' };
