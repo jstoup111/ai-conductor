@@ -42,6 +42,25 @@ describe('createSpoolWriterRuntime', () => {
     expect(runtime).not.toHaveProperty('lease');
     expect(runtime).not.toHaveProperty('drainer');
   });
+
+  it('holds the configured cap when two child writer runtimes publish concurrently', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'spool-writer-cap-'));
+    temporaryDirectories.push(directory);
+    const config = {
+      enabled: true,
+      exporter: 'otlp',
+      spool: { enabled: true, maxBytes: 10 },
+    } as never;
+    const first = createSpoolWriterRuntime(directory, config);
+    const second = createSpoolWriterRuntime(directory, config);
+
+    await Promise.all([
+      first.store.write('traces', Buffer.from('12345678')),
+      second.store.write('metrics', Buffer.from('abcdefgh')),
+    ]);
+
+    expect(await first.store.totalBytes()).toBeLessThanOrEqual(10);
+  });
 });
 
 async function endpoint(server: Server): Promise<string> {

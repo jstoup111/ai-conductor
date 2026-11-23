@@ -29,6 +29,7 @@ describe('engine/executor-protocol', () => {
     ['request', { kind: 'request', requestId: 'request-1', method: 'rate-limit.enter', params: { deadline: 42 } }],
     ['response', { kind: 'response', requestId: 'request-1', result: { cleared: true } }],
     ['stop', { kind: 'stop', reason: 'supervisor-shutdown' }],
+    ['otel-projection', { kind: 'otel-projection', started: true }],
     ['outcome', { kind: 'outcome', outcome: { slug: 'executor-protocol', status: 'done' } }],
   ] as const)('parses a %s message to its discriminated kind', (kind, raw) => {
     const parsed = parseExecutorMessage(raw);
@@ -57,6 +58,7 @@ describe('engine/executor-protocol', () => {
       { kind: 'event', scope: 'root', payload: '{not json' },
       /event.*payload.*JSON/i,
     ],
+    ['an OTel projection without a boolean start result', { kind: 'otel-projection', started: 'yes' }, /started.*boolean/i],
   ])('returns malformed rather than throwing for %s', (_caseName, raw, reason) => {
     expect(() => parseExecutorMessage(raw)).not.toThrow();
     expect(parseExecutorMessage(raw)).toMatchObject({ kind: 'malformed', reason: expect.stringMatching(reason) });

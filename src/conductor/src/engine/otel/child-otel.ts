@@ -39,10 +39,10 @@ export function startChildOtelProjection(input: {
   mainRoot: string;
   events: ConductorEventEmitter;
   sendMeter: (message: Extract<ExecutorMessage, { kind: 'meter' }>) => unknown;
-}): { stop(): Promise<void> } {
+}): { started: boolean; stop(): Promise<void> } {
   const pipelineDir = join(input.mainRoot, '.worktrees', input.slug, '.pipeline');
   const resolved = resolveOtelConfig(input.config, pipelineDir);
-  if (!resolved.enabled) return { stop: async () => {} };
+  if (!resolved.enabled) return { started: false, stop: async () => {} };
   const writer =
     resolved.exporter === 'otlp' && resolved.spool?.enabled
       ? createSpoolWriterRuntime(join(input.mainRoot, '.daemon', 'otel-spool'), resolved)
@@ -63,6 +63,7 @@ export function startChildOtelProjection(input: {
     input.events,
     writer,
   );
+  if (visualizer === null) return { started: false, stop: async () => {} };
   const listener = new MetricsListener(
     new MetricsRecorder(
       createBrokeredMeter(input.sendMeter),
@@ -79,6 +80,7 @@ export function startChildOtelProjection(input: {
   listener.start(input.events);
   let stopped: Promise<void> | undefined;
   return {
+    started: true,
     stop: () =>
       (stopped ??= (async () => {
         listener.stop();

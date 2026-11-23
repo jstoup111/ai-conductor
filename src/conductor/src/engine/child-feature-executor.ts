@@ -141,6 +141,7 @@ export function createChildProcessFeatureExecutor(
     let handshakeFailure: string | undefined;
     let protocolMismatchEvent: Promise<void> | undefined;
     let workOrderSent = false;
+    let childProjectionPending = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = async (result: FeatureExecutionOutcome): Promise<FeatureExecutionOutcome> => {
       if (ended) return outcome ?? result;
@@ -210,9 +211,10 @@ export function createChildProcessFeatureExecutor(
         }
         handshake = 'accepted';
         const trace =
-          message.otelProjection && deps.acceptOtelProjection !== undefined && attachment.acceptOtelProjection?.()
+          message.otelProjection && deps.acceptOtelProjection !== undefined
             ? deps.acceptOtelProjection?.(order.slug, launchedOrder)
             : undefined;
+        childProjectionPending = trace !== undefined;
         if (trace === undefined) attachment.useSupervisorOtel?.();
         void recordPublished.then(() => {
           // The handshake permits work only once the live child is durably
@@ -228,6 +230,12 @@ export function createChildProcessFeatureExecutor(
             ...(trace === undefined ? {} : { otelProjection: { trace } }),
           } satisfies ExecutorMessage);
         });
+        return;
+      }
+      if (message.kind === 'otel-projection') {
+        if (!childProjectionPending) return;
+        childProjectionPending = false;
+        if (!message.started || attachment.confirmOtelProjection?.() !== true) attachment.useSupervisorOtel?.();
         return;
       }
       if (message.kind === 'outcome') {

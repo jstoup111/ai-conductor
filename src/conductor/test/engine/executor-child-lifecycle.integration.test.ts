@@ -175,11 +175,16 @@ async function completeConductorState(worktree: string, prUrl?: string): Promise
 
 async function fixture(
   slug: string,
-  { durableChildState = true }: { durableChildState?: boolean } = {},
+  {
+    durableChildState = true,
+    offerOtelProjection = false,
+  }: { durableChildState?: boolean; offerOtelProjection?: boolean } = {},
 ): Promise<{
   root: string;
   order: WorkOrder;
   rootEvents: ConductorEventEmitter;
+  supervisorOtelEvents: unknown[];
+  acceptedChildren: Set<string>;
   execute(): ReturnType<ReturnType<typeof createChildProcessFeatureExecutor>['execute']>;
 }> {
   const root = await mkdtemp(join(tmpdir(), 'executor-child-lifecycle-'));
@@ -191,12 +196,25 @@ async function fixture(
   if (durableChildState) await mkdir(join(root, '.pipeline', 'children', 'first'), { recursive: true });
   engineStore = await useTempEngineStore();
   const rootEvents = new ConductorEventEmitter();
+  const supervisorOtelEvents: unknown[] = [];
+  const acceptedChildren = new Set<string>();
   const broker = createExecutorBroker({
     rateLimitEpisode: createRateLimitEpisode(),
     providerAvailability: createProviderAvailability({ now: () => Date.now() }),
     worktreeLifecycle: new WorktreeLifecycleQueue(),
     rootEvents,
     featureLogFor: () => () => {},
+    ...(offerOtelProjection
+      ? {
+          instrumentHost: { forDispatch: () => ({ handle: () => {}, close: () => {} }) } as never,
+          acceptedChildren,
+          attachFeatureOtelVisualizer: (_context, events) => {
+            const record = (event: unknown) => supervisorOtelEvents.push(event);
+            events.on('gate_verdict', record as never);
+            return () => events.off('gate_verdict', record as never);
+          },
+        }
+      : {}),
   });
   const order: WorkOrder = {
     schemaVersion: 1,
@@ -216,10 +234,20 @@ async function fixture(
     rootEvents,
     attachBroker: (feature, port, engineVersionId) => broker.attach(feature, port, engineVersionId),
     fork: createInMemoryExecutorFork({ projectRoot: root }),
+    ...(offerOtelProjection
+      ? {
+          acceptOtelProjection: () => ({
+            runId: 'run',
+            project: root,
+            branch: `feat/daemon-${slug}`,
+            harnessVersion: '1.2.3',
+          }),
+        }
+      : {}),
     dispatchStartTimeoutMs: 100,
     teardownTimeoutMs: 1,
   });
-  return { root, order, rootEvents, execute: () => executor.execute(order) };
+  return { root, order, rootEvents, supervisorOtelEvents, acceptedChildren, execute: () => executor.execute(order) };
 }
 
 async function prepareStackedRekick(subject: Awaited<ReturnType<typeof fixture>>): Promise<string> {
@@ -265,6 +293,28 @@ async function prepareIssueLinkProvenance(subject: Awaited<ReturnType<typeof fix
 }
 
 describe('executor child shared lifecycle', () => {
+  it('keeps the supervisor projector for every child event when an accepted work order cannot start child OTel', async () => {
+    const subject = await fixture('child-no-otel-projector', { offerOtelProjection: true });
+    const run = vi.spyOn(Conductor.prototype, 'run').mockImplementation(async function (this: Conductor) {
+      await (this as unknown as { events: ConductorEventEmitter }).events.emit({
+        type: 'gate_verdict',
+        step: 'plan',
+        satisfied: true,
+        reason: 'plan accepted',
+      });
+    });
+    try {
+      await subject.execute();
+
+      expect(subject.acceptedChildren).not.toContain(subject.order.slug);
+      expect(subject.supervisorOtelEvents).toEqual([
+        expect.objectContaining({ type: 'gate_verdict', step: 'plan', satisfied: true }),
+      ]);
+    } finally {
+      run.mockRestore();
+    }
+  });
+
   it('uses its admitted stacked-dispatch lease once and preserves shared-conductor expectations after in-process executor removal', async () => {
     const subject = await fixture('stacked-child');
     const completions: string[] = [];

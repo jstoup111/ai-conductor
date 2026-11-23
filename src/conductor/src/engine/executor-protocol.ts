@@ -34,6 +34,11 @@ export type ExecutorMessage =
       otelProjection?: { trace: ExecutorOtelProjectionTrace };
     }
   | {
+      /** Child confirmation that an accepted OTel projection is actually live. */
+      kind: 'otel-projection';
+      started: boolean;
+    }
+  | {
       kind: 'meter';
       op: 'create';
       instrumentId: string;
@@ -179,6 +184,10 @@ export function parseExecutorMessage(raw: unknown): ParsedExecutorMessage {
           ...(trace === undefined ? {} : { otelProjection: { trace } }),
         },
       };
+    }
+    case 'otel-projection': {
+      if (typeof raw.started !== 'boolean') return malformed('otel-projection started must be a boolean');
+      return { kind: 'ok', message: { kind, started: raw.started } };
     }
     case 'meter': {
       const op = requiredString(raw, 'op');

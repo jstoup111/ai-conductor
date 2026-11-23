@@ -532,6 +532,38 @@ describe('executor child entrypoint', () => {
     ]);
   });
 
+  it('reports a declined child OTel projection before forwarding its first feature event when no OTel config resolves', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-no-otel-'));
+    const port = new FakePort();
+    const done = runExecutorChild(port, {
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => ({ path: root! }),
+      run: async () => ({ slug: order.slug, status: 'done' }),
+    });
+
+    port.dispatch({
+      kind: 'work-order',
+      order,
+      otelProjection: {
+        trace: {
+          runId: 'run',
+          project: root,
+          branch: 'feat/daemon-feature',
+          harnessVersion: '1.2.3',
+        },
+      },
+    });
+    await done;
+
+    const projection = port.sent.findIndex((message) => (message as { kind?: string }).kind === 'otel-projection');
+    const firstFeatureEvent = port.sent.findIndex(
+      (message) => (message as { kind?: string; scope?: string }).kind === 'event' && (message as { scope?: string }).scope === 'feature',
+    );
+    expect(port.sent[projection]).toEqual({ kind: 'otel-projection', started: false });
+    expect(projection).toBeGreaterThanOrEqual(0);
+    expect(projection).toBeLessThan(firstFeatureEvent);
+  });
+
   it('stops an in-flight child through its abort signal, retains feature state, and reports parked', async () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-'));
     const port = new FakePort();

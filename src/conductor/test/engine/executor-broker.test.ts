@@ -1,5 +1,5 @@
 // Covers: task:7, task:8, task:9, task:10, task:11
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
 import { createProviderAvailability } from '../../src/engine/provider-availability.js';
@@ -95,6 +95,35 @@ function brokerFixture() {
 }
 
 describe('executor broker', () => {
+  it('waits for a child projection-start confirmation before accepting the child or suppressing the supervisor visualizer', () => {
+    const channel = pair();
+    const acceptedChildren = new Set<string>();
+    const attachFeatureOtelVisualizer = vi.fn(() => () => {});
+    const instrumentHost = {
+      forDispatch: vi.fn(() => ({ handle: vi.fn(), close: vi.fn() })),
+    };
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
+      attachFeatureOtelVisualizer,
+      instrumentHost: instrumentHost as never,
+      acceptedChildren,
+    });
+
+    const attachment = broker.attach('feature', channel.supervisor, {
+      engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' as never,
+    });
+    expect(acceptedChildren).not.toContain('feature');
+    expect(attachFeatureOtelVisualizer).not.toHaveBeenCalled();
+
+    expect(attachment.confirmOtelProjection?.()).toBe(true);
+    expect(acceptedChildren).toContain('feature');
+    expect(attachFeatureOtelVisualizer).not.toHaveBeenCalled();
+  });
+
   it.each(['token-unavailable', 'identity-read-failed', 'worktree-write-failed', 'resolver-absent'] as const)(
     'relays a child %s co-author skip once on its feature bus',
     (reason) => {

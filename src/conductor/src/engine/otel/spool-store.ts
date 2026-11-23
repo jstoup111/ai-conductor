@@ -57,6 +57,14 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
+function alreadyExists(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'EEXIST';
+}
+
+function yieldForCapLock(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 1));
+}
+
 /**
  * Stores immutable OTLP/HTTP protobuf request bodies. A final .pb file is only
  * visible after its same-directory temporary file has been fsynced and renamed.
@@ -103,18 +111,22 @@ export class SpoolStore {
       // Keep the just-fsynced batch private while accounting for it. Once the
       // rename publishes it, write() must return immediately so an SDK success
       // callback cannot race a drainer through more store I/O.
-      if (this.maxBytes !== undefined) {
-        await this.removeStaleTemporaryFiles();
-        let totalBytes = await this.totalBytes();
-        for (const oldest of await this.allBatches()) {
-          if (totalBytes + body.byteLength <= this.maxBytes) break;
-          await this.delete(oldest);
-          totalBytes -= oldest.size;
-          evictedBatches += 1;
-          evictedItems += oldest.items;
-        }
+      if (this.maxBytes === undefined) {
+        await this.filesystem.rename(temporaryPath, path);
+      } else {
+        await this.withCapLock(async () => {
+          await this.removeStaleTemporaryFiles();
+          let totalBytes = await this.totalBytes();
+          for (const oldest of await this.allBatches()) {
+            if (totalBytes + body.byteLength <= this.maxBytes) break;
+            await this.delete(oldest);
+            totalBytes -= oldest.size;
+            evictedBatches += 1;
+            evictedItems += oldest.items;
+          }
+          await this.filesystem.rename(temporaryPath, path);
+        });
       }
-      await this.filesystem.rename(temporaryPath, path);
       published = true;
     } finally {
       if (!closed) await handle.close().catch(() => undefined);
@@ -175,6 +187,27 @@ export class SpoolStore {
 
   private directory(signal: SpoolSignal): string {
     return join(this.root, signal);
+  }
+
+  /** Serializes cap eviction and publication across independent writer runtimes. */
+  private async withCapLock<T>(operation: () => Promise<T>): Promise<T> {
+    const lockPath = join(this.root, '.cap.lock');
+    let lock: SpoolFileHandle;
+    for (;;) {
+      try {
+        lock = await this.filesystem.open(lockPath, 'wx');
+        break;
+      } catch (error) {
+        if (!alreadyExists(error)) throw error;
+        await yieldForCapLock();
+      }
+    }
+    try {
+      return await operation();
+    } finally {
+      await lock.close().catch(() => undefined);
+      await this.filesystem.rm(lockPath, { force: true }).catch(() => undefined);
+    }
   }
 
   private async allBatches(): Promise<SpoolBatch[]> {

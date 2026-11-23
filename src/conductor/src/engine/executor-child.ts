@@ -230,6 +230,20 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
                 });
             };
             for (const event of pendingSupervisorFeatureEvents.splice(0)) persistSupervisorFeatureEvent(event);
+            const loaded = projection ? await loadMergedConfig(worktree.path) : undefined;
+            const childOtel =
+              projection && loaded?.ok
+                ? startChildOtelProjection({
+                    config: loaded.config,
+                    trace: projection.trace,
+                    engineVersionId,
+                    slug: order.slug,
+                    mainRoot: resolvePath(worktree.path, '../..'),
+                    events,
+                    sendMeter: (message) => port.send(message),
+                  })
+                : undefined;
+            if (projection) port.send({ kind: 'otel-projection', started: childOtel?.started === true });
             for (const type of Object.keys((await import('./event-sinks.js')).EVENT_SINKS) as Array<
               import('../types/events.js').ConductorEvent['type']
             >) {
@@ -250,19 +264,6 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
               supervisorEngineVersionId:
                 deps.supervisorEngineVersionId ?? order.supervisorEngineVersionId ?? order.engineVersionId,
             });
-            const loaded = projection ? await loadMergedConfig(worktree.path) : undefined;
-            const childOtel =
-              projection && loaded?.ok
-                ? startChildOtelProjection({
-                    config: loaded.config,
-                    trace: projection.trace,
-                    engineVersionId,
-                    slug: order.slug,
-                    mainRoot: resolvePath(worktree.path, '../..'),
-                    events,
-                    sendMeter: (message) => port.send(message),
-                  })
-                : undefined;
             let outcome: FeatureExecutionOutcome;
             try {
               outcome = controller.signal.aborted

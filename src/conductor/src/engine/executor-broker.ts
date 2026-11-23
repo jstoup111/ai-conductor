@@ -42,7 +42,7 @@ export interface ExecutorBrokerAttachment {
   events: ConductorEventEmitter;
   /** Stops optional visualizers before the supervisor publishes dispatch end. */
   close(): void | Promise<void>;
-  acceptOtelProjection?(): boolean;
+  confirmOtelProjection?(): boolean;
   useSupervisorOtel?(): void;
 }
 
@@ -134,7 +134,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           featureEvents,
         );
       };
-      const acceptOtelProjection = () => {
+      const confirmOtelProjection = () => {
         if (!deps.instrumentHost) return false;
         otelProjectionAccepted = true;
         deps.acceptedChildren?.add(slug);
@@ -345,7 +345,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       attachments.add(close);
       broadcastState();
       if (!deps.instrumentHost) attachSupervisorVisualizer();
-      return { events: featureEvents, close, acceptOtelProjection, useSupervisorOtel: attachSupervisorVisualizer };
+      return { events: featureEvents, close, confirmOtelProjection, useSupervisorOtel: attachSupervisorVisualizer };
     },
     abortAll() {
       for (const close of [...attachments]) close('executor broker aborted');
