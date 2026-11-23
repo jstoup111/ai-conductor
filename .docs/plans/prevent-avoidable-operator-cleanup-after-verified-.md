@@ -135,3 +135,52 @@ Use scoped RED/GREEN checks for every task. Use local Git fixtures and controlle
 | adr-2026-07-28-total-halt-classification-legacy-boundary#D3 | no-change | none | No migration of pre-boundary halts. |
 | adr-2026-07-28-total-halt-classification-legacy-boundary#D4 | no-change | none | Canonical marker and class publication continues to fail closed on partial writes. |
 | adr-2026-07-28-total-halt-classification-legacy-boundary#D7 | no-change | none | Backlog and generic retry scheduling retain their existing contracts. |
+
+### Task rem-prd-audit-5: In src/conductor/src/engine/daemon-rekick.ts admitVerifiedRebaseRecoveries, stop skipping silently when readAttempt returns no attempt. Log `verified-rebase <slug>: retained — rebase recovery attempt evidence is missing or invalid` and keep the halt, so a missing, partial or malformed attempt reaches the evaluator's specific reason. In src/conductor/test/daemon-cli-progress-rekick-wiring.test.ts and src/conductor/test/engine/daemon-rekick.test.ts, assert that this reason is reported, the halt is retained, and repeated evaluation spends zero build attempts.
+**Gate:** prd-audit
+**Rationale:** Verified at src/conductor/src/engine/daemon-rekick.ts:205-206: a missing, partial or malformed attempt record hits `if (!expected) continue;` and is skipped silently. Task 2's first Done-when requires that missing or contradictory attempt evidence leaves the build halted and reports that specific condition, so Task 2 admits this repair as BUILD work. Task 1's retained-halt behavior still holds because the halt stays intact. Only the missing diagnostic is added, and the existing wiring test is made stronger rather than looser.
+**Criterion:** S1.2
+**Parent task:** 2
+**Done when:**
+- [test] S1.2 is satisfied by this task.
+- The repair for task rem-prd-audit-5 is committed and its targeted tests pass.
+
+### Task rem-as-built-6: Route verified-rebase recovery (src/conductor/src/daemon-cli.ts:2585-2618) and the halt and park writers (src/conductor/src/engine/halt-marker.ts, src/conductor/src/engine/park-marker.ts) through one feature-scoped serialization boundary. Under it, recheck generation, HEAD, child, park and blockers, then clear HALT/HALT.class only if the live halt still matches the verified generation. In src/conductor/test/engine/daemon-rekick.test.ts, add barrier-controlled tests in which a replacement halt or a park placed after verification survives and yields zero dispatches.
+**Gate:** as-built
+**Rationale:** Confirmed at daemon-cli.ts:2613-2614: HALT is renamed and HALT.class removed unconditionally after admission checks that ran much earlier. This is drift from ADR decision 3, which requires serializing recovery with halt, park and ownership mutations and conditionally clearing that exact halt. Task 3 admits this repair: one feature-scoped ownership boundary, and rejection of a replacement halt with identical wording. No architectural decision is open.
+**Governing clause:** adr-2026-11-19-verified-rebase-admission decision 3
+**Done when:**
+- adr-2026-11-19-verified-rebase-admission decision 3 is satisfied by this task.
+- The repair for task rem-as-built-6 is committed and its targeted tests pass.
+
+### Task rem-as-built-7: In src/conductor/src/daemon-cli.ts verified-rebase recovery, pass the verified execution child to applyRebaseVerdicts, matching applyRebaseTransition, so verdict evaluation and transition application use the same child-scoped records. In src/conductor/test/engine/rebase-transition.test.ts or the daemon-cli wiring test, add a stacked-child test asserting that child gate verdicts are updated and flat records are untouched.
+**Gate:** as-built
+**Rationale:** Confirmed at daemon-cli.ts:2591-2597: applyRebaseVerdicts is called without the child argument, while applyRebaseTransition receives child at :2608. Verdicts and the transition therefore target different record scopes. ADR decision 3 requires the existing rebase transition under the verified child, and Tasks 3 and 4 cover stacked execution children. This is a conforming implementation fix.
+**Governing clause:** adr-2026-11-19-verified-rebase-admission decision 3
+**Done when:**
+- adr-2026-11-19-verified-rebase-admission decision 3 is satisfied by this task.
+- The repair for task rem-as-built-7 is committed and its targeted tests pass.
+
+### Task rem-as-built-8: In src/conductor/src/daemon-cli.ts verified-rebase recovery, look for a recorded pending or completed rebase operation for operationId `verified-rebase-<completedHead>` before calling applyRebaseVerdicts. Resume a pending one via completeInterruptedRebaseOperation (src/conductor/src/engine/rebase-transition.ts), or accept a completed result, without writing a new provisional descriptor (src/conductor/src/engine/rebase.ts). In src/conductor/test/engine/rebase-transition.test.ts, add a test for a restart during transition recording, asserting one effective continuation.
+**Gate:** as-built
+**Rationale:** Confirmed: recovery always calls applyRebaseVerdicts before checking for a recorded operation. Per the finding, that call overwrites the durable descriptor (engine/rebase.ts:2849) and defeats the prior-operation check (rebase-transition.ts:254). ADR decision 3 and Task 4's restart Done-when require finishing a pending transition for the same attempt exactly once. ADR assumption A2 names completeInterruptedRebaseOperation as the mechanism, so no architectural decision is open.
+**Governing clause:** adr-2026-11-19-verified-rebase-admission decision 3
+**Done when:**
+- adr-2026-11-19-verified-rebase-admission decision 3 is satisfied by this task.
+- The repair for task rem-as-built-8 is committed and its targeted tests pass.
+
+### Task rem-as-built-9: In src/conductor/src/daemon-cli.ts, publish verified-rebase halt_cleared through the canonical feature event spine: attach EventPersister so it lands in the feature's .pipeline/events.jsonl, and attribute the daemon-level emission to the feature slug (src/conductor/src/types/events.ts if a field is needed). Reconcile on restart so a clear whose event was not published emits exactly one halt_cleared. In src/conductor/test/engine/daemon-rekick.test.ts, assert exactly one feature-attributed event across an interrupted-then-resumed clear.
+**Gate:** as-built
+**Rationale:** Confirmed at daemon-cli.ts:2615-2618: the feature emitter has only an AuditTrailWriter, so halt_cleared never reaches the feature's .pipeline/events.jsonl, and the daemon emission carries no feature identity. The clear also happens before publication. Task 4 requires the canonical event spine for the clear, one halt_cleared per recovered attempt, and restart safety after the clear. This extends the existing spine with no new channel.
+**Governing clause:** adr-2026-11-19-verified-rebase-admission decision 3
+**Done when:**
+- adr-2026-11-19-verified-rebase-admission decision 3 is satisfied by this task.
+- The repair for task rem-as-built-9 is committed and its targeted tests pass.
+
+### Task rem-as-built-10: Remove the `engine/rebase-recovery-attempt.ts -> filesystem` and `engine/rebase-replay.ts -> filesystem` lines from src/conductor/test/structural/boundary-allowlist.txt. Refactor src/conductor/src/engine/rebase-recovery-attempt.ts and src/conductor/src/engine/rebase-replay.ts to take filesystem access through the existing injected port, wired from their callers (src/conductor/src/daemon-cli.ts, src/conductor/src/engine/rebase.ts), so the structural boundary test passes and the existing attempt-persistence and replay-verification tests stay green.
+**Gate:** as-built
+**Rationale:** Confirmed at src/conductor/test/structural/boundary-allowlist.txt:308-309: two new filesystem exceptions were added, for engine/rebase-recovery-attempt.ts and engine/rebase-replay.ts. ADR adr-2026-11-07 decision 4 makes the allowlist shrink-only, so this is conforming implementation drift. Tasks 1 and 2, which own those modules, admit the repair. Behavior is preserved by injecting the existing filesystem port, and the Task 1 and Task 2 tests must keep passing.
+**Governing clause:** adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 4
+**Done when:**
+- adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 4 is satisfied by this task.
+- The repair for task rem-as-built-10 is committed and its targeted tests pass.
