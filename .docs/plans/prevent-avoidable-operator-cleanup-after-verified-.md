@@ -4,6 +4,10 @@
 **Design:** [approved decision](../decisions/adr-2026-11-19-verified-rebase-admission.md)
 **Conflict check:** [resolved](../conflicts/prevent-avoidable-operator-cleanup-after-verified-.md)
 
+## Technical Approach
+
+Bind automatic rebase-recovery resume to one verified replay attempt: the rebase writer persists the attempt's inputs and a generation-bound halt, verification checks the completed revision against those inputs, and the daemon's halted-feature maintenance pass reconciles and conditionally clears that exact halt under one owner.
+
 ## Tasks
 
 Use scoped RED/GREEN checks for every task. Use local Git fixtures and controlled daemon dependencies for integration proof.
