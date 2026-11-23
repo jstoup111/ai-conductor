@@ -245,7 +245,19 @@ function routedConductor(
     stepRunner: runner,
     acceptanceRedExec: vi.fn(),
     childRegionLifecycle: {
-      resolveActiveChild: async () => cursor,
+      resolveActiveChild: async () => {
+        const stored = await readRouteRecord(root, 'demo', round);
+        if (stored.kind === 'record' && stored.record.phase === 'closed') {
+          return {
+            kind: 'active' as const,
+            child: parseChildId(2)!,
+            position: parseChildId(2)!,
+            isLeaf: true,
+            branch: 'feat/daemon-demo',
+          };
+        }
+        return cursor;
+      },
       enterHostRegion: async () => ({ kind: 'resume', pinnedBase: 'a'.repeat(40) }) as never,
       enterChildRegion: async () => ({ kind: 'completed' }) as never,
     },

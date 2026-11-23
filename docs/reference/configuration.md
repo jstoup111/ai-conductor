@@ -1636,7 +1636,13 @@ a routed round instead of appended to the leaf plan:
   switches to the leaf, records the return in the route record, closes the round, and re-pends
   `prd_audit`, `architecture_review_as_built`, `manual_test`, and the custom gates between
   `build_review` and `finish`. Those gates re-run under their existing caps; the return records no
-  kickback.
+  kickback. Before any of them starts, the engine reloads root state and binds the leaf's child
+  region; the first leaf region gate (`acceptance_specs`, `build`, `test_suite`, `build_review`)
+  not satisfied by the leaf's own verdicts runs first, as a child gate. A `done` region status with
+  a failing or stale leaf verdict counts as unsatisfied. The live exit, markerless reconciliation,
+  and resume share this handoff. If the cursor cannot resolve the leaf as the execution child, the
+  handoff halts `needs-human` with
+  `child BUILD region refused: cannot prepare settled routed leaf handoff: <detail>`.
 - **Round-scoped evidence.** A host's child-region verdicts carry the round id (`routedRound`; see
   [gate verdicts](artifacts.md#gate-verdicts)). Satisfied verdicts from an earlier round do not
   satisfy the current one, so each re-pended region gate re-runs before the host can exit. On
@@ -1689,8 +1695,8 @@ a routed round instead of appended to the leaf plan:
 - **Recovery.** After journal recovery and the outbox drain, the stack preflight deletes a
   `prepared` record that no marker names. For an admitted round, conductor resume rewinds the leaf
   region to `build` without re-admitting. After an operator leaf return closes the last open round,
-  the preflight drains its event and resume restores whole-feature state instead of entering a
-  child region.
+  the preflight drains its event and resume takes the settled leaf handoff described under
+  Progression instead of re-entering a routed host.
 - **Base refresh.** While any route record is not `closed` or the `revalidate` queue exists, the
   stack preflight, the daemon re-kick rebase, and the finish-time `rebase` step defer the base
   refresh and emit `restack_refused` with reason `deferred-base-refresh`. The stack preflight then
