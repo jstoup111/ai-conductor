@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Child OTel BUILD evidence review</title>
+  <style>
+    :root { color-scheme: dark light; --page:#101418; --panel:#182027; --ink:#f2f6f8; --muted:#b8c4cb; --line:#42515c; --good:#7ee787; --warn:#ffd580; }
+    @media (prefers-color-scheme: light) { :root { --page:#f6f8fa; --panel:#fff; --ink:#18212a; --muted:#425466; --line:#b8c2cc; --good:#167c31; --warn:#8a5600; } }
+    body { margin:0; background:var(--page); color:var(--ink); font:16px/1.5 system-ui,sans-serif; }
+    main { max-width:1000px; margin:0 auto; padding:44px 24px 72px; }
+    h1 { margin:0 0 8px; font-size:2rem; } p { max-width:78ch; color:var(--muted); }
+    .finding { border-left:4px solid var(--good); padding:12px 16px; background:var(--panel); color:var(--ink); margin:24px 0; }
+    .scroll { overflow-x:auto; border:1px solid var(--line); border-radius:8px; }
+    table { width:100%; border-collapse:collapse; min-width:720px; } th,td { padding:12px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); } th { background:var(--panel); } code { font-size:.9em; } .verified { color:var(--good); font-weight:700; } .unverified { color:var(--warn); font-weight:700; }
+  </style>
+</head>
+<body><main>
+  <h1>Child OTel BUILD evidence review</h1>
+  <p>Question: do Tasks 5–11 have defensible Done-when test evidence after the cited-test refusal?</p>
+  <div class="finding">Task 9 checks 1 and 3 now cite a direct test. All remaining named checks retain an explicit <strong>unverified</strong> disposition because the repository contains no test asserting the complete requested behavior.</div>
+  <div class="scroll"><table>
+    <thead><tr><th>Task</th><th>Disposition</th><th>Evidence / confirmed gap</th></tr></thead>
+    <tbody>
+      <tr><td>5</td><td class="unverified">5 checks unverified</td><td><code>child-otel.test.ts</code> tests only fresh trace identity; it does not exercise file export, spool fallback, event flags, flush order, or configured meter attributes.</td></tr>
+      <tr><td>6</td><td><span class="verified">1 check cited</span>; 3 unverified</td><td><code>buildDispatchTraceIdentity</code> fresh-id test covers the no-worktree case. No test negotiates accepted/absent capability or protocol-1 exchange.</td></tr>
+      <tr><td>7</td><td class="unverified">4 checks unverified</td><td><code>spool-wiring.test.ts</code> proves writer ownership, not child lifecycle, outcome ordering, no-acceptance behavior, or SIGTERM export.</td></tr>
+      <tr><td>8</td><td class="unverified">4 checks unverified</td><td>The broker tests do not assert accepted attachment behavior, meter routing after close, malformed meter logging, or injected known-type filtering.</td></tr>
+      <tr><td>9</td><td><span class="verified">checks 1 and 3 cited</span>; check 2 unverified</td><td><code>metrics-listener.test.ts</code> “suppresses child-projected feature metrics while retaining dispatch lifecycle metrics” asserts step/shipment suppression plus dispatch and halt metrics. It does not prove the projected-slug no-terminal fallback.</td></tr>
+      <tr><td>10</td><td class="unverified">2 checks unverified</td><td>The daemon wiring test only covers an absent OTel configuration, not returned host/accepted-set behavior or an in-memory capable child under disabled OTel.</td></tr>
+      <tr><td>11</td><td class="unverified">5 checks unverified</td><td>The lifecycle integration test covers child audit-trail gate verdicts; it does not cover skewed-pair export, exactly-once metrics, compatibility fallback, trace/order, or unknown <code>otel:false</code> suppression.</td></tr>
+    </tbody>
+  </table></div>
+  <p>Verification run: <code>ai-conductor scoped-run</code> over the six named OTel/executor test files plus the daemon-parity acceptance test completed successfully. This was a targeted BUILD review; aggregate-suite ownership remains with <code>test_suite</code>. The repository has no <code>scripts/check-report-contrast.mjs</code>, so the prescribed contrast check could not run.</p>
+</main></body></html>
