@@ -82,10 +82,10 @@ describe('MetricsListener dispatch dimensions', () => {
     );
     listener.start(root);
     try {
-      await root.emit({ type: 'feature_dispatch_started', slug: 'f', kind: 'new' });
+      await root.emit({ type: 'feature_dispatch_started', slug: 'f', kind: 'initial' });
       await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
       await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
-      await emitter.emit({ type: 'feature_shipped', slug: 'f' });
+      await emitter.emit({ type: 'feature_shipped', slug: 'f', active: { state: 'unavailable' } });
       await emitter.emit({ type: 'feature_complete' });
       await root.emit({ type: 'feature_dispatch_ended', slug: 'f', outcome: 'complete' });
       await root.emit({ type: 'feature_dispatch_ended', slug: 'other', outcome: 'terminated' });
