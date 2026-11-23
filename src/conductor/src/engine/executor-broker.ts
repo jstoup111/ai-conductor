@@ -2,7 +2,7 @@ import type { ConductorEvent } from '../types/events.js';
 import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EVENT_SINKS } from './event-sinks.js';
 import { createForwardingFeatureEventEmitter } from './event-persister.js';
-import { parseExecutorMessage } from './executor-protocol.js';
+import { parseExecutorMessage, type ExecutorMessage } from './executor-protocol.js';
 import type { BrokeredInstrumentHost } from './otel/brokered-meter.js';
 import type { ProviderAvailability } from './provider-availability.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';

@@ -37,7 +37,9 @@ describe('child feature executor dispatch lifecycle', () => {
     let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
     const rootEvents = new ConductorEventEmitter();
     const mismatches: unknown[] = [];
-    rootEvents.on('executor_protocol_mismatch', (event) => mismatches.push(event));
+    rootEvents.on('executor_protocol_mismatch', (event) => {
+      mismatches.push(event);
+    });
     const executor = createChildProcessFeatureExecutor({
       projectRoot: root,
       engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
@@ -78,7 +80,11 @@ describe('child feature executor dispatch lifecycle', () => {
         expect.objectContaining({
           kind: 'work-order',
           otelProjection: {
-            trace: expect.objectContaining({ runId: 'child-session', harnessVersion: '1.2.3', sourceRef: 'owner/repo#1' }),
+            trace: expect.objectContaining({
+              runId: 'child-session',
+              harnessVersion: '1.2.3',
+              sourceRef: 'owner/repo#1',
+            }),
           },
         }),
       ),
@@ -92,7 +98,10 @@ describe('child feature executor dispatch lifecycle', () => {
 
   it.each([
     ['legacy child', { kind: 'hello', protocolVersion: 1, engineVersionId: VERSION }],
-    ['supervisor without acceptance', { kind: 'hello', protocolVersion: 1, engineVersionId: VERSION, otelProjection: true }],
+    [
+      'supervisor without acceptance',
+      { kind: 'hello', protocolVersion: 1, engineVersionId: VERSION, otelProjection: true },
+    ],
   ] as const)('omits projection for a %s', async (_name, hello) => {
     root = await mkdtemp(join(tmpdir(), 'child-executor-no-projection-'));
     const messages: Array<(value?: unknown) => void> = [];
@@ -104,7 +113,7 @@ describe('child feature executor dispatch lifecycle', () => {
       supervisorEngineVersionId: VERSION,
       rootEvents: new ConductorEventEmitter(),
       attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
-      ...(hello.otelProjection === undefined
+      ...(!('otelProjection' in hello)
         ? { acceptOtelProjection: () => ({ runId: 'unused', project: root!, branch: 'b', harnessVersion: '1' }) }
         : {}),
       fork: () => ({
@@ -129,7 +138,9 @@ describe('child feature executor dispatch lifecycle', () => {
     await vi.waitFor(() => expect(messages).toHaveLength(1));
     messages[0]!(hello);
     await vi.waitFor(() => expect(sent).toContainEqual(expect.objectContaining({ kind: 'work-order' })));
-    expect(sent.find((message) => (message as { kind?: string }).kind === 'work-order')).not.toHaveProperty('otelProjection');
+    expect(sent.find((message) => (message as { kind?: string }).kind === 'work-order')).not.toHaveProperty(
+      'otelProjection',
+    );
     messages[0]!({ kind: 'outcome', outcome: { slug: order.slug, status: 'done' } });
     exit?.(0, null);
     await execution;
