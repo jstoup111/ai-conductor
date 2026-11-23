@@ -75,7 +75,13 @@ vi.mock('../../src/engine/daemon-runner.js', async (importOriginal) => ({
     async (item: { slug: string }) => {
       const scope = await deps.beginFeatureRun({ path: fixture.worktreePath, branch: `feat/${item.slug}` }, item);
       const events = scope.events as { emit: (event: ConductorEvent) => Promise<void> };
-      for (const event of fixture.events) if (event.type !== fixture.filteredType) await events.emit(event);
+      for (const event of fixture.events)
+        if (
+          event.type !== fixture.filteredType &&
+          event.type !== 'feature_dispatch_started' &&
+          event.type !== 'feature_dispatch_ended'
+        )
+          await events.emit(event);
       for (let attempt = 0; attempt < fixture.metricExportAttempts; attempt += 1) {
         await events.emit({
           type: 'provider_attempt',
