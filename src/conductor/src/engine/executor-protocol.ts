@@ -5,12 +5,23 @@ import type { WorkOrder } from './work-order.js';
 /** Increment when an incompatible executor IPC message change is made. */
 export const EXECUTOR_PROTOCOL_VERSION = 1;
 
+export type BrokeredMeterInstrumentKind = 'counter' | 'upDownCounter' | 'histogram' | 'gauge';
+
+export interface ExecutorOtelProjectionTrace {
+  readonly runId: string;
+  readonly project: string;
+  readonly branch: string;
+  readonly harnessVersion: string;
+  readonly sourceRef?: string;
+}
+
 /** The closed, versioned message envelope shared by the supervisor and executor. */
 export type ExecutorMessage =
   | {
       kind: 'hello';
       protocolVersion: number;
       engineVersionId: string;
+      otelProjection?: true;
     }
   | {
       kind: 'work-order';
@@ -20,6 +31,24 @@ export type ExecutorMessage =
        * can preserve the legacy provider-environment concurrency guard.
        */
       effectiveConcurrency?: number;
+      otelProjection?: { trace: ExecutorOtelProjectionTrace };
+    }
+  | {
+      kind: 'meter';
+      op: 'create';
+      instrumentId: string;
+      name: string;
+      instrumentKind: BrokeredMeterInstrumentKind;
+      description?: string;
+      unit?: string;
+      advice?: Record<string, unknown>;
+    }
+  | {
+      kind: 'meter';
+      op: 'record';
+      instrumentId: string;
+      value: number;
+      attributes: Record<string, unknown>;
     }
   | {
       kind: 'event';
@@ -73,6 +102,29 @@ function requiredString(message: MessageRecord, field: string): string | undefin
   return typeof value === 'string' ? value : undefined;
 }
 
+function parseOtelProjectionTrace(value: unknown): ExecutorOtelProjectionTrace | undefined {
+  if (!isRecord(value)) return undefined;
+  const runId = requiredString(value, 'runId');
+  const project = requiredString(value, 'project');
+  const branch = requiredString(value, 'branch');
+  const harnessVersion = requiredString(value, 'harnessVersion');
+  if (runId === undefined || project === undefined || branch === undefined || harnessVersion === undefined) {
+    return undefined;
+  }
+  if (value.sourceRef !== undefined && typeof value.sourceRef !== 'string') return undefined;
+  return {
+    runId,
+    project,
+    branch,
+    harnessVersion,
+    ...(value.sourceRef === undefined ? {} : { sourceRef: value.sourceRef }),
+  };
+}
+
+function isBrokeredMeterInstrumentKind(value: unknown): value is BrokeredMeterInstrumentKind {
+  return value === 'counter' || value === 'upDownCounter' || value === 'histogram' || value === 'gauge';
+}
+
 /**
  * Parses a JSON-serializable executor IPC message without allowing malformed
  * child input to throw through the supervisor boundary.
@@ -90,9 +142,20 @@ export function parseExecutorMessage(raw: unknown): ParsedExecutorMessage {
       }
       const engineVersionId = requiredString(raw, 'engineVersionId');
       if (!engineVersionId) return malformed('hello engineVersionId must be a string');
-      return { kind: 'ok', message: { kind, protocolVersion: raw.protocolVersion, engineVersionId } };
+      if (raw.otelProjection !== undefined && raw.otelProjection !== true) {
+        return malformed('hello otelProjection must be true when provided');
+      }
+      return {
+        kind: 'ok',
+        message: {
+          kind,
+          protocolVersion: raw.protocolVersion,
+          engineVersionId,
+          ...(raw.otelProjection === undefined ? {} : { otelProjection: true }),
+        },
+      };
     }
-    case 'work-order':
+    case 'work-order': {
       if (!isRecord(raw.order)) return malformed('work-order order must be an object');
       if (
         raw.effectiveConcurrency !== undefined &&
@@ -102,14 +165,63 @@ export function parseExecutorMessage(raw: unknown): ParsedExecutorMessage {
       ) {
         return malformed('work-order effectiveConcurrency must be a positive integer when provided');
       }
+      if (raw.otelProjection !== undefined && !isRecord(raw.otelProjection)) {
+        return malformed('work-order otelProjection must be an object when provided');
+      }
+      const trace = raw.otelProjection === undefined ? undefined : parseOtelProjectionTrace(raw.otelProjection.trace);
+      if (raw.otelProjection !== undefined && trace === undefined) {
+        return malformed('work-order otelProjection trace must carry the dispatch identity');
+      }
       return {
         kind: 'ok',
         message: {
           kind,
           order: raw.order as unknown as WorkOrder,
           ...(raw.effectiveConcurrency === undefined ? {} : { effectiveConcurrency: raw.effectiveConcurrency }),
+          ...(trace === undefined ? {} : { otelProjection: { trace } }),
         },
       };
+    }
+    case 'meter': {
+      const op = requiredString(raw, 'op');
+      if (op === 'create') {
+        const instrumentId = requiredString(raw, 'instrumentId');
+        const name = requiredString(raw, 'name');
+        if (instrumentId === undefined || name === undefined || !isBrokeredMeterInstrumentKind(raw.instrumentKind)) {
+          return malformed('meter create requires an instrumentId, name, and supported instrumentKind');
+        }
+        if (raw.description !== undefined && typeof raw.description !== 'string') {
+          return malformed('meter create description must be a string when provided');
+        }
+        if (raw.unit !== undefined && typeof raw.unit !== 'string') {
+          return malformed('meter create unit must be a string when provided');
+        }
+        if (raw.advice !== undefined && !isRecord(raw.advice)) {
+          return malformed('meter create advice must be an object when provided');
+        }
+        return {
+          kind: 'ok',
+          message: {
+            kind,
+            op,
+            instrumentId,
+            name,
+            instrumentKind: raw.instrumentKind,
+            ...(raw.description === undefined ? {} : { description: raw.description }),
+            ...(raw.unit === undefined ? {} : { unit: raw.unit }),
+            ...(raw.advice === undefined ? {} : { advice: raw.advice }),
+          },
+        };
+      }
+      if (op === 'record') {
+        const instrumentId = requiredString(raw, 'instrumentId');
+        if (instrumentId === undefined || typeof raw.value !== 'number' || !Number.isFinite(raw.value) || !isRecord(raw.attributes)) {
+          return malformed('meter record requires an instrumentId, numeric value, and object attributes');
+        }
+        return { kind: 'ok', message: { kind, op, instrumentId, value: raw.value, attributes: raw.attributes } };
+      }
+      return malformed('meter op must be create or record');
+    }
     case 'event': {
       const scope = raw.scope;
       if (scope !== 'feature' && scope !== 'root') {

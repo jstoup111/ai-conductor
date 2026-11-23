@@ -67,4 +67,22 @@ describe('engine/executor-protocol', () => {
       reason: expect.stringMatching(/unknown.*message.*kind/i),
     });
   });
+
+  // Covers: task:1
+  it('preserves the child OTel-projection capability in hello messages', () => {
+    expect(parseExecutorMessage({
+      kind: 'hello',
+      protocolVersion: 1,
+      engineVersionId: 'v1',
+      otelProjection: true,
+    })).toEqual({
+      kind: 'ok',
+      message: {
+        kind: 'hello',
+        protocolVersion: 1,
+        engineVersionId: 'v1',
+        otelProjection: true,
+      },
+    });
+  });
 });
