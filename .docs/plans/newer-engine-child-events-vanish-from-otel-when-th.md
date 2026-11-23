@@ -24,6 +24,11 @@ dispatch bookkeeping. 11 tasks, single PR, blocked by #3333.
   `{ instrumentId, name, kind, description?, unit?, advice? }`, where `kind` is the closed union
   `counter | upDownCounter | histogram | gauge`. `op: 'record'` carries
   `{ instrumentId, value, attributes }`. Everything is parsed by `parseExecutorMessage`.
+
+  > **Amended 2026-11-22 by #3646:** The create payload uses `instrumentKind` for that closed
+  > union: `{ instrumentId, name, instrumentKind, description?, unit?, advice? }`. `kind` remains
+  > the outer executor-message discriminator (`'meter'`), so this is an unambiguous wire-shape
+  > correction rather than an architectural change.
 - **Brokered meter** (new `src/conductor/src/engine/otel/brokered-meter.ts`). The child side
   provides `createBrokeredMeter(send)`, an OTel `Meter` whose synchronous instruments send
   `meter` messages fire-and-forget, and whose `createObservable*` methods throw. The supervisor
