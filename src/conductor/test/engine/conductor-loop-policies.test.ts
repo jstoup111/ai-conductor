@@ -1164,6 +1164,11 @@ describe('build-step stall circuit breaker', () => {
     const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
     vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
     const git: GitRunner = async (args, { cwd }) => {
+      // D10 (#3229): the engine now commits a settled attempt's dirty work
+      // itself; this scenario is the fallback when that commit is refused.
+      if (args[0] === 'commit') {
+        throw Object.assign(new Error('git commit refused'), { stderr: 'commit-msg: rejected by fixture hook' });
+      }
       const result = await execa('git', args, { cwd });
       // The conductor persists its own runtime state while this fixture is
       // exercising the content-dirty exhaustion branch. Keep the probe scoped

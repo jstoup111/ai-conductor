@@ -926,7 +926,7 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `build_member_evidence_recomputed`, `kickback`, `loop_halt`, `over_scope_decision`,
 `halt_marker_write_failed`, `halt_record_written`, `halt_record_write_failed`, `halt_record_push_failed`,
 `shipment_evidence_refused`, `step_status_write_refused`, `rebase_changed`, `rebase_gate_preserved`,
-`rebase_gate_invalidated`, `rebase_merge_audit`, `rebase_conflict_halt`, `unattributed_progress`,
+`rebase_gate_invalidated`, `rebase_merge_audit`, `rebase_conflict_halt`, `unattributed_progress`, `build_uncommitted_work`,
 `attribution_divergence`, `acceptance_red`, `step_inapplicable`, `step_inapplicable_ignored`,
 `step_inapplicable_refused`, `rebase_citation_residue`, `rebase_supersession_verdict`,
 `session_command_refused`, `github_bypass_attempt`, `github_bypass_result`, `github_possible_bypass`, and

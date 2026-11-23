@@ -551,6 +551,7 @@ import { writeIntakeMarker } from './engineer/intake-marker.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
 import { makeProductionGh, makeProductionGit, type GitRunner } from './pr-labels.js';
+import { commitUncommittedBuildWork, type UncommittedBuildWorkCommitResult } from './build-work-commit.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { createTaskEvidence, type TaskEvidence } from './task-evidence.js';
 import { seedTaskStatus } from './task-seed.js';
@@ -2011,6 +2012,42 @@ export class Conductor {
     } catch (err) {
       log(`[pr-criticality] mirroring failed for ${prUrl} (advisory): ${err}`);
     }
+  }
+
+  /**
+   * adr-2026-08-03 D10: a BUILD attempt that settled `completed` but left
+   * work uncommitted has its work committed by the engine, before the
+   * completion predicate and the task-progress accounting observe the tree,
+   * so the attempt's work counts instead of costing a retry. A clean tree
+   * (or an absent/indeterminate probe) is a no-op. A failed commit leaves
+   * the tree as it was; the caller surfaces the reason on the existing
+   * dirty-tree miss.
+   */
+  private async commitSettledBuildWork(
+    state: ConductState,
+    attempt: number,
+    emit: (event: ConductorEvent) => Promise<void>,
+  ): Promise<UncommittedBuildWorkCommitResult | null> {
+    const paths = await uncommittedPathsOrNull(await this.completionCtx(state));
+    if (!paths) return null;
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    const result = await commitUncommittedBuildWork({
+      projectRoot: this.projectRoot,
+      git: this.git,
+      paths,
+      attempt,
+      ...(slug === undefined ? {} : { slug }),
+    });
+    await emit({
+      type: 'build_uncommitted_work',
+      step: 'build',
+      attempt,
+      paths,
+      taskIds: result.taskIds,
+      outcome: result.kind,
+      ...(result.kind === 'committed' ? { sha: result.sha } : { reason: result.reason }),
+    });
+    return result;
   }
 
   /**
@@ -13858,6 +13895,14 @@ export class Conductor {
               this.currentRunId = undefined;
             }
             if (mustCheckCompletion) {
+              // D10: preserve a settled BUILD attempt's uncommitted work before
+              // any reader below (closure judgement, completion predicate,
+              // stall accounting) observes the tree.
+              let engineCommitFailure: string | undefined;
+              if (step.name === 'build') {
+                const settled = await this.commitSettledBuildWork(state, attempt, emitTracked);
+                if (settled?.kind === 'failed') engineCommitFailure = settled.reason;
+              }
               if (step.name === 'acceptance_specs') {
                 // The dispatch has returned; publish that RED evidence is now
                 // awaiting its authoritative completion-gate verdict.
@@ -14064,6 +14109,11 @@ export class Conductor {
                 });
                 const reopenReason = [citationRefusalReason, remediationClosureReason].filter(Boolean).join('\n');
                 if (reopenReason) completion = { ...completion, done: false, reason: reopenReason };
+                // D10: a miss on a tree the engine could not commit names why,
+                // so the retry record and any terminal HALT carry the cause.
+                if (engineCommitFailure !== undefined && !completion.done) {
+                  completion = { ...completion, reason: `${completion.reason ?? 'unknown'}; ${engineCommitFailure}` };
+                }
               }
 
               // Task 2, session-fresh-verdict-artifacts: audit-trail event for

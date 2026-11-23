@@ -231,6 +231,14 @@ stops repeating the active-stall warning.
 `2 uncommitted paths: src/a.ts, test/a.test.ts`. The build cannot complete or use the exhausted-
 but-working route while those paths remain dirty.
 
+This is now rare. When a build attempt settles `completed` with uncommitted work, the engine
+commits that work itself before the completion check (`Task:` trailers for the tasks the builder
+declared active via `task start` or `in_progress` rows), reported as a `build_uncommitted_work`
+event and a `left N paths uncommitted; engine committed <sha>` daemon log line. The halt above
+appears only when that engine commit failed; the reason follows the paths after
+`engine commit of uncommitted BUILD work failed:` (a hook rejection, a protected DECIDE artifact
+among the dirty paths, or a git error).
+
 **Recovery:** inspect the named paths, then either commit the intended work or discard only the
 named paths when it is not intended. Do not clear the halt first or re-dispatch around the dirty
 tree. Once the worktree is clean, use [the resume procedure](#clear-a-halt-and-let-the-feature-resume).

@@ -14,6 +14,7 @@ const SOURCE = join(ROOT, 'src');
 // worktree and the journal code writes the word "commit" to update-ref stdin.
 const COMMIT_CALL_ALLOWLIST: Record<string, string> = {
   'engine/conductor.ts': 'plan-amendment site selects the guarded helper for durable child state',
+  'engine/build-work-commit.ts': 'settled dirty-work site selects the guarded helper for durable child state',
   'engine/remediation-append.ts': 'routed frozen blocks select the guarded helper for durable child state',
   'engine/finish-publication-production.ts': 'shipped-record findings site selects the guarded helper',
   'engine/halt-record.ts': 'halt-record site selects the guarded helper',
@@ -26,11 +27,15 @@ const COMMIT_CALL_ALLOWLIST: Record<string, string> = {
 
 async function files(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
-  return (await Promise.all(entries.map(async (entry) => {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) return files(path);
-    return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
-  }))).flat();
+  return (
+    await Promise.all(
+      entries.map(async (entry) => {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) return files(path);
+        return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
+      }),
+    )
+  ).flat();
 }
 
 function isCommitInvocation(node: ts.CallExpression): boolean {
