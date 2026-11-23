@@ -85,4 +85,95 @@ describe('engine/executor-protocol', () => {
       },
     });
   });
+
+  it('preserves the projection acceptance in work orders and the instrumentKind in meter creates', () => {
+    const trace = {
+      runId: 'run-1',
+      project: 'jstoup/ai-conductor',
+      branch: 'feat/child-projection',
+      harnessVersion: '2026-11-07',
+      sourceRef: 'abc123',
+    };
+    const order = {
+      repository: 'jstoup/ai-conductor',
+      slug: 'executor-protocol',
+      baseSha: 'a'.repeat(40),
+      manifest: [],
+    };
+
+    expect(
+      parseExecutorMessage({
+        kind: 'work-order',
+        order,
+        otelProjection: { trace },
+      }),
+    ).toEqual({
+      kind: 'ok',
+      message: {
+        kind: 'work-order',
+        order,
+        otelProjection: { trace },
+      },
+    });
+    expect(
+      parseExecutorMessage({
+        kind: 'meter',
+        op: 'create',
+        instrumentId: 'instrument-1',
+        name: 'conductor.step.duration',
+        instrumentKind: 'histogram',
+        description: 'Step duration',
+        unit: 'ms',
+        advice: { explicitBucketBoundaries: [10, 100] },
+      }),
+    ).toEqual({
+      kind: 'ok',
+      message: {
+        kind: 'meter',
+        op: 'create',
+        instrumentId: 'instrument-1',
+        name: 'conductor.step.duration',
+        instrumentKind: 'histogram',
+        description: 'Step duration',
+        unit: 'ms',
+        advice: { explicitBucketBoundaries: [10, 100] },
+      },
+    });
+  });
+
+  it.each([
+    ['an unknown meter operation', { kind: 'meter', op: 'observe', instrumentId: 'instrument-1' }],
+    [
+      'an unsupported meter instrumentKind',
+      {
+        kind: 'meter',
+        op: 'create',
+        instrumentId: 'instrument-1',
+        name: 'conductor.test',
+        instrumentKind: 'observableGauge',
+      },
+    ],
+    [
+      'a non-numeric meter record value',
+      {
+        kind: 'meter',
+        op: 'record',
+        instrumentId: 'instrument-1',
+        value: '1',
+        attributes: {},
+      },
+    ],
+    [
+      'non-object meter record attributes',
+      {
+        kind: 'meter',
+        op: 'record',
+        instrumentId: 'instrument-1',
+        value: 1,
+        attributes: [],
+      },
+    ],
+  ])('returns malformed for %s', (_caseName, raw) => {
+    expect(parseExecutorMessage(raw)).toMatchObject({ kind: 'malformed' });
+  });
 });
