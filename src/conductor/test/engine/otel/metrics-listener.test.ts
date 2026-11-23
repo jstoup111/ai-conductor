@@ -10,7 +10,7 @@ import {
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
-import { EventPersister } from '../../../src/engine/event-persister.js';
+import { EventPersister, createForwardingFeatureEventEmitter } from '../../../src/engine/event-persister.js';
 import { MetricsListener } from '../../../src/engine/otel/metrics-listener.js';
 import { MetricsRecorder } from '../../../src/engine/otel/metrics.js';
 import { buildResource } from '../../../src/engine/otel/resource.js';
@@ -71,6 +71,32 @@ function resourceAttributes(exporter: InMemoryMetricExporter): Record<string, un
 }
 
 describe('MetricsListener dispatch dimensions', () => {
+  it('suppresses child-projected feature metrics while retaining dispatch lifecycle metrics', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const root = new ConductorEventEmitter();
+    const emitter = createForwardingFeatureEventEmitter(root, 'f');
+    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), () => 1, undefined, (slug) => slug === 'f');
+    listener.start(root);
+    try {
+      await root.emit({ type: 'feature_dispatch_started', slug: 'f', kind: 'new' });
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+      await emitter.emit({ type: 'feature_shipped', slug: 'f' });
+      await emitter.emit({ type: 'feature_complete' });
+      await root.emit({ type: 'feature_dispatch_ended', slug: 'f', outcome: 'complete' });
+      await root.emit({ type: 'feature_dispatch_ended', slug: 'other', outcome: 'terminated' });
+      await root.emit({ type: 'feature_dispatch_ended', slug: 'f', outcome: 'halted', haltClass: 'mechanical', step: 'build' });
+      await provider.forceFlush();
+      expect(pointsForInstrument(exporter, 'conductor.step.duration')).toEqual([]);
+      expect(pointsForInstrument(exporter, 'conductor.step.outcomes')).toEqual([]);
+      expect(pointsForInstrument(exporter, 'conductor.feature.shipped')).toEqual([]);
+      expect(pointsForInstrument(exporter, 'conductor.run.outcomes').filter((point) => point.attributes.feature === 'f' && point.attributes.outcome === 'complete')).toEqual([]);
+      expect(pointsForInstrument(exporter, 'conductor.run.outcomes').filter((point) => point.attributes.feature === 'other')).toHaveLength(1);
+      expect(pointsForInstrument(exporter, 'conductor.feature.dispatches')).toHaveLength(1);
+      expect(pointsForInstrument(exporter, 'conductor.feature.halts')).toHaveLength(1);
+    } finally { listener.stop(); await provider.shutdown(); }
+  });
   it('keeps metric resources and step labels unchanged when feature provenance is disabled', async () => {
     const createProjection = (featureEnabled: boolean) => {
       const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
