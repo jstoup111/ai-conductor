@@ -247,6 +247,7 @@ engine/monitor-cli.ts -> process
 engine/monitor/deferrals.ts -> clock
 engine/monitor/deferrals.ts -> filesystem
 engine/monitor/halt-inventory.ts -> filesystem
+engine/otel/child-otel.ts -> filesystem
 engine/otel/delivery-classifier.ts -> otel
 engine/otel/metrics-listener.ts -> clock
 engine/otel/otel-visualizer.ts -> clock
