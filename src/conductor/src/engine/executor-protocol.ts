@@ -83,9 +83,7 @@ export type ExecutorMessage =
       outcome: FeatureExecutionOutcome;
     };
 
-export type ParsedExecutorMessage =
-  | { kind: 'ok'; message: ExecutorMessage }
-  | { kind: 'malformed'; reason: string };
+export type ParsedExecutorMessage = { kind: 'ok'; message: ExecutorMessage } | { kind: 'malformed'; reason: string };
 
 type MessageRecord = Record<string, unknown>;
 
@@ -215,7 +213,12 @@ export function parseExecutorMessage(raw: unknown): ParsedExecutorMessage {
       }
       if (op === 'record') {
         const instrumentId = requiredString(raw, 'instrumentId');
-        if (instrumentId === undefined || typeof raw.value !== 'number' || !Number.isFinite(raw.value) || !isRecord(raw.attributes)) {
+        if (
+          instrumentId === undefined ||
+          typeof raw.value !== 'number' ||
+          !Number.isFinite(raw.value) ||
+          !isRecord(raw.attributes)
+        ) {
           return malformed('meter record requires an instrumentId, numeric value, and object attributes');
         }
         return { kind: 'ok', message: { kind, op, instrumentId, value: raw.value, attributes: raw.attributes } };

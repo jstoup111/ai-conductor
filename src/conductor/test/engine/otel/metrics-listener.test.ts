@@ -26,20 +26,18 @@ function attributesFor(
   name: string,
   step: string,
 ): Record<string, unknown> | undefined {
-  return exporter.getMetrics()
+  return exporter
+    .getMetrics()
     .flatMap((batch) => batch.scopeMetrics)
     .flatMap((scope) => scope.metrics)
     .filter((metric) => metric.descriptor.name === name)
     .flatMap((metric) => metric.dataPoints as unknown as MetricPoint[])
-    .find((point) => point.attributes.step === step)
-    ?.attributes;
+    .find((point) => point.attributes.step === step)?.attributes;
 }
 
-function attributesForInstrument(
-  exporter: InMemoryMetricExporter,
-  name: string,
-): Record<string, unknown>[] {
-  return exporter.getMetrics()
+function attributesForInstrument(exporter: InMemoryMetricExporter, name: string): Record<string, unknown>[] {
+  return exporter
+    .getMetrics()
     .flatMap((batch) => batch.scopeMetrics)
     .flatMap((scope) => scope.metrics)
     .filter((metric) => metric.descriptor.name === name)
@@ -47,11 +45,9 @@ function attributesForInstrument(
     .map((point) => point.attributes);
 }
 
-function pointsForInstrument(
-  exporter: InMemoryMetricExporter,
-  name: string,
-): MetricPoint[] {
-  return exporter.getMetrics()
+function pointsForInstrument(exporter: InMemoryMetricExporter, name: string): MetricPoint[] {
+  return exporter
+    .getMetrics()
     .flatMap((batch) => batch.scopeMetrics)
     .flatMap((scope) => scope.metrics)
     .filter((metric) => metric.descriptor.name === name)
@@ -59,11 +55,11 @@ function pointsForInstrument(
 }
 
 function descriptorForInstrument(exporter: InMemoryMetricExporter, name: string): { unit?: string } | undefined {
-  return exporter.getMetrics()
+  return exporter
+    .getMetrics()
     .flatMap((batch) => batch.scopeMetrics)
     .flatMap((scope) => scope.metrics)
-    .find((metric) => metric.descriptor.name === name)
-    ?.descriptor;
+    .find((metric) => metric.descriptor.name === name)?.descriptor;
 }
 
 function resourceAttributes(exporter: InMemoryMetricExporter): Record<string, unknown>[] {
@@ -73,10 +69,17 @@ function resourceAttributes(exporter: InMemoryMetricExporter): Record<string, un
 describe('MetricsListener dispatch dimensions', () => {
   it('suppresses child-projected feature metrics while retaining dispatch lifecycle metrics', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const root = new ConductorEventEmitter();
     const emitter = createForwardingFeatureEventEmitter(root, 'f');
-    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), () => 1, undefined, (slug) => slug === 'f');
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      () => 1,
+      undefined,
+      (slug) => slug === 'f',
+    );
     listener.start(root);
     try {
       await root.emit({ type: 'feature_dispatch_started', slug: 'f', kind: 'new' });
@@ -86,25 +89,47 @@ describe('MetricsListener dispatch dimensions', () => {
       await emitter.emit({ type: 'feature_complete' });
       await root.emit({ type: 'feature_dispatch_ended', slug: 'f', outcome: 'complete' });
       await root.emit({ type: 'feature_dispatch_ended', slug: 'other', outcome: 'terminated' });
-      await root.emit({ type: 'feature_dispatch_ended', slug: 'f', outcome: 'halted', haltClass: 'mechanical', step: 'build' });
+      await root.emit({
+        type: 'feature_dispatch_ended',
+        slug: 'f',
+        outcome: 'halted',
+        haltClass: 'mechanical',
+        step: 'build',
+      });
       await provider.forceFlush();
       expect(pointsForInstrument(exporter, 'conductor.step.duration')).toEqual([]);
       expect(pointsForInstrument(exporter, 'conductor.step.outcomes')).toEqual([]);
       expect(pointsForInstrument(exporter, 'conductor.feature.shipped')).toEqual([]);
-      expect(pointsForInstrument(exporter, 'conductor.run.outcomes').filter((point) => point.attributes.feature === 'f' && point.attributes.outcome === 'complete')).toEqual([]);
-      expect(pointsForInstrument(exporter, 'conductor.run.outcomes').filter((point) => point.attributes.feature === 'other')).toHaveLength(1);
+      expect(
+        pointsForInstrument(exporter, 'conductor.run.outcomes').filter(
+          (point) => point.attributes.feature === 'f' && point.attributes.outcome === 'complete',
+        ),
+      ).toEqual([]);
+      expect(
+        pointsForInstrument(exporter, 'conductor.run.outcomes').filter((point) => point.attributes.feature === 'other'),
+      ).toHaveLength(1);
       expect(pointsForInstrument(exporter, 'conductor.feature.dispatches')).toHaveLength(1);
       expect(pointsForInstrument(exporter, 'conductor.feature.halts')).toHaveLength(1);
-    } finally { listener.stop(); await provider.shutdown(); }
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
   });
   it('keeps metric resources and step labels unchanged when feature provenance is disabled', async () => {
     const createProjection = (featureEnabled: boolean) => {
       const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
       const provider = new MeterProvider({
-        resource: buildResource({
-          pipelineDir: '/unused-for-metrics', project: 'project', projectName: 'project', workerName: 'worker',
-          feature: 'feature', provenance: { issue: true, feature: featureEnabled },
-        }, 'metrics'),
+        resource: buildResource(
+          {
+            pipelineDir: '/unused-for-metrics',
+            project: 'project',
+            projectName: 'project',
+            workerName: 'worker',
+            feature: 'feature',
+            provenance: { issue: true, feature: featureEnabled },
+          },
+          'metrics',
+        ),
         readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
       });
       const emitter = new ConductorEventEmitter();
@@ -165,7 +190,12 @@ describe('MetricsListener dispatch dimensions', () => {
       await emitter.emit({ type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete', tier: 'L' });
       await emitter.emit({ type: 'loop_halt', reason: 'halted', tier: 'S' });
       await emitter.emit({
-        type: 'feature_dispatch_ended', slug: 'feature', outcome: 'halted', haltClass: 'mechanical', step: 'build', tier: 'L',
+        type: 'feature_dispatch_ended',
+        slug: 'feature',
+        outcome: 'halted',
+        haltClass: 'mechanical',
+        step: 'build',
+        tier: 'L',
       });
       await provider.forceFlush();
 
@@ -177,7 +207,16 @@ describe('MetricsListener dispatch dimensions', () => {
           { outcome: 'complete', tier: 'M', project: 'project', worker: 'worker', feature: 'feature' },
           { outcome: 'halted', tier: 'S', project: 'project', worker: 'worker', feature: 'feature' },
         ],
-        halts: [{ haltClass: 'mechanical', step: 'build', tier: 'L', project: 'project', worker: 'worker', feature: 'feature' }],
+        halts: [
+          {
+            haltClass: 'mechanical',
+            step: 'build',
+            tier: 'L',
+            project: 'project',
+            worker: 'worker',
+            feature: 'feature',
+          },
+        ],
       });
     } finally {
       listener.stop();
@@ -233,10 +272,14 @@ describe('MetricsListener dispatch dimensions', () => {
     const completeEmitter = new ConductorEventEmitter();
     const haltEmitter = new ConductorEventEmitter();
     const completeListener = new MetricsListener(
-      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), undefined, 'legacy-complete',
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'legacy-complete',
     );
     const haltListener = new MetricsListener(
-      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), undefined, 'legacy-halt',
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'legacy-halt',
     );
     persister.start();
     completeListener.start(completeEmitter);
@@ -245,7 +288,10 @@ describe('MetricsListener dispatch dimensions', () => {
     try {
       await persisterEmitter.emit({ type: 'feature_complete' });
       await persisterEmitter.emit({ type: 'loop_halt', reason: 'legacy halt' });
-      const historical = (await readFile(eventsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as ConductorEvent);
+      const historical = (await readFile(eventsPath, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as ConductorEvent);
       await completeEmitter.emit(historical[0]!);
       await haltEmitter.emit(historical[1]!);
       await provider.forceFlush();
@@ -280,9 +326,13 @@ describe('MetricsListener dispatch dimensions', () => {
     listener.start(listenerEmitter);
 
     try {
-      await expect(persisterEmitter.emit({
-        type: 'feature_dispatch_ended', slug: 'legacy-feature', outcome: 'terminated',
-      })).resolves.toBeUndefined();
+      await expect(
+        persisterEmitter.emit({
+          type: 'feature_dispatch_ended',
+          slug: 'legacy-feature',
+          outcome: 'terminated',
+        }),
+      ).resolves.toBeUndefined();
       const [line] = (await readFile(eventsPath, 'utf8')).trim().split('\n');
       const historical = JSON.parse(line) as ConductorEvent;
 
@@ -291,7 +341,10 @@ describe('MetricsListener dispatch dimensions', () => {
       await provider.forceFlush();
 
       expect(attributesForInstrument(exporter, 'conductor.run.outcomes')).toContainEqual({
-        outcome: 'terminated', project: 'project', worker: 'worker', feature: 'legacy-feature',
+        outcome: 'terminated',
+        project: 'project',
+        worker: 'worker',
+        feature: 'legacy-feature',
       });
     } finally {
       persister.stop();
@@ -318,15 +371,28 @@ describe('MetricsListener dispatch dimensions', () => {
     try {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
       await emitter.emit({
-        type: 'provider_attempt', step: 'build', provider: 'claude', model: 'opus', effort: 'high', tier: 'M', invoked: true, outcome: 'failure',
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'claude',
+        model: 'opus',
+        effort: 'high',
+        tier: 'M',
+        invoked: true,
+        outcome: 'failure',
       });
       now = 125;
       await emitter.emit({ type: 'step_failed', step: 'build', error: 'failed', retryCount: 0 });
       await provider.forceFlush();
 
       expect(attributesFor(exporter, 'conductor.step.duration', 'build')).toEqual({
-        step: 'build', model: 'opus', effort: 'high', provider: 'claude', tier: 'M',
-        project: 'project', worker: 'worker', feature: 'feature',
+        step: 'build',
+        model: 'opus',
+        effort: 'high',
+        provider: 'claude',
+        tier: 'M',
+        project: 'project',
+        worker: 'worker',
+        feature: 'feature',
       });
     } finally {
       listener.stop();
@@ -350,29 +416,77 @@ describe('MetricsListener dispatch dimensions', () => {
     try {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
       await emitter.emit({
-        type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
-        model: 'opus', effort: 'high', tier: 'M', invoked: true, outcome: 'success',
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'claude',
+        preferredProvider: 'codex',
+        model: 'opus',
+        effort: 'high',
+        tier: 'M',
+        invoked: true,
+        outcome: 'success',
       });
       await emitter.emit({
-        type: 'provider_attempt', step: 'plan', provider: 'claude', preferredProvider: 'claude',
-        invoked: true, outcome: 'success',
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        preferredProvider: 'claude',
+        invoked: true,
+        outcome: 'success',
       });
       await emitter.emit({
-        type: 'provider_attempt', step: 'finish', provider: 'claude', invoked: true, outcome: 'success',
+        type: 'provider_attempt',
+        step: 'finish',
+        provider: 'claude',
+        invoked: true,
+        outcome: 'success',
       });
       await emitter.emit({
-        type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', invoked: false,
-        outcome: 'success', lifecycle: { phase: 'settled', attemptId: 'attempt-1', recoveryCount: 0 },
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'provider-lifecycle',
+        invoked: false,
+        outcome: 'success',
+        lifecycle: { phase: 'settled', attemptId: 'attempt-1', recoveryCount: 0 },
       });
       await emitter.emit({
-        type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude',
+        type: 'step_completed',
+        step: 'build',
+        status: 'done',
+        actualProvider: 'claude',
       });
       await provider.forceFlush();
 
       expect(attributesForInstrument(exporter, 'conductor.step.dispatches')).toEqual([
-        { step: 'build', metering: 'unmetered', model: 'opus', effort: 'high', provider: 'claude', tier: 'M', fallback: true, project: 'project', worker: 'worker', feature: 'feature' },
-        { step: 'plan', metering: 'unmetered', provider: 'claude', fallback: false, project: 'project', worker: 'worker', feature: 'feature' },
-        { step: 'finish', metering: 'unmetered', provider: 'claude', project: 'project', worker: 'worker', feature: 'feature' },
+        {
+          step: 'build',
+          metering: 'unmetered',
+          model: 'opus',
+          effort: 'high',
+          provider: 'claude',
+          tier: 'M',
+          fallback: true,
+          project: 'project',
+          worker: 'worker',
+          feature: 'feature',
+        },
+        {
+          step: 'plan',
+          metering: 'unmetered',
+          provider: 'claude',
+          fallback: false,
+          project: 'project',
+          worker: 'worker',
+          feature: 'feature',
+        },
+        {
+          step: 'finish',
+          metering: 'unmetered',
+          provider: 'claude',
+          project: 'project',
+          worker: 'worker',
+          feature: 'feature',
+        },
       ]);
     } finally {
       listener.stop();
@@ -396,16 +510,35 @@ describe('MetricsListener dispatch dimensions', () => {
     try {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
       await emitter.emit({
-        type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
-        model: 'opus', effort: 'high', tier: 'M', invoked: true, outcome: 'success',
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'claude',
+        preferredProvider: 'codex',
+        model: 'opus',
+        effort: 'high',
+        tier: 'M',
+        invoked: true,
+        outcome: 'success',
       });
       await emitter.emit({
-        type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry',
-        model: 'opus', effort: 'high', provider: 'claude', tier: 'M',
+        type: 'step_retry',
+        step: 'build',
+        attempt: 1,
+        maxAttempts: 3,
+        reason: 'retry',
+        model: 'opus',
+        effort: 'high',
+        provider: 'claude',
+        tier: 'M',
       });
       await emitter.emit({
-        type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude',
-        model: 'opus', effort: 'high', tier: 'M',
+        type: 'step_completed',
+        step: 'build',
+        status: 'done',
+        actualProvider: 'claude',
+        model: 'opus',
+        effort: 'high',
+        tier: 'M',
       });
       await provider.forceFlush();
 
@@ -435,30 +568,66 @@ describe('MetricsListener dispatch dimensions', () => {
     try {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
       await emitter.emit({
-        type: 'provider_attempt', step: 'build', provider: 'claude', model: 'opus', invoked: true, outcome: 'success',
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'claude',
+        model: 'opus',
+        invoked: true,
+        outcome: 'success',
       });
       await emitter.emit({
-        type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry',
-        model: 'opus', effort: 'high', provider: 'claude', tier: 'M',
+        type: 'step_retry',
+        step: 'build',
+        attempt: 1,
+        maxAttempts: 3,
+        reason: 'retry',
+        model: 'opus',
+        effort: 'high',
+        provider: 'claude',
+        tier: 'M',
       });
-      await emitter.emit({ type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 3, reason: 'dimensionless retry' });
+      await emitter.emit({
+        type: 'step_retry',
+        step: 'build',
+        attempt: 2,
+        maxAttempts: 3,
+        reason: 'dimensionless retry',
+      });
       now = 125;
       await emitter.emit({
-        type: 'step_completed', step: 'build', status: 'done', model: 'opus', effort: 'high', tier: 'M', actualProvider: 'claude',
+        type: 'step_completed',
+        step: 'build',
+        status: 'done',
+        model: 'opus',
+        effort: 'high',
+        tier: 'M',
+        actualProvider: 'claude',
       });
 
       await emitter.emit({ type: 'step_started', step: 'plan', index: 1 });
       now = 150;
       await emitter.emit({ type: 'step_completed', step: 'plan', status: 'done' });
-      await emitter.emit({ type: 'step_retry', step: 'plan', attempt: 1, maxAttempts: 3, reason: 'dimensionless retry' });
+      await emitter.emit({
+        type: 'step_retry',
+        step: 'plan',
+        attempt: 1,
+        maxAttempts: 3,
+        reason: 'dimensionless retry',
+      });
       await emitter.emit({ type: 'step_retry', step: 'finish', attempt: 1, maxAttempts: 3, reason: 'orphan retry' });
       await provider.forceFlush();
 
       const identity = { project: 'project', worker: 'worker', feature: 'feature' };
       expect(attributesFor(exporter, 'conductor.step.duration', 'build')).toEqual({
-        step: 'build', model: 'opus', effort: 'high', provider: 'claude', tier: 'M', ...identity,
+        step: 'build',
+        model: 'opus',
+        effort: 'high',
+        provider: 'claude',
+        tier: 'M',
+        ...identity,
       });
-      const buildRetryPoints = exporter.getMetrics()
+      const buildRetryPoints = exporter
+        .getMetrics()
         .flatMap((batch) => batch.scopeMetrics)
         .flatMap((scope) => scope.metrics)
         .filter((metric) => metric.descriptor.name === 'conductor.step.retries')
@@ -466,7 +635,12 @@ describe('MetricsListener dispatch dimensions', () => {
         .filter((point) => point.attributes.step === 'build')
         .map((point) => point.attributes);
       expect(buildRetryPoints).toContainEqual({
-        step: 'build', model: 'opus', effort: 'high', provider: 'claude', tier: 'M', ...identity,
+        step: 'build',
+        model: 'opus',
+        effort: 'high',
+        provider: 'claude',
+        tier: 'M',
+        ...identity,
       });
       expect(buildRetryPoints).toContainEqual({ step: 'build', ...identity });
       expect(attributesFor(exporter, 'conductor.step.duration', 'plan')).toEqual({ step: 'plan', ...identity });
@@ -494,31 +668,59 @@ describe('MetricsListener dispatch dimensions', () => {
     try {
       await emitter.emit({ type: 'feature_dispatch_started', slug: 'tiered', kind: 'initial', tier: 'M' });
       await emitter.emit({
-        type: 'feature_dispatch_ended', slug: 'tiered', outcome: 'halted', haltClass: 'mechanical', step: 'build', tier: 'L',
+        type: 'feature_dispatch_ended',
+        slug: 'tiered',
+        outcome: 'halted',
+        haltClass: 'mechanical',
+        step: 'build',
+        tier: 'L',
       });
       now = 125;
       await emitter.emit({
-        type: 'feature_shipped', slug: 'tiered', runStartedAt: 100, active: { state: 'exact', activeMs: 20 }, tier: 'S',
+        type: 'feature_shipped',
+        slug: 'tiered',
+        runStartedAt: 100,
+        active: { state: 'exact', activeMs: 20 },
+        tier: 'S',
       });
       now = 150;
       await emitter.emit({
-        type: 'feature_shipped', slug: 'partial', runStartedAt: 100, active: { state: 'partial' }, tier: 'S',
+        type: 'feature_shipped',
+        slug: 'partial',
+        runStartedAt: 100,
+        active: { state: 'partial' },
+        tier: 'S',
       });
 
       await emitter.emit({ type: 'feature_dispatch_started', slug: 'untiered', kind: 'initial' });
       await emitter.emit({
-        type: 'feature_dispatch_ended', slug: 'untiered', outcome: 'halted', haltClass: 'mechanical', step: 'build',
+        type: 'feature_dispatch_ended',
+        slug: 'untiered',
+        outcome: 'halted',
+        haltClass: 'mechanical',
+        step: 'build',
       });
       await emitter.emit({
-        type: 'feature_shipped', slug: 'untiered', runStartedAt: 100, active: { state: 'exact', activeMs: 20 },
+        type: 'feature_shipped',
+        slug: 'untiered',
+        runStartedAt: 100,
+        active: { state: 'exact', activeMs: 20 },
       });
       await provider.forceFlush();
 
-      const tiered = (name: string) => attributesForInstrument(exporter, name).filter((attributes) => attributes.tier !== undefined);
-      const untiered = (name: string) => attributesForInstrument(exporter, name).filter((attributes) => attributes.feature === 'untiered');
-      expect(tiered('conductor.feature.dispatches')).toEqual([{ kind: 'initial', tier: 'M', project: 'project', worker: 'worker', feature: 'tiered' }]);
-      expect(tiered('conductor.feature.halts')).toEqual([{ haltClass: 'mechanical', step: 'build', tier: 'L', project: 'project', worker: 'worker', feature: 'tiered' }]);
-      expect(tiered('conductor.run.outcomes')).toEqual([{ outcome: 'halted', tier: 'L', project: 'project', worker: 'worker', feature: 'tiered' }]);
+      const tiered = (name: string) =>
+        attributesForInstrument(exporter, name).filter((attributes) => attributes.tier !== undefined);
+      const untiered = (name: string) =>
+        attributesForInstrument(exporter, name).filter((attributes) => attributes.feature === 'untiered');
+      expect(tiered('conductor.feature.dispatches')).toEqual([
+        { kind: 'initial', tier: 'M', project: 'project', worker: 'worker', feature: 'tiered' },
+      ]);
+      expect(tiered('conductor.feature.halts')).toEqual([
+        { haltClass: 'mechanical', step: 'build', tier: 'L', project: 'project', worker: 'worker', feature: 'tiered' },
+      ]);
+      expect(tiered('conductor.run.outcomes')).toEqual([
+        { outcome: 'halted', tier: 'L', project: 'project', worker: 'worker', feature: 'tiered' },
+      ]);
       expect(tiered('conductor.feature.shipped')).toEqual([
         { tier: 'S', project: 'project', worker: 'worker', feature: 'tiered' },
         { tier: 'S', project: 'project', worker: 'worker', feature: 'partial' },
@@ -527,13 +729,27 @@ describe('MetricsListener dispatch dimensions', () => {
         { tier: 'S', project: 'project', worker: 'worker', feature: 'tiered' },
         { tier: 'S', project: 'project', worker: 'worker', feature: 'partial' },
       ]);
-      expect(tiered('conductor.feature.duration.active')).toEqual([{ tier: 'S', state: 'exact', project: 'project', worker: 'worker', feature: 'tiered' }]);
-      expect(untiered('conductor.feature.dispatches')).toEqual([{ kind: 'initial', project: 'project', worker: 'worker', feature: 'untiered' }]);
-      expect(untiered('conductor.feature.halts')).toEqual([{ haltClass: 'mechanical', step: 'build', project: 'project', worker: 'worker', feature: 'untiered' }]);
-      expect(untiered('conductor.run.outcomes')).toEqual([{ outcome: 'halted', project: 'project', worker: 'worker', feature: 'untiered' }]);
-      expect(untiered('conductor.feature.shipped')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
-      expect(untiered('conductor.feature.duration.wall')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
-      expect(untiered('conductor.feature.duration.active')).toEqual([{ state: 'exact', project: 'project', worker: 'worker', feature: 'untiered' }]);
+      expect(tiered('conductor.feature.duration.active')).toEqual([
+        { tier: 'S', state: 'exact', project: 'project', worker: 'worker', feature: 'tiered' },
+      ]);
+      expect(untiered('conductor.feature.dispatches')).toEqual([
+        { kind: 'initial', project: 'project', worker: 'worker', feature: 'untiered' },
+      ]);
+      expect(untiered('conductor.feature.halts')).toEqual([
+        { haltClass: 'mechanical', step: 'build', project: 'project', worker: 'worker', feature: 'untiered' },
+      ]);
+      expect(untiered('conductor.run.outcomes')).toEqual([
+        { outcome: 'halted', project: 'project', worker: 'worker', feature: 'untiered' },
+      ]);
+      expect(untiered('conductor.feature.shipped')).toEqual([
+        { project: 'project', worker: 'worker', feature: 'untiered' },
+      ]);
+      expect(untiered('conductor.feature.duration.wall')).toEqual([
+        { project: 'project', worker: 'worker', feature: 'untiered' },
+      ]);
+      expect(untiered('conductor.feature.duration.active')).toEqual([
+        { state: 'exact', project: 'project', worker: 'worker', feature: 'untiered' },
+      ]);
     } finally {
       listener.stop();
       await provider.shutdown();
@@ -545,29 +761,72 @@ describe('MetricsListener dispatch dimensions', () => {
 describe('Task 2: feature active-duration projection', () => {
   it('records finite exact and partial active durations with their bounded state and reason', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const emitter = new ConductorEventEmitter();
-    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('task-2-measured'), { project: 'project', worker: 'worker' }), () => 200);
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('task-2-measured'), { project: 'project', worker: 'worker' }),
+      () => 200,
+    );
     listener.start(emitter);
     try {
-      await emitter.emit({ type: 'feature_shipped', slug: 'exact', tier: 'M', runStartedAt: 100, active: { state: 'exact', activeMs: 5_000 } });
-      await emitter.emit({ type: 'feature_shipped', slug: 'partial', tier: 'M', runStartedAt: 100, active: { state: 'partial', activeMs: 23_907_699, reason: 'provider-evidence-incomplete' } });
+      await emitter.emit({
+        type: 'feature_shipped',
+        slug: 'exact',
+        tier: 'M',
+        runStartedAt: 100,
+        active: { state: 'exact', activeMs: 5_000 },
+      });
+      await emitter.emit({
+        type: 'feature_shipped',
+        slug: 'partial',
+        tier: 'M',
+        runStartedAt: 100,
+        active: { state: 'partial', activeMs: 23_907_699, reason: 'provider-evidence-incomplete' },
+      });
       await provider.forceFlush();
-      expect(pointsForInstrument(exporter, 'conductor.feature.duration.active').map((point) => ({
-        attributes: point.attributes, value: (point.value as { sum: number }).sum,
-      }))).toEqual(expect.arrayContaining([
-        { attributes: { tier: 'M', state: 'exact', project: 'project', worker: 'worker', feature: 'exact' }, value: 5_000 },
-        { attributes: { tier: 'M', state: 'partial', reason: 'provider-evidence-incomplete', project: 'project', worker: 'worker', feature: 'partial' }, value: 23_907_699 },
-      ]));
+      expect(
+        pointsForInstrument(exporter, 'conductor.feature.duration.active').map((point) => ({
+          attributes: point.attributes,
+          value: (point.value as { sum: number }).sum,
+        })),
+      ).toEqual(
+        expect.arrayContaining([
+          {
+            attributes: { tier: 'M', state: 'exact', project: 'project', worker: 'worker', feature: 'exact' },
+            value: 5_000,
+          },
+          {
+            attributes: {
+              tier: 'M',
+              state: 'partial',
+              reason: 'provider-evidence-incomplete',
+              project: 'project',
+              worker: 'worker',
+              feature: 'partial',
+            },
+            value: 23_907_699,
+          },
+        ]),
+      );
       expect(pointsForInstrument(exporter, 'conductor.feature.duration.active.missing')).toEqual([]);
-    } finally { listener.stop(); await provider.shutdown(); }
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
   });
 
   it('counts unmeasured active durations without suppressing wall duration', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const emitter = new ConductorEventEmitter();
-    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('task-2-missing'), { project: 'project', worker: 'worker' }), () => 200);
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('task-2-missing'), { project: 'project', worker: 'worker' }),
+      () => 200,
+    );
     listener.start(emitter);
     try {
       const cases = [
@@ -577,33 +836,98 @@ describe('Task 2: feature active-duration projection', () => {
         ['unavailable', { state: 'unavailable' as const }],
         ['non-finite', { state: 'partial' as const, activeMs: Number.NaN }],
       ] as const;
-      for (const [slug, active] of cases) await emitter.emit({ type: 'feature_shipped', slug, tier: 'M', runStartedAt: 100, active });
+      for (const [slug, active] of cases)
+        await emitter.emit({ type: 'feature_shipped', slug, tier: 'M', runStartedAt: 100, active });
       await provider.forceFlush();
       expect(pointsForInstrument(exporter, 'conductor.feature.duration.active')).toEqual([]);
-      expect(pointsForInstrument(exporter, 'conductor.feature.duration.active.missing').map((point) => ({ attributes: point.attributes, value: point.value }))).toEqual(expect.arrayContaining([
-        { attributes: { tier: 'M', state: 'partial', reason: 'active-evidence-incomplete', project: 'project', worker: 'worker', feature: 'evidence' }, value: 1 },
-        { attributes: { tier: 'M', state: 'partial', reason: 'open-executions', project: 'project', worker: 'worker', feature: 'open' }, value: 1 },
-        { attributes: { tier: 'M', state: 'partial', reason: 'ledger-unreadable', project: 'project', worker: 'worker', feature: 'ledger' }, value: 1 },
-        { attributes: { tier: 'M', state: 'unavailable', project: 'project', worker: 'worker', feature: 'unavailable' }, value: 1 },
-        { attributes: { tier: 'M', state: 'partial', project: 'project', worker: 'worker', feature: 'non-finite' }, value: 1 },
-      ]));
+      expect(
+        pointsForInstrument(exporter, 'conductor.feature.duration.active.missing').map((point) => ({
+          attributes: point.attributes,
+          value: point.value,
+        })),
+      ).toEqual(
+        expect.arrayContaining([
+          {
+            attributes: {
+              tier: 'M',
+              state: 'partial',
+              reason: 'active-evidence-incomplete',
+              project: 'project',
+              worker: 'worker',
+              feature: 'evidence',
+            },
+            value: 1,
+          },
+          {
+            attributes: {
+              tier: 'M',
+              state: 'partial',
+              reason: 'open-executions',
+              project: 'project',
+              worker: 'worker',
+              feature: 'open',
+            },
+            value: 1,
+          },
+          {
+            attributes: {
+              tier: 'M',
+              state: 'partial',
+              reason: 'ledger-unreadable',
+              project: 'project',
+              worker: 'worker',
+              feature: 'ledger',
+            },
+            value: 1,
+          },
+          {
+            attributes: {
+              tier: 'M',
+              state: 'unavailable',
+              project: 'project',
+              worker: 'worker',
+              feature: 'unavailable',
+            },
+            value: 1,
+          },
+          {
+            attributes: { tier: 'M', state: 'partial', project: 'project', worker: 'worker', feature: 'non-finite' },
+            value: 1,
+          },
+        ]),
+      );
       expect(pointsForInstrument(exporter, 'conductor.feature.duration.wall')).toHaveLength(cases.length);
-    } finally { listener.stop(); await provider.shutdown(); }
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
   });
 
   it('projects legacy reason-free partial active duration without a placeholder reason', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const emitter = new ConductorEventEmitter();
-    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('task-2-legacy'), { project: 'project', worker: 'worker' }));
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('task-2-legacy'), { project: 'project', worker: 'worker' }),
+    );
     listener.start(emitter);
     try {
       await emitter.emit({ type: 'feature_shipped', slug: 'legacy', active: { state: 'partial', activeMs: 10 } });
       await provider.forceFlush();
-      expect(pointsForInstrument(exporter, 'conductor.feature.duration.active').map((point) => ({
-        attributes: point.attributes, value: (point.value as { sum: number }).sum,
-      }))).toEqual([{ attributes: { state: 'partial', project: 'project', worker: 'worker', feature: 'legacy' }, value: 10 }]);
-    } finally { listener.stop(); await provider.shutdown(); }
+      expect(
+        pointsForInstrument(exporter, 'conductor.feature.duration.active').map((point) => ({
+          attributes: point.attributes,
+          value: (point.value as { sum: number }).sum,
+        })),
+      ).toEqual([
+        { attributes: { state: 'partial', project: 'project', worker: 'worker', feature: 'legacy' }, value: 10 },
+      ]);
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
   });
 });
 
@@ -623,13 +947,24 @@ describe('MetricsListener gate-tier projection (Task 3)', () => {
 
     try {
       for (const tier of ['S', 'M', undefined] as const) {
-        await emitter.emit({ type: 'gate_verdict', step: 'build', satisfied: true, ...(tier === undefined ? {} : { tier }) });
-        await emitter.emit({ type: 'kickback', from: 'build_review', to: 'build', count: 1, ...(tier === undefined ? {} : { tier }) });
+        await emitter.emit({
+          type: 'gate_verdict',
+          step: 'build',
+          satisfied: true,
+          ...(tier === undefined ? {} : { tier }),
+        });
+        await emitter.emit({
+          type: 'kickback',
+          from: 'build_review',
+          to: 'build',
+          count: 1,
+          ...(tier === undefined ? {} : { tier }),
+        });
       }
       await provider.forceFlush();
 
-      const points = (name: string) => pointsForInstrument(exporter, name)
-        .map((point) => ({ attributes: point.attributes, value: point.value }));
+      const points = (name: string) =>
+        pointsForInstrument(exporter, name).map((point) => ({ attributes: point.attributes, value: point.value }));
       const labels = { project: 'project', worker: 'worker', feature: 'feature' };
       expect(points('conductor.gate.verdicts')).toEqual([
         { attributes: { step: 'build', outcome: 'pass', tier: 'S', ...labels }, value: 1 },
@@ -660,7 +995,9 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
 
   it('keeps interleaved same-name configured members independent and closes each at its frozen settlement', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const emitter = new ConductorEventEmitter();
     let now = 100;
     const listener = new MetricsListener(
@@ -677,35 +1014,90 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
       now = 110;
       await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: second });
       await emitter.emit({
-        type: 'provider_attempt', step: 'build', executionContext: first, provider: 'claude',
-        model: 'opus', effort: 'high', tier: 'M', invoked: true, outcome: 'success',
+        type: 'provider_attempt',
+        step: 'build',
+        executionContext: first,
+        provider: 'claude',
+        model: 'opus',
+        effort: 'high',
+        tier: 'M',
+        invoked: true,
+        outcome: 'success',
       });
       await emitter.emit({
-        type: 'provider_attempt', step: 'build', executionContext: second, provider: 'codex',
-        model: 'gpt-5.6', effort: 'medium', tier: 'L', invoked: true, outcome: 'success',
+        type: 'provider_attempt',
+        step: 'build',
+        executionContext: second,
+        provider: 'codex',
+        model: 'gpt-5.6',
+        effort: 'medium',
+        tier: 'L',
+        invoked: true,
+        outcome: 'success',
       });
       now = 120;
-      await emitter.emit({ type: 'group_member_step', member: 'audit', skill: 'audit', phase: 'result', outcome: 'verdict:pass', executionContext: first });
+      await emitter.emit({
+        type: 'group_member_step',
+        member: 'audit',
+        skill: 'audit',
+        phase: 'result',
+        outcome: 'verdict:pass',
+        executionContext: first,
+      });
       now = 130;
-      await emitter.emit({ type: 'group_member_step', member: 'audit', skill: 'audit', phase: 'result', outcome: 'verdict:pass', executionContext: second });
+      await emitter.emit({
+        type: 'group_member_step',
+        member: 'audit',
+        skill: 'audit',
+        phase: 'result',
+        outcome: 'verdict:pass',
+        executionContext: second,
+      });
       now = 190;
-      await emitter.emit({ type: 'group_member_step', member: 'audit', skill: 'audit', phase: 'result', outcome: 'late verdict:pass', executionContext: first });
+      await emitter.emit({
+        type: 'group_member_step',
+        member: 'audit',
+        skill: 'audit',
+        phase: 'result',
+        outcome: 'late verdict:pass',
+        executionContext: first,
+      });
       now = 200;
       await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: first });
       now = 300;
       await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: second });
       await provider.forceFlush();
 
-      expect(pointsForInstrument(exporter, 'conductor.step.duration')).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          value: expect.objectContaining({ count: 1, sum: 20 }),
-          attributes: { step: 'configured:group%20A/audit', model: 'opus', effort: 'high', provider: 'claude', tier: 'M', project: 'project', worker: 'worker', feature: 'feature' },
-        }),
-        expect.objectContaining({
-          value: expect.objectContaining({ count: 1, sum: 20 }),
-          attributes: { step: 'configured:group%20B/audit', model: 'gpt-5.6', effort: 'medium', provider: 'codex', tier: 'L', project: 'project', worker: 'worker', feature: 'feature' },
-        }),
-      ]));
+      expect(pointsForInstrument(exporter, 'conductor.step.duration')).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            value: expect.objectContaining({ count: 1, sum: 20 }),
+            attributes: {
+              step: 'configured:group%20A/audit',
+              model: 'opus',
+              effort: 'high',
+              provider: 'claude',
+              tier: 'M',
+              project: 'project',
+              worker: 'worker',
+              feature: 'feature',
+            },
+          }),
+          expect.objectContaining({
+            value: expect.objectContaining({ count: 1, sum: 20 }),
+            attributes: {
+              step: 'configured:group%20B/audit',
+              model: 'gpt-5.6',
+              effort: 'medium',
+              provider: 'codex',
+              tier: 'L',
+              project: 'project',
+              worker: 'worker',
+              feature: 'feature',
+            },
+          }),
+        ]),
+      );
       expect(pointsForInstrument(exporter, 'conductor.step.dispatches')).toHaveLength(2);
       expect(descriptorForInstrument(exporter, 'conductor.step.duration')?.unit).toBe('ms');
       for (const attributes of resourceAttributes(exporter)) {
@@ -722,23 +1114,44 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
 
   it('uses the built-in member name rather than its skill spelling at settlement', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const emitter = new ConductorEventEmitter();
     let now = 100;
-    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), () => now, 'feature');
-    const execution = { executionId: 'built-in-prd-audit', subject: { kind: 'lifecycle-step' as const, step: 'prd_audit' as const } };
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      () => now,
+      'feature',
+    );
+    const execution = {
+      executionId: 'built-in-prd-audit',
+      subject: { kind: 'lifecycle-step' as const, step: 'prd_audit' as const },
+    };
     listener.start(emitter);
     try {
       await emitter.emit({ type: 'step_started', step: 'prd_audit', index: 0, executionContext: execution });
       now = 120;
-      await emitter.emit({ type: 'group_member_step', member: 'prd_audit', skill: 'prd-audit', phase: 'result', outcome: 'verdict:pass', executionContext: execution });
+      await emitter.emit({
+        type: 'group_member_step',
+        member: 'prd_audit',
+        skill: 'prd-audit',
+        phase: 'result',
+        outcome: 'verdict:pass',
+        executionContext: execution,
+      });
       now = 300;
       await emitter.emit({ type: 'step_completed', step: 'prd_audit', status: 'done', executionContext: execution });
       await provider.forceFlush();
 
-      expect(pointsForInstrument(exporter, 'conductor.step.duration')).toEqual(expect.arrayContaining([
-        expect.objectContaining({ attributes: expect.objectContaining({ step: 'prd_audit' }), value: expect.objectContaining({ count: 1, sum: 20 }) }),
-      ]));
+      expect(pointsForInstrument(exporter, 'conductor.step.duration')).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            attributes: expect.objectContaining({ step: 'prd_audit' }),
+            value: expect.objectContaining({ count: 1, sum: 20 }),
+          }),
+        ]),
+      );
     } finally {
       listener.stop();
       await provider.shutdown();
@@ -747,10 +1160,16 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
 
   it('keeps one retry lifetime and cannot let a late terminal close a newer same-subject execution', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const emitter = new ConductorEventEmitter();
     let now = 10;
-    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), () => now, 'feature');
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      () => now,
+      'feature',
+    );
     const first = configuredContext('execution-first', 'group');
     const second = configuredContext('execution-second', 'group');
     listener.start(emitter);
@@ -758,7 +1177,14 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
     try {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: first });
       now = 20;
-      await emitter.emit({ type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 2, reason: 'retry', executionContext: first });
+      await emitter.emit({
+        type: 'step_retry',
+        step: 'build',
+        attempt: 1,
+        maxAttempts: 2,
+        reason: 'retry',
+        executionContext: first,
+      });
       now = 40;
       await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: first });
       now = 50;
@@ -769,8 +1195,9 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
       await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: second });
       await provider.forceFlush();
 
-      const duration = pointsForInstrument(exporter, 'conductor.step.duration')
-        .find((point) => point.attributes.step === 'configured:group/audit');
+      const duration = pointsForInstrument(exporter, 'conductor.step.duration').find(
+        (point) => point.attributes.step === 'configured:group/audit',
+      );
       expect(duration?.value).toMatchObject({ count: 2, min: 30, max: 30, sum: 60 });
     } finally {
       listener.stop();
@@ -780,24 +1207,50 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
 
   it('preserves missing dimensions as absent and never turns member completion into an extra dispatch', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const emitter = new ConductorEventEmitter();
     let now = 10;
-    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), () => now, 'feature');
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      () => now,
+      'feature',
+    );
     const context = configuredContext('execution-no-dimensions', 'group');
     listener.start(emitter);
 
     try {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: context });
-      await emitter.emit({ type: 'provider_attempt', step: 'build', executionContext: context, provider: 'codex', invoked: false, outcome: 'unavailable', fallbackReason: 'secret provider detail' });
+      await emitter.emit({
+        type: 'provider_attempt',
+        step: 'build',
+        executionContext: context,
+        provider: 'codex',
+        invoked: false,
+        outcome: 'unavailable',
+        fallbackReason: 'secret provider detail',
+      });
       now = 20;
-      await emitter.emit({ type: 'group_member_step', member: 'audit', skill: 'audit', phase: 'result', outcome: 'verdict:pass', executionContext: context });
+      await emitter.emit({
+        type: 'group_member_step',
+        member: 'audit',
+        skill: 'audit',
+        phase: 'result',
+        outcome: 'verdict:pass',
+        executionContext: context,
+      });
       now = 30;
       await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: context });
       await provider.forceFlush();
 
       const duration = attributesFor(exporter, 'conductor.step.duration', 'configured:group/audit');
-      expect(duration).toEqual({ step: 'configured:group/audit', project: 'project', worker: 'worker', feature: 'feature' });
+      expect(duration).toEqual({
+        step: 'configured:group/audit',
+        project: 'project',
+        worker: 'worker',
+        feature: 'feature',
+      });
       expect(attributesForInstrument(exporter, 'conductor.step.dispatches')).toEqual([]);
       expect(duration).not.toHaveProperty('executionId');
       expect(duration).not.toHaveProperty('fallbackReason');
@@ -810,8 +1263,12 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
   it('leaves member event delivery intact when metrics are disabled or the recorder throws', async () => {
     const disabled = new ConductorEventEmitter();
     const context = configuredContext('execution-disabled', 'group');
-    await expect(disabled.emit({ type: 'step_started', step: 'build', index: 0, executionContext: context })).resolves.toBeUndefined();
-    await expect(disabled.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: context })).resolves.toBeUndefined();
+    await expect(
+      disabled.emit({ type: 'step_started', step: 'build', index: 0, executionContext: context }),
+    ).resolves.toBeUndefined();
+    await expect(
+      disabled.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: context }),
+    ).resolves.toBeUndefined();
 
     const emitter = new ConductorEventEmitter();
     const delivered: string[] = [];
@@ -821,14 +1278,29 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
     });
     const throwingRecorder = {
       forFeature: () => throwingRecorder,
-      onStepClose: () => { throw new Error('export failed'); },
+      onStepClose: () => {
+        throw new Error('export failed');
+      },
     } as unknown as MetricsRecorder;
     const listener = new MetricsListener(throwingRecorder, () => 10, 'feature');
     listener.start(emitter);
     try {
-      await expect(emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: context })).resolves.toBeUndefined();
-      await expect(emitter.emit({ type: 'group_member_step', member: 'audit', skill: 'audit', phase: 'result', outcome: 'verdict:pass', executionContext: context })).resolves.toBeUndefined();
-      await expect(emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: context })).resolves.toBeUndefined();
+      await expect(
+        emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: context }),
+      ).resolves.toBeUndefined();
+      await expect(
+        emitter.emit({
+          type: 'group_member_step',
+          member: 'audit',
+          skill: 'audit',
+          phase: 'result',
+          outcome: 'verdict:pass',
+          executionContext: context,
+        }),
+      ).resolves.toBeUndefined();
+      await expect(
+        emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: context }),
+      ).resolves.toBeUndefined();
       expect(delivered).toEqual(['audit']);
     } finally {
       listener.stop();
@@ -845,63 +1317,157 @@ describe('MetricsListener retry and refusal projection (Task 8)', () => {
   }
 
   function outcomePoint(exporter: InMemoryMetricExporter, step: string, outcome: string): MetricPoint | undefined {
-    return pointsForInstrument(exporter, 'conductor.step.outcomes')
-      .find((point) => point.attributes.step === step && point.attributes.outcome === outcome);
+    return pointsForInstrument(exporter, 'conductor.step.outcomes').find(
+      (point) => point.attributes.step === step && point.attributes.outcome === outcome,
+    );
   }
 
   it('correlates serial and member policy retries without zero-filled retries or duplicate terminal outcomes', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const emitter = new ConductorEventEmitter();
     let now = 10;
-    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), () => now, 'feature');
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      () => now,
+      'feature',
+    );
     const member = configuredContext('execution-exhausted', 'review');
     listener.start(emitter);
 
     try {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
-      await emitter.emit({ type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'failed attempt', model: 'opus', effort: 'high', provider: 'claude', tier: 'M' });
+      await emitter.emit({
+        type: 'step_retry',
+        step: 'build',
+        attempt: 1,
+        maxAttempts: 3,
+        reason: 'failed attempt',
+        model: 'opus',
+        effort: 'high',
+        provider: 'claude',
+        tier: 'M',
+      });
       now = 20;
       await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
 
       now = 30;
       await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: member });
       await emitter.emit({
-        type: 'provider_attempt', step: 'build', executionContext: member, provider: 'codex',
-        model: 'gpt-5.6', effort: 'medium', tier: 'L', invoked: true, outcome: 'failure',
+        type: 'provider_attempt',
+        step: 'build',
+        executionContext: member,
+        provider: 'codex',
+        model: 'gpt-5.6',
+        effort: 'medium',
+        tier: 'L',
+        invoked: true,
+        outcome: 'failure',
         tokenUsage: { input: 10, output: 5, costUsd: 0.01 },
       });
-      await emitter.emit({ type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'failed attempt', model: 'gpt-5.6', effort: 'medium', provider: 'codex', tier: 'L', executionContext: member });
-      await emitter.emit({ type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 3, reason: 'failed attempt', model: 'gpt-5.6', effort: 'medium', provider: 'codex', tier: 'L', executionContext: member });
+      await emitter.emit({
+        type: 'step_retry',
+        step: 'build',
+        attempt: 1,
+        maxAttempts: 3,
+        reason: 'failed attempt',
+        model: 'gpt-5.6',
+        effort: 'medium',
+        provider: 'codex',
+        tier: 'L',
+        executionContext: member,
+      });
+      await emitter.emit({
+        type: 'step_retry',
+        step: 'build',
+        attempt: 2,
+        maxAttempts: 3,
+        reason: 'failed attempt',
+        model: 'gpt-5.6',
+        effort: 'medium',
+        provider: 'codex',
+        tier: 'L',
+        executionContext: member,
+      });
       now = 50;
-      await emitter.emit({ type: 'group_member_step', member: 'audit', skill: 'audit', phase: 'result', outcome: 'failed', executionContext: member });
+      await emitter.emit({
+        type: 'group_member_step',
+        member: 'audit',
+        skill: 'audit',
+        phase: 'result',
+        outcome: 'failed',
+        executionContext: member,
+      });
       now = 60;
-      await emitter.emit({ type: 'step_failed', step: 'build', error: 'exhausted', retryCount: 2, executionContext: member });
-      await emitter.emit({ type: 'step_failed', step: 'build', error: 'late duplicate', retryCount: 2, executionContext: member });
+      await emitter.emit({
+        type: 'step_failed',
+        step: 'build',
+        error: 'exhausted',
+        retryCount: 2,
+        executionContext: member,
+      });
+      await emitter.emit({
+        type: 'step_failed',
+        step: 'build',
+        error: 'late duplicate',
+        retryCount: 2,
+        executionContext: member,
+      });
       await provider.forceFlush();
 
-      expect(pointsForInstrument(exporter, 'conductor.step.retries')).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          value: 1,
-          attributes: { step: 'build', model: 'opus', effort: 'high', provider: 'claude', tier: 'M', project: 'project', worker: 'worker', feature: 'feature' },
-        }),
-        expect.objectContaining({
-          value: 2,
-          attributes: { step: 'configured:review/audit', model: 'gpt-5.6', effort: 'medium', provider: 'codex', tier: 'L', project: 'project', worker: 'worker', feature: 'feature' },
-        }),
-      ]));
+      expect(pointsForInstrument(exporter, 'conductor.step.retries')).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            value: 1,
+            attributes: {
+              step: 'build',
+              model: 'opus',
+              effort: 'high',
+              provider: 'claude',
+              tier: 'M',
+              project: 'project',
+              worker: 'worker',
+              feature: 'feature',
+            },
+          }),
+          expect.objectContaining({
+            value: 2,
+            attributes: {
+              step: 'configured:review/audit',
+              model: 'gpt-5.6',
+              effort: 'medium',
+              provider: 'codex',
+              tier: 'L',
+              project: 'project',
+              worker: 'worker',
+              feature: 'feature',
+            },
+          }),
+        ]),
+      );
       expect(outcomePoint(exporter, 'build', 'success')?.value).toBe(1);
       expect(outcomePoint(exporter, 'configured:review/audit', 'failure')?.value).toBe(1);
       expect(pointsForInstrument(exporter, 'conductor.step.dispatches')).toEqual([
         expect.objectContaining({
           value: 1,
           attributes: {
-            step: 'configured:review/audit', metering: 'fully-metered', model: 'gpt-5.6', effort: 'medium', provider: 'codex', tier: 'L',
-            project: 'project', worker: 'worker', feature: 'feature',
+            step: 'configured:review/audit',
+            metering: 'fully-metered',
+            model: 'gpt-5.6',
+            effort: 'medium',
+            provider: 'codex',
+            tier: 'L',
+            project: 'project',
+            worker: 'worker',
+            feature: 'feature',
           },
         }),
       ]);
-      expect(pointsForInstrument(exporter, 'conductor.step.retries').some((point) => point.attributes.step === 'plan')).toBe(false);
+      expect(
+        pointsForInstrument(exporter, 'conductor.step.retries').some((point) => point.attributes.step === 'plan'),
+      ).toBe(false);
     } finally {
       listener.stop();
       await provider.shutdown();
@@ -910,10 +1476,16 @@ describe('MetricsListener retry and refusal projection (Task 8)', () => {
 
   it('closes started refusals once at their own boundary without fabricating pre-start or late terminals', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const emitter = new ConductorEventEmitter();
     let now = 10;
-    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), () => now, 'feature');
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      () => now,
+      'feature',
+    );
     const first = configuredContext('execution-first', 'review');
     const second = configuredContext('execution-second', 'review');
     const neverStarted = configuredContext('execution-never-started', 'review');
@@ -928,14 +1500,39 @@ describe('MetricsListener retry and refusal projection (Task 8)', () => {
       now = 30;
       await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: first });
       now = 40;
-      await emitter.emit({ type: 'group_member_step', member: 'audit', skill: 'audit', phase: 'result', outcome: 'verdict:pass', executionContext: first });
+      await emitter.emit({
+        type: 'group_member_step',
+        member: 'audit',
+        skill: 'audit',
+        phase: 'result',
+        outcome: 'verdict:pass',
+        executionContext: first,
+      });
       now = 50;
-      await emitter.emit({ type: 'step_refused', step: 'build', kind: 'validation-verdict', reason: 'authoritative refusal', executionContext: first });
+      await emitter.emit({
+        type: 'step_refused',
+        step: 'build',
+        kind: 'validation-verdict',
+        reason: 'authoritative refusal',
+        executionContext: first,
+      });
       now = 60;
       await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: second });
       now = 70;
-      await emitter.emit({ type: 'step_refused', step: 'build', kind: 'validation-verdict', reason: 'late first refusal', executionContext: first });
-      await emitter.emit({ type: 'step_refused', step: 'build', kind: 'validation-verdict', reason: 'not admitted', executionContext: neverStarted });
+      await emitter.emit({
+        type: 'step_refused',
+        step: 'build',
+        kind: 'validation-verdict',
+        reason: 'late first refusal',
+        executionContext: first,
+      });
+      await emitter.emit({
+        type: 'step_refused',
+        step: 'build',
+        kind: 'validation-verdict',
+        reason: 'not admitted',
+        executionContext: neverStarted,
+      });
       now = 90;
       await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: second });
       await provider.forceFlush();
@@ -943,11 +1540,23 @@ describe('MetricsListener retry and refusal projection (Task 8)', () => {
       expect(outcomePoint(exporter, 'plan', 'refusal')?.value).toBe(1);
       expect(outcomePoint(exporter, 'configured:review/audit', 'refusal')?.value).toBe(1);
       expect(outcomePoint(exporter, 'configured:review/audit', 'success')?.value).toBe(1);
-      expect(pointsForInstrument(exporter, 'conductor.step.duration')).toEqual(expect.arrayContaining([
-        expect.objectContaining({ attributes: expect.objectContaining({ step: 'plan' }), value: expect.objectContaining({ count: 1, sum: 10 }) }),
-        expect.objectContaining({ attributes: expect.objectContaining({ step: 'configured:review/audit' }), value: expect.objectContaining({ count: 2, sum: 40 }) }),
-      ]));
-      expect(pointsForInstrument(exporter, 'conductor.step.duration').some((point) => point.attributes.executionId === 'execution-never-started')).toBe(false);
+      expect(pointsForInstrument(exporter, 'conductor.step.duration')).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            attributes: expect.objectContaining({ step: 'plan' }),
+            value: expect.objectContaining({ count: 1, sum: 10 }),
+          }),
+          expect.objectContaining({
+            attributes: expect.objectContaining({ step: 'configured:review/audit' }),
+            value: expect.objectContaining({ count: 2, sum: 40 }),
+          }),
+        ]),
+      );
+      expect(
+        pointsForInstrument(exporter, 'conductor.step.duration').some(
+          (point) => point.attributes.executionId === 'execution-never-started',
+        ),
+      ).toBe(false);
     } finally {
       listener.stop();
       await provider.shutdown();
@@ -956,15 +1565,27 @@ describe('MetricsListener retry and refusal projection (Task 8)', () => {
 
   it('does not turn rate limits or non-invoked candidates into retries or dispatches', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
     const emitter = new ConductorEventEmitter();
-    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), undefined, 'feature');
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'feature',
+    );
     listener.start(emitter);
 
     try {
       await emitter.emit({ type: 'step_started', step: 'test_suite', index: 0 });
       await emitter.emit({ type: 'rate_limit', waitSeconds: 3, reason: 'usage-exhausted' });
-      await emitter.emit({ type: 'provider_attempt', step: 'test_suite', provider: 'codex', invoked: false, outcome: 'unavailable' });
+      await emitter.emit({
+        type: 'provider_attempt',
+        step: 'test_suite',
+        provider: 'codex',
+        invoked: false,
+        outcome: 'unavailable',
+      });
       await emitter.emit({ type: 'step_completed', step: 'test_suite', status: 'done' });
       await provider.forceFlush();
 
@@ -982,19 +1603,33 @@ describe('MetricsListener retry and refusal projection (Task 8)', () => {
     const delivered: string[] = [];
     const throwingRecorder = {
       forFeature: () => throwingRecorder,
-      onRetry: () => { throw new Error('retry export failed'); },
-      onStepClose: () => { throw new Error('refusal export failed'); },
-      onStepTerminal: () => { throw new Error('outcome export failed'); },
+      onRetry: () => {
+        throw new Error('retry export failed');
+      },
+      onStepClose: () => {
+        throw new Error('refusal export failed');
+      },
+      onStepTerminal: () => {
+        throw new Error('outcome export failed');
+      },
     } as unknown as MetricsRecorder;
     const listener = new MetricsListener(throwingRecorder, () => 10, 'feature');
     listener.start(emitter);
-    emitter.on('step_retry', () => { delivered.push('retry'); });
-    emitter.on('step_refused', () => { delivered.push('refusal'); });
+    emitter.on('step_retry', () => {
+      delivered.push('retry');
+    });
+    emitter.on('step_refused', () => {
+      delivered.push('refusal');
+    });
 
     try {
       await expect(emitter.emit({ type: 'step_started', step: 'build', index: 0 })).resolves.toBeUndefined();
-      await expect(emitter.emit({ type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 2, reason: 'failed attempt' })).resolves.toBeUndefined();
-      await expect(emitter.emit({ type: 'step_refused', step: 'build', kind: 'needs-human', reason: 'operator required' })).resolves.toBeUndefined();
+      await expect(
+        emitter.emit({ type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 2, reason: 'failed attempt' }),
+      ).resolves.toBeUndefined();
+      await expect(
+        emitter.emit({ type: 'step_refused', step: 'build', kind: 'needs-human', reason: 'operator required' }),
+      ).resolves.toBeUndefined();
       expect(delivered).toEqual(['retry', 'refusal']);
     } finally {
       listener.stop();
@@ -1018,24 +1653,84 @@ describe('MetricsListener step applicability', () => {
 
     try {
       await emitter.emit({
-        type: 'step_inapplicable', step: 'manual_test', reason: 'secret reason text',
-        decider: { author: 'Author Name <author@example.com>', committer: 'Committer <c@example.com>' }, commit: 'abc1234def',
+        type: 'step_inapplicable',
+        step: 'manual_test',
+        reason: 'secret reason text',
+        decider: { author: 'Author Name <author@example.com>', committer: 'Committer <c@example.com>' },
+        commit: 'abc1234def',
       });
-      await emitter.emit({ type: 'step_inapplicable_ignored', cause: 'branch-only', step: 'manual_test', detail: 'detail text' });
+      await emitter.emit({
+        type: 'step_inapplicable_ignored',
+        cause: 'branch-only',
+        step: 'manual_test',
+        detail: 'detail text',
+      });
       await emitter.emit({ type: 'step_inapplicable_ignored', cause: 'toggle-off' });
-      await emitter.emit({ type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late reason', priorStatus: 'done' });
+      await emitter.emit({
+        type: 'step_inapplicable_refused',
+        step: 'manual_test',
+        reason: 'late reason',
+        priorStatus: 'done',
+      });
       await provider.forceFlush();
 
       const points = pointsForInstrument(exporter, 'conductor.step.applicability');
-      expect(points.map((point) => ({ attributes: point.attributes, value: point.value }))).toEqual(expect.arrayContaining([
-        { attributes: { event: 'step_inapplicable', step: 'manual_test', project: 'project', worker: 'worker', feature: 'feature' }, value: 1 },
-        { attributes: { event: 'step_inapplicable_ignored', cause: 'branch-only', step: 'manual_test', project: 'project', worker: 'worker', feature: 'feature' }, value: 1 },
-        { attributes: { event: 'step_inapplicable_ignored', cause: 'toggle-off', project: 'project', worker: 'worker', feature: 'feature' }, value: 1 },
-        { attributes: { event: 'step_inapplicable_refused', step: 'manual_test', priorStatus: 'done', project: 'project', worker: 'worker', feature: 'feature' }, value: 1 },
-      ]));
+      expect(points.map((point) => ({ attributes: point.attributes, value: point.value }))).toEqual(
+        expect.arrayContaining([
+          {
+            attributes: {
+              event: 'step_inapplicable',
+              step: 'manual_test',
+              project: 'project',
+              worker: 'worker',
+              feature: 'feature',
+            },
+            value: 1,
+          },
+          {
+            attributes: {
+              event: 'step_inapplicable_ignored',
+              cause: 'branch-only',
+              step: 'manual_test',
+              project: 'project',
+              worker: 'worker',
+              feature: 'feature',
+            },
+            value: 1,
+          },
+          {
+            attributes: {
+              event: 'step_inapplicable_ignored',
+              cause: 'toggle-off',
+              project: 'project',
+              worker: 'worker',
+              feature: 'feature',
+            },
+            value: 1,
+          },
+          {
+            attributes: {
+              event: 'step_inapplicable_refused',
+              step: 'manual_test',
+              priorStatus: 'done',
+              project: 'project',
+              worker: 'worker',
+              feature: 'feature',
+            },
+            value: 1,
+          },
+        ]),
+      );
       expect(points).toHaveLength(4);
       const labelValues = points.flatMap((point) => Object.values(point.attributes).map(String));
-      for (const forbidden of ['secret reason text', 'late reason', 'detail text', 'Author Name', 'Committer', 'abc1234def']) {
+      for (const forbidden of [
+        'secret reason text',
+        'late reason',
+        'detail text',
+        'Author Name',
+        'Committer',
+        'abc1234def',
+      ]) {
         expect(labelValues.some((value) => value.includes(forbidden))).toBe(false);
       }
     } finally {

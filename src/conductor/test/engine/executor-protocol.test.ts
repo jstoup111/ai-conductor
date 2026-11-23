@@ -5,20 +5,26 @@ import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage } from '../../src/engin
 describe('engine/executor-protocol', () => {
   it.each([
     ['hello', { kind: 'hello', protocolVersion: 1, engineVersionId: 'v1' }],
-    ['work-order', {
-      kind: 'work-order',
-      order: {
-        repository: 'jstoup/ai-conductor',
-        slug: 'executor-protocol',
-        baseSha: 'a'.repeat(40),
-        manifest: [],
+    [
+      'work-order',
+      {
+        kind: 'work-order',
+        order: {
+          repository: 'jstoup/ai-conductor',
+          slug: 'executor-protocol',
+          baseSha: 'a'.repeat(40),
+          manifest: [],
+        },
       },
-    }],
-    ['event', {
-      kind: 'event',
-      scope: 'feature',
-      payload: { type: 'future_executor_event', detail: 'preserve me' },
-    }],
+    ],
+    [
+      'event',
+      {
+        kind: 'event',
+        scope: 'feature',
+        payload: { type: 'future_executor_event', detail: 'preserve me' },
+      },
+    ],
     ['log', { kind: 'log', level: 'warn', message: 'child warning' }],
     ['request', { kind: 'request', requestId: 'request-1', method: 'rate-limit.enter', params: { deadline: 42 } }],
     ['response', { kind: 'response', requestId: 'request-1', result: { cleared: true } }],
@@ -41,8 +47,16 @@ describe('engine/executor-protocol', () => {
 
   it.each([
     ['a hello without protocolVersion', { kind: 'hello', engineVersionId: 'v1' }, /protocolVersion/i],
-    ['a hello with a non-numeric protocolVersion', { kind: 'hello', protocolVersion: 'one', engineVersionId: 'v1' }, /protocolVersion.*number/i],
-    ['an event whose payload is not JSON', { kind: 'event', scope: 'root', payload: '{not json' }, /event.*payload.*JSON/i],
+    [
+      'a hello with a non-numeric protocolVersion',
+      { kind: 'hello', protocolVersion: 'one', engineVersionId: 'v1' },
+      /protocolVersion.*number/i,
+    ],
+    [
+      'an event whose payload is not JSON',
+      { kind: 'event', scope: 'root', payload: '{not json' },
+      /event.*payload.*JSON/i,
+    ],
   ])('returns malformed rather than throwing for %s', (_caseName, raw, reason) => {
     expect(() => parseExecutorMessage(raw)).not.toThrow();
     expect(parseExecutorMessage(raw)).toMatchObject({ kind: 'malformed', reason: expect.stringMatching(reason) });
@@ -51,11 +65,13 @@ describe('engine/executor-protocol', () => {
   it('preserves an unknown event type for a newer executor', () => {
     const payload = { type: 'future_executor_event', detail: 'preserve me' };
 
-    expect(parseExecutorMessage({
-      kind: 'event',
-      scope: 'root',
-      payload,
-    })).toEqual({
+    expect(
+      parseExecutorMessage({
+        kind: 'event',
+        scope: 'root',
+        payload,
+      }),
+    ).toEqual({
       kind: 'ok',
       message: { kind: 'event', scope: 'root', payload },
     });
@@ -70,12 +86,14 @@ describe('engine/executor-protocol', () => {
 
   // Covers: task:1
   it('preserves the child OTel-projection capability in hello messages', () => {
-    expect(parseExecutorMessage({
-      kind: 'hello',
-      protocolVersion: 1,
-      engineVersionId: 'v1',
-      otelProjection: true,
-    })).toEqual({
+    expect(
+      parseExecutorMessage({
+        kind: 'hello',
+        protocolVersion: 1,
+        engineVersionId: 'v1',
+        otelProjection: true,
+      }),
+    ).toEqual({
       kind: 'ok',
       message: {
         kind: 'hello',
@@ -143,12 +161,16 @@ describe('engine/executor-protocol', () => {
 
   it('keeps protocol version 1 and accepts legacy hello and work-order envelopes', () => {
     expect(EXECUTOR_PROTOCOL_VERSION).toBe(1);
-    expect(parseExecutorMessage({ kind: 'hello', protocolVersion: 1, engineVersionId: 'v1' }))
-      .toMatchObject({ kind: 'ok', message: { kind: 'hello', engineVersionId: 'v1' } });
-    expect(parseExecutorMessage({
-      kind: 'work-order',
-      order: { repository: 'jstoup/ai-conductor', slug: 'legacy', baseSha: 'a'.repeat(40), manifest: [] },
-    })).toMatchObject({ kind: 'ok', message: { kind: 'work-order' } });
+    expect(parseExecutorMessage({ kind: 'hello', protocolVersion: 1, engineVersionId: 'v1' })).toMatchObject({
+      kind: 'ok',
+      message: { kind: 'hello', engineVersionId: 'v1' },
+    });
+    expect(
+      parseExecutorMessage({
+        kind: 'work-order',
+        order: { repository: 'jstoup/ai-conductor', slug: 'legacy', baseSha: 'a'.repeat(40), manifest: [] },
+      }),
+    ).toMatchObject({ kind: 'ok', message: { kind: 'work-order' } });
   });
 
   it.each([

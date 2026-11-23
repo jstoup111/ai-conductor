@@ -1,11 +1,7 @@
 import { registerBuiltins } from '../plugin-loader.js';
 import { PluginRegistry } from '../plugin-registry.js';
 import type { HarnessConfig } from '../../types/config.js';
-import type {
-  VisualizerFactory,
-  VisualizerPlugin,
-  VisualizerStartContext,
-} from '../../types/plugin.js';
+import type { VisualizerFactory, VisualizerPlugin, VisualizerStartContext } from '../../types/plugin.js';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { resolveOtelConfig } from './otel-config.js';
 import { resolveWorkerName } from './otel-config.js';
@@ -21,7 +17,14 @@ import { buildResource } from './resource.js';
 import { buildExporters, isExportRefused } from './transport.js';
 import { MetricsRecorder } from './metrics.js';
 import { MetricsListener } from './metrics-listener.js';
-import { createSpoolRuntime, resolveSpoolDirSync, type SpoolRuntime, type SpoolWriterRuntime, warnDisabledSpoolBacklog, warnSpoolUnavailable } from './spool-wiring.js';
+import {
+  createSpoolRuntime,
+  resolveSpoolDirSync,
+  type SpoolRuntime,
+  type SpoolWriterRuntime,
+  warnDisabledSpoolBacklog,
+  warnSpoolUnavailable,
+} from './spool-wiring.js';
 import { createBrokeredInstrumentHost, type BrokeredInstrumentHost } from './brokered-meter.js';
 
 const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
@@ -40,10 +43,13 @@ const interactiveSpoolLifecycles = new Map<string, InteractiveSpoolLifecycle>();
 const interactiveSpoolStops = new Map<string, Promise<void>>();
 const emittedSpoolWarnings = new Set<string>();
 
-function emitResolvedWarnings(resolved: Extract<ReturnType<typeof resolveOtelConfig>, { enabled: true }>, events: ConductorEventEmitter): void {
+function emitResolvedWarnings(
+  resolved: Extract<ReturnType<typeof resolveOtelConfig>, { enabled: true }>,
+  events: ConductorEventEmitter,
+): void {
   const warnings = [
     ...(resolved.attributeWarnings ?? []),
-    ...('spoolWarnings' in resolved ? resolved.spoolWarnings ?? [] : []),
+    ...('spoolWarnings' in resolved ? (resolved.spoolWarnings ?? []) : []),
   ];
   for (const warning of warnings) {
     if (emittedSpoolWarnings.has(warning)) continue;
@@ -68,7 +74,9 @@ function guardMetricLifecycle(events: ConductorEventEmitter): (operation: () => 
       if (!warned) {
         warned = true;
         const detail = error instanceof Error ? error.message : String(error);
-        await events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] metric export failed: ${detail}` }).catch(() => {});
+        await events
+          .emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] metric export failed: ${detail}` })
+          .catch(() => {});
       }
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -110,7 +118,10 @@ function interactiveSpoolLifecycle(
   const existing = interactiveSpoolLifecycles.get(directory);
   if (existing) return existing;
   const lifecycle: InteractiveSpoolLifecycle = {
-    runtime: createSpoolRuntime(directory, resolved, events), events, visualizerOpen: false, metricsOpen: false,
+    runtime: createSpoolRuntime(directory, resolved, events),
+    events,
+    visualizerOpen: false,
+    metricsOpen: false,
   };
   const priorStop = interactiveSpoolStops.get(directory);
   if (priorStop) lifecycle.leaseStart = priorStop.then(() => lifecycle.runtime.lease.acquire());
@@ -156,9 +167,8 @@ export function wireOtelVisualizer(
   emitResolvedWarnings(resolved, events);
   void warnDisabledSpoolBacklog(resolved, context.project ?? dirname(context.pipelineDir), events);
 
-  const interactiveLifecycle = !spoolRuntime && resolved.exporter === 'otlp'
-    ? interactiveSpoolLifecycle(resolved, context, events)
-    : undefined;
+  const interactiveLifecycle =
+    !spoolRuntime && resolved.exporter === 'otlp' ? interactiveSpoolLifecycle(resolved, context, events) : undefined;
   if (!spoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled && !interactiveLifecycle) {
     warnSpoolUnavailable(context.project ?? dirname(context.pipelineDir), events);
   }
@@ -175,10 +185,10 @@ export function wireOtelVisualizer(
       resolvedWarningsHandled: true,
       ...(activeSpoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled
         ? (() => {
-          const built = buildExporters(resolved, { spoolStore: activeSpoolRuntime.store, events, env: context.env });
-          if (isExportRefused(built)) throw new Error(built.message);
-          return { otelSpanExporter: built.spanExporter };
-        })()
+            const built = buildExporters(resolved, { spoolStore: activeSpoolRuntime.store, events, env: context.env });
+            if (isExportRefused(built)) throw new Error(built.message);
+            return { otelSpanExporter: built.spanExporter };
+          })()
         : {}),
     });
     if (!visualizer) return null;
@@ -186,7 +196,9 @@ export function wireOtelVisualizer(
     visualizer.start(events, context);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] visualizer start failed: ${detail}` }).catch(() => {});
+    void events
+      .emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] visualizer start failed: ${detail}` })
+      .catch(() => {});
     if (interactiveLifecycle) {
       interactiveLifecycle.visualizerOpen = false;
       const directory = resolveSpoolDirSync(dirname(context.pipelineDir));
@@ -214,20 +226,37 @@ export function wireOtelVisualizer(
 /** Daemon-lifetime meter: one recorder/listener survives feature process exits. */
 export function wireDaemonOtel(
   config: HarnessConfig,
-  context: { mainRoot: string; project: string; projectName: string; workerName?: string; harnessVersion?: string; rootEvents: ConductorEventEmitter; env?: NodeJS.ProcessEnv },
-): { flush: () => Promise<void>; stop: () => Promise<void>; spoolRuntime?: SpoolRuntime; instrumentHost: BrokeredInstrumentHost; acceptedChildren: Set<string> } | null {
+  context: {
+    mainRoot: string;
+    project: string;
+    projectName: string;
+    workerName?: string;
+    harnessVersion?: string;
+    rootEvents: ConductorEventEmitter;
+    env?: NodeJS.ProcessEnv;
+  },
+): {
+  flush: () => Promise<void>;
+  stop: () => Promise<void>;
+  spoolRuntime?: SpoolRuntime;
+  instrumentHost: BrokeredInstrumentHost;
+  acceptedChildren: Set<string>;
+} | null {
   const resolved = resolveOtelConfig(config, join(context.mainRoot, '.pipeline'));
   if (!resolved.enabled) return null;
   emitResolvedWarnings(resolved, context.rootEvents);
   void warnDisabledSpoolBacklog(resolved, context.mainRoot, context.rootEvents);
-  const spoolRuntime = resolved.exporter === 'otlp' && resolved.spool?.enabled
-    ? createSpoolRuntime(join(context.mainRoot, '.daemon', 'otel-spool'), resolved, context.rootEvents)
-    : undefined;
+  const spoolRuntime =
+    resolved.exporter === 'otlp' && resolved.spool?.enabled
+      ? createSpoolRuntime(join(context.mainRoot, '.daemon', 'otel-spool'), resolved, context.rootEvents)
+      : undefined;
   const exporters = spoolRuntime
     ? buildExporters(resolved, { spoolStore: spoolRuntime.store, events: context.rootEvents, env: context.env })
     : buildExporters(resolved, { env: context.env });
   if (isExportRefused(exporters)) {
-    void context.rootEvents.emit({ type: 'renderer_error', rendererName: 'otel', error: exporters.message }).catch(() => {});
+    void context.rootEvents
+      .emit({ type: 'renderer_error', rendererName: 'otel', error: exporters.message })
+      .catch(() => {});
     return null;
   }
   const workerName = context.workerName ?? resolveWorkerName(resolved);
@@ -235,27 +264,49 @@ export function wireDaemonOtel(
     exporter: warnOnceMetricExporter(exporters.metricExporter, context.rootEvents),
     exportIntervalMillis: 60_000,
   });
-  const provider = new MeterProvider({ resource: buildResource({
-    attributes: resolved.attributes,
-    pipelineDir: join(context.mainRoot, '.pipeline'), project: context.project,
-    projectName: resolved.projectName ?? context.projectName ?? basename(context.mainRoot), workerName,
-    ...(Object.prototype.hasOwnProperty.call(context, 'harnessVersion') ? { harnessVersion: context.harnessVersion } : {}),
-  }, 'metrics'), readers: [reader] });
+  const provider = new MeterProvider({
+    resource: buildResource(
+      {
+        attributes: resolved.attributes,
+        pipelineDir: join(context.mainRoot, '.pipeline'),
+        project: context.project,
+        projectName: resolved.projectName ?? context.projectName ?? basename(context.mainRoot),
+        workerName,
+        ...(Object.prototype.hasOwnProperty.call(context, 'harnessVersion')
+          ? { harnessVersion: context.harnessVersion }
+          : {}),
+      },
+      'metrics',
+    ),
+    readers: [reader],
+  });
   const acceptedChildren = new Set<string>();
   const meter = provider.getMeter('conductor', '1.0.0');
   const identity = { project: resolved.projectName ?? context.projectName ?? 'unknown', worker: workerName };
-  const listener = new MetricsListener(new MetricsRecorder(meter, {
-    project: resolved.projectName ?? context.projectName ?? 'unknown', worker: workerName,
-  }, resolved.attributes), undefined, undefined, (slug) => acceptedChildren.has(slug));
+  const listener = new MetricsListener(
+    new MetricsRecorder(
+      meter,
+      {
+        project: resolved.projectName ?? context.projectName ?? 'unknown',
+        worker: workerName,
+      },
+      resolved.attributes,
+    ),
+    undefined,
+    undefined,
+    (slug) => acceptedChildren.has(slug),
+  );
   const instrumentHost = createBrokeredInstrumentHost(meter, identity);
   listener.start(context.rootEvents);
   const activeSpoolRuntime = spoolRuntime;
   const leaseStart = activeSpoolRuntime?.lease.acquire();
   if (leaseStart) {
-    void leaseStart.then((result) => {
-      if (result.acquired) return activeSpoolRuntime!.drainer.drainUntilStopped();
-      return undefined;
-    }).catch((error) => reportSpoolRuntimeFailure(activeSpoolRuntime!, context.rootEvents, error));
+    void leaseStart
+      .then((result) => {
+        if (result.acquired) return activeSpoolRuntime!.drainer.drainUntilStopped();
+        return undefined;
+      })
+      .catch((error) => reportSpoolRuntimeFailure(activeSpoolRuntime!, context.rootEvents, error));
   }
   const settleMetricLifecycle = guardMetricLifecycle(context.rootEvents);
   let stopped: Promise<void> | undefined;
@@ -265,14 +316,15 @@ export function wireDaemonOtel(
     flush: async () => {
       await settleMetricLifecycle(() => provider.forceFlush());
     },
-    stop: () => stopped ??= (async () => {
-      listener.stop();
-      await settleMetricLifecycle(() => provider.forceFlush());
-      await settleMetricLifecycle(() => provider.shutdown());
-      await leaseStart?.catch(() => undefined);
-      await spoolRuntime?.drainer.stop().catch((error) => reportSpoolFailure(context.rootEvents, error));
-      await spoolRuntime?.lease.release().catch((error) => reportSpoolFailure(context.rootEvents, error));
-    })(),
+    stop: () =>
+      (stopped ??= (async () => {
+        listener.stop();
+        await settleMetricLifecycle(() => provider.forceFlush());
+        await settleMetricLifecycle(() => provider.shutdown());
+        await leaseStart?.catch(() => undefined);
+        await spoolRuntime?.drainer.stop().catch((error) => reportSpoolFailure(context.rootEvents, error));
+        await spoolRuntime?.lease.release().catch((error) => reportSpoolFailure(context.rootEvents, error));
+      })()),
     ...(spoolRuntime ? { spoolRuntime } : {}),
     instrumentHost,
     acceptedChildren,
@@ -289,9 +341,8 @@ export function wireInteractiveOtelMetrics(
   if (!resolved.enabled) return null;
   emitResolvedWarnings(resolved, events);
   void warnDisabledSpoolBacklog(resolved, context.project ?? dirname(context.pipelineDir), events);
-  const spoolLifecycle = resolved.exporter === 'otlp'
-    ? interactiveSpoolLifecycle(resolved, context, events)
-    : undefined;
+  const spoolLifecycle =
+    resolved.exporter === 'otlp' ? interactiveSpoolLifecycle(resolved, context, events) : undefined;
   if (resolved.exporter === 'otlp' && resolved.spool?.enabled && !spoolLifecycle) {
     warnSpoolUnavailable(context.project ?? dirname(context.pipelineDir), events);
   }
@@ -308,18 +359,23 @@ export function wireInteractiveOtelMetrics(
   const workerName = resolveWorkerName(resolved);
   const projectName = resolved.projectName ?? (context.project ? basename(context.project) : 'unknown');
   const provider = new MeterProvider({
-    resource: buildResource({
-      attributes: resolved.attributes,
-      pipelineDir: context.pipelineDir,
-      project: context.project,
-      projectName,
-      workerName,
-      harnessVersion: context.harnessVersion,
-    }, 'metrics'),
-    readers: [new PeriodicExportingMetricReader({
-      exporter: warnOnceMetricExporter(exporters.metricExporter, events),
-      exportIntervalMillis: 60_000,
-    })],
+    resource: buildResource(
+      {
+        attributes: resolved.attributes,
+        pipelineDir: context.pipelineDir,
+        project: context.project,
+        projectName,
+        workerName,
+        harnessVersion: context.harnessVersion,
+      },
+      'metrics',
+    ),
+    readers: [
+      new PeriodicExportingMetricReader({
+        exporter: warnOnceMetricExporter(exporters.metricExporter, events),
+        exportIntervalMillis: 60_000,
+      }),
+    ],
   });
   const listener = new MetricsListener(
     new MetricsRecorder(
@@ -334,7 +390,9 @@ export function wireInteractiveOtelMetrics(
     listener.start(events);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] metrics listener start failed: ${detail}` }).catch(() => {});
+    void events
+      .emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] metrics listener start failed: ${detail}` })
+      .catch(() => {});
     if (spoolLifecycle) {
       spoolLifecycle.metricsOpen = false;
       const directory = resolveSpoolDirSync(dirname(context.pipelineDir));
@@ -345,54 +403,67 @@ export function wireInteractiveOtelMetrics(
   const leaseStart = spoolRuntime ? (spoolLifecycle!.leaseStart ??= spoolRuntime.lease.acquire()) : undefined;
   if (leaseStart) {
     const activeSpoolRuntime = spoolRuntime;
-    void leaseStart.then((result) => {
-      if (result.acquired) return activeSpoolRuntime!.drainer.drainUntilStopped();
-      return undefined;
-    }).catch((error) => reportSpoolRuntimeFailure(activeSpoolRuntime!, events, error));
+    void leaseStart
+      .then((result) => {
+        if (result.acquired) return activeSpoolRuntime!.drainer.drainUntilStopped();
+        return undefined;
+      })
+      .catch((error) => reportSpoolRuntimeFailure(activeSpoolRuntime!, events, error));
   }
   const settleMetricLifecycle = guardMetricLifecycle(events);
   let stopped: Promise<void> | undefined;
   return {
     name: 'otel-metrics',
     start: () => {},
-    stop: () => stopped ??= (async () => {
-      listener.stop();
-      await settleMetricLifecycle(() => provider.forceFlush());
-      await settleMetricLifecycle(() => provider.shutdown());
-      if (spoolLifecycle) {
-        spoolLifecycle.metricsOpen = false;
-        const directory = resolveSpoolDirSync(dirname(context.pipelineDir));
-        if (directory !== null) await stopInteractiveSpoolIfUnused(directory, spoolLifecycle);
-      }
-    })(),
+    stop: () =>
+      (stopped ??= (async () => {
+        listener.stop();
+        await settleMetricLifecycle(() => provider.forceFlush());
+        await settleMetricLifecycle(() => provider.shutdown());
+        if (spoolLifecycle) {
+          spoolLifecycle.metricsOpen = false;
+          const directory = resolveSpoolDirSync(dirname(context.pipelineDir));
+          if (directory !== null) await stopInteractiveSpoolIfUnused(directory, spoolLifecycle);
+        }
+      })()),
   };
 }
 
 async function reportSpoolFailure(events: ConductorEventEmitter, error: unknown): Promise<void> {
   const detail = error instanceof Error ? error.message : String(error);
-  await events.emit({
-    type: 'renderer_error', rendererName: 'otel', error: `[otel] spool lease or drainer failed: ${detail}`,
-  }).catch(() => undefined);
+  await events
+    .emit({
+      type: 'renderer_error',
+      rendererName: 'otel',
+      error: `[otel] spool lease or drainer failed: ${detail}`,
+    })
+    .catch(() => undefined);
 }
 
-async function reportSpoolRuntimeFailure(runtime: SpoolRuntime, events: ConductorEventEmitter, error: unknown): Promise<void> {
+async function reportSpoolRuntimeFailure(
+  runtime: SpoolRuntime,
+  events: ConductorEventEmitter,
+  error: unknown,
+): Promise<void> {
   await reportSpoolFailure(events, error);
   await runtime.lease.release().catch(() => undefined);
 }
 
 /** Route one metric-export failure through the shared renderer-error spine. */
-function warnOnceMetricExporter(
-  exporter: PushMetricExporter,
-  events: ConductorEventEmitter,
-): PushMetricExporter {
+function warnOnceMetricExporter(exporter: PushMetricExporter, events: ConductorEventEmitter): PushMetricExporter {
   let warned = false;
   return {
     export(metrics: ResourceMetrics, callback: (result: ExportResult) => void): void {
       exporter.export(metrics, (result) => {
         if (!warned && result.code !== ExportResultCode.SUCCESS) {
           warned = true;
-          const detail = result.error instanceof Error ? result.error.message : String(result.error ?? 'unknown export failure');
-          void events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] metric export failed: ${detail}` });
+          const detail =
+            result.error instanceof Error ? result.error.message : String(result.error ?? 'unknown export failure');
+          void events.emit({
+            type: 'renderer_error',
+            rendererName: 'otel',
+            error: `[otel] metric export failed: ${detail}`,
+          });
         }
         callback(result);
       });

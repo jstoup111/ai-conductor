@@ -1770,7 +1770,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     featureEvents: ConductorEventEmitter,
   ): (() => Promise<void>) => {
     const pipelineDir = join(projectRoot, '.worktrees', trace.slug, '.pipeline');
-    const dispatchTrace = buildDispatchTraceIdentity(projectRoot, trace.slug, { harnessVersion: daemonHarnessVersion, sourceRef: trace.sourceRef });
+    const dispatchTrace = buildDispatchTraceIdentity(projectRoot, trace.slug, {
+      harnessVersion: daemonHarnessVersion,
+      sourceRef: trace.sourceRef,
+    });
     const visualizerContext = {
       pipelineDir,
       runId: dispatchTrace.runId,
@@ -1880,7 +1883,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     supervisorEngineVersionId: resolveEngineVersion(engineRoot.ownEngineDir),
     rootEvents: events,
     attachBroker: executorBroker.attach,
-    ...(daemonOtel ? { acceptOtelProjection: (slug, order) => buildDispatchTraceIdentity(projectRoot, slug, { harnessVersion: daemonHarnessVersion, sourceRef: order.sourceRef }) } : {}),
+    ...(daemonOtel
+      ? {
+          acceptOtelProjection: (slug, order) =>
+            buildDispatchTraceIdentity(projectRoot, slug, {
+              harnessVersion: daemonHarnessVersion,
+              sourceRef: order.sourceRef,
+            }),
+        }
+      : {}),
     dispatchStartTimeoutMs: resolveDispatchStartTimeoutSeconds(config) * 1_000,
     teardownTimeoutMs: resolveTeardownTimeoutSeconds(config) * 1_000,
     onProtocolMismatch: () => {

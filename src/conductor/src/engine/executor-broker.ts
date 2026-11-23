@@ -123,9 +123,16 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       let meterHandler: ReturnType<BrokeredInstrumentHost['forDispatch']> | undefined;
       const attachSupervisorVisualizer = () => {
         if (detachFeatureOtelVisualizer || otelProjectionAccepted || engineVersionId === undefined) return;
-        detachFeatureOtelVisualizer = deps.attachFeatureOtelVisualizer?.({ slug, engineVersionId,
-          ...(typeof identity === 'string' || identity?.sourceRef === undefined ? {} : { sourceRef: identity.sourceRef }),
-        }, featureEvents);
+        detachFeatureOtelVisualizer = deps.attachFeatureOtelVisualizer?.(
+          {
+            slug,
+            engineVersionId,
+            ...(typeof identity === 'string' || identity?.sourceRef === undefined
+              ? {}
+              : { sourceRef: identity.sourceRef }),
+          },
+          featureEvents,
+        );
       };
       const acceptOtelProjection = () => {
         if (!deps.instrumentHost) return false;
@@ -293,8 +300,9 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
             port.send({ kind: 'event', scope: 'feature', payload: event });
           }
         } else if (message.kind === 'request') void request(message.requestId, message.method, message.params);
-        else if (message.kind === 'meter') { if (otelProjectionAccepted) meterHandler?.handle(message); }
-        else if (message.kind === 'event') {
+        else if (message.kind === 'meter') {
+          if (otelProjectionAccepted) meterHandler?.handle(message);
+        } else if (message.kind === 'event') {
           // Dispatch lifecycle is supervisor-owned once per claim. Never let
           // a child replay or duplicate these root events during a relaunch.
           if (message.payload.type === 'feature_dispatch_started' || message.payload.type === 'feature_dispatch_ended')

@@ -32,7 +32,11 @@ describe('createSpoolWriterRuntime', () => {
   it('owns only the store for a child writer', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'spool-writer-'));
     temporaryDirectories.push(directory);
-    const runtime = createSpoolWriterRuntime(directory, { enabled: true, exporter: 'otlp', spool: { enabled: true } } as never);
+    const runtime = createSpoolWriterRuntime(directory, {
+      enabled: true,
+      exporter: 'otlp',
+      spool: { enabled: true },
+    } as never);
     await runtime.store.write('traces', Buffer.from('child-batch'));
     expect(await readdir(join(directory, 'traces'))).toHaveLength(1);
     expect(runtime).not.toHaveProperty('lease');

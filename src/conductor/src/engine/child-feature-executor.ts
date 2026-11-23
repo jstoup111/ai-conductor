@@ -9,7 +9,12 @@ import { readHaltSidecarClassification } from './halt-marker.js';
 import { classifyDispatchKind } from './daemon-runner.js';
 import type { FeatureExecutionOutcome, FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
-import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage, type ExecutorMessage, type ExecutorOtelProjectionTrace } from './executor-protocol.js';
+import {
+  EXECUTOR_PROTOCOL_VERSION,
+  parseExecutorMessage,
+  type ExecutorMessage,
+  type ExecutorOtelProjectionTrace,
+} from './executor-protocol.js';
 import type { ExecutorIpcPort } from './executor-proxies.js';
 import type { ExecutorBrokerAttachment } from './executor-broker.js';
 import { removeExecutorRecord, writeExecutorRecord } from './executor-records.js';
@@ -204,9 +209,10 @@ export function createChildProcessFeatureExecutor(
           return;
         }
         handshake = 'accepted';
-        const trace = message.otelProjection && deps.acceptOtelProjection !== undefined && attachment.acceptOtelProjection?.()
-          ? deps.acceptOtelProjection?.(order.slug, launchedOrder)
-          : undefined;
+        const trace =
+          message.otelProjection && deps.acceptOtelProjection !== undefined && attachment.acceptOtelProjection?.()
+            ? deps.acceptOtelProjection?.(order.slug, launchedOrder)
+            : undefined;
         if (trace === undefined) attachment.useSupervisorOtel?.();
         void recordPublished.then(() => {
           // The handshake permits work only once the live child is durably

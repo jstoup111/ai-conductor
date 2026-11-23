@@ -251,12 +251,18 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
                 deps.supervisorEngineVersionId ?? order.supervisorEngineVersionId ?? order.engineVersionId,
             });
             const loaded = projection ? await loadMergedConfig(worktree.path) : undefined;
-            const childOtel = projection && loaded?.ok
-              ? startChildOtelProjection({
-                  config: loaded.config, trace: projection.trace, engineVersionId, slug: order.slug,
-                  mainRoot: resolvePath(worktree.path, '../..'), events, sendMeter: (message) => port.send(message),
-                })
-              : undefined;
+            const childOtel =
+              projection && loaded?.ok
+                ? startChildOtelProjection({
+                    config: loaded.config,
+                    trace: projection.trace,
+                    engineVersionId,
+                    slug: order.slug,
+                    mainRoot: resolvePath(worktree.path, '../..'),
+                    events,
+                    sendMeter: (message) => port.send(message),
+                  })
+                : undefined;
             let outcome: FeatureExecutionOutcome;
             try {
               outcome = controller.signal.aborted

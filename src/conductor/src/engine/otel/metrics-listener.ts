@@ -10,7 +10,10 @@ type OtelEvent = Extract<ConductorEvent, { type: OtelEventType }>;
 type MetricsEventType = OtelEventType;
 type MetricsEvent = OtelEvent;
 type MetricsHandler = (listener: MetricsListener, event: MetricsEvent) => void;
-type StepTerminalEvent = Extract<ConductorEvent, { type: 'step_completed' | 'step_failed' | 'step_interrupted' | 'step_refused' }>;
+type StepTerminalEvent = Extract<
+  ConductorEvent,
+  { type: 'step_completed' | 'step_failed' | 'step_interrupted' | 'step_refused' }
+>;
 
 interface StartedExecution {
   identity: ResolvedExecutionIdentity;
@@ -36,8 +39,12 @@ export class MetricsListener {
 
   /** The handler table is the source of truth for both subscription and projection. */
   static readonly METRICS_HANDLERS: Record<MetricsEventType, MetricsHandler> = {
-    memory_setup: (listener, event) => (listener.feature(event) ?? listener.recorder).onMemorySetup(event as Extract<OtelEvent, { type: 'memory_setup' }>),
-    daemon_backlog_snapshot: (listener, event) => listener.recorder.onDaemonBacklog(event as Extract<OtelEvent, { type: 'daemon_backlog_snapshot' }>),
+    memory_setup: (listener, event) =>
+      (listener.feature(event) ?? listener.recorder).onMemorySetup(
+        event as Extract<OtelEvent, { type: 'memory_setup' }>,
+      ),
+    daemon_backlog_snapshot: (listener, event) =>
+      listener.recorder.onDaemonBacklog(event as Extract<OtelEvent, { type: 'daemon_backlog_snapshot' }>),
     feature_dispatch_started: (listener, event) => {
       const dispatch = event as Extract<OtelEvent, { type: 'feature_dispatch_started' }>;
       listener.recorder.forFeature(dispatch.slug).onFeatureDispatch(dispatch.kind, dispatch.tier);
@@ -49,7 +56,8 @@ export class MetricsListener {
       const dispatch = event as Extract<OtelEvent, { type: 'feature_dispatch_ended' }>;
       const metric = listener.recorder.forFeature(dispatch.slug);
       if (!listener.terminal.has(dispatch.slug)) metric.onRunClose(dispatch.outcome, dispatch.tier);
-      if (dispatch.outcome === 'halted' && dispatch.haltClass && dispatch.step) metric.onFeatureHalt(dispatch.haltClass, dispatch.step, dispatch.tier);
+      if (dispatch.outcome === 'halted' && dispatch.haltClass && dispatch.step)
+        metric.onFeatureHalt(dispatch.haltClass, dispatch.step, dispatch.tier);
       listener.terminal.delete(dispatch.slug);
       listener.starts.delete(dispatch.slug);
       listener.dispatchMetering.delete(dispatch.slug);
@@ -77,19 +85,26 @@ export class MetricsListener {
     },
     step_completed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_completed' }>),
     step_failed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_failed' }>),
-    step_interrupted: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_interrupted' }>),
+    step_interrupted: (listener, event) =>
+      listener.onStepClose(event as Extract<OtelEvent, { type: 'step_interrupted' }>),
     step_refused: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_refused' }>),
-    group_member_step: (listener, event) => listener.onMemberSettlement(event as Extract<OtelEvent, { type: 'group_member_step' }>),
-    provider_attempt: (listener, event) => listener.onProviderAttempt(event as Extract<OtelEvent, { type: 'provider_attempt' }>),
-    feature_usage_total: (listener, event) => listener.feature(event)?.onFeatureUsageTotal(event as Extract<OtelEvent, { type: 'feature_usage_total' }>),
-    feature_cost_snapshot: (listener, event) => listener.feature(event)?.onFeatureCostSnapshot(event as Extract<OtelEvent, { type: 'feature_cost_snapshot' }>),
+    group_member_step: (listener, event) =>
+      listener.onMemberSettlement(event as Extract<OtelEvent, { type: 'group_member_step' }>),
+    provider_attempt: (listener, event) =>
+      listener.onProviderAttempt(event as Extract<OtelEvent, { type: 'provider_attempt' }>),
+    feature_usage_total: (listener, event) =>
+      listener.feature(event)?.onFeatureUsageTotal(event as Extract<OtelEvent, { type: 'feature_usage_total' }>),
+    feature_cost_snapshot: (listener, event) =>
+      listener.feature(event)?.onFeatureCostSnapshot(event as Extract<OtelEvent, { type: 'feature_cost_snapshot' }>),
     step_retry: (listener, event) => {
       const retry = event as Extract<OtelEvent, { type: 'step_retry' }>;
       const identity = listener.identityFor(retry, retry.step);
       if (identity) listener.feature(retry)?.onRetry(identity.metricLabel, stepDimensionsFrom(retry));
     },
-    feature_complete: (listener, event) => listener.closeFeature(event as Extract<OtelEvent, { type: 'feature_complete' }>, 'complete'),
-    build_stall: (listener, event) => listener.recorder.onStall((event as Extract<OtelEvent, { type: 'build_stall' }>).reason),
+    feature_complete: (listener, event) =>
+      listener.closeFeature(event as Extract<OtelEvent, { type: 'feature_complete' }>, 'complete'),
+    build_stall: (listener, event) =>
+      listener.recorder.onStall((event as Extract<OtelEvent, { type: 'build_stall' }>).reason),
     build_progress: () => {},
     build_no_progress: () => {},
     build_active_stall: () => {},
@@ -108,18 +123,25 @@ export class MetricsListener {
     },
     step_inapplicable: (listener, event) => {
       const inapplicable = event as Extract<OtelEvent, { type: 'step_inapplicable' }>;
-      (listener.feature(inapplicable) ?? listener.recorder).onStepApplicability({ event: inapplicable.type, step: inapplicable.step });
+      (listener.feature(inapplicable) ?? listener.recorder).onStepApplicability({
+        event: inapplicable.type,
+        step: inapplicable.step,
+      });
     },
     step_inapplicable_ignored: (listener, event) => {
       const ignored = event as Extract<OtelEvent, { type: 'step_inapplicable_ignored' }>;
       (listener.feature(ignored) ?? listener.recorder).onStepApplicability({
-        event: ignored.type, cause: ignored.cause, ...(ignored.step === undefined ? {} : { step: ignored.step }),
+        event: ignored.type,
+        cause: ignored.cause,
+        ...(ignored.step === undefined ? {} : { step: ignored.step }),
       });
     },
     step_inapplicable_refused: (listener, event) => {
       const refused = event as Extract<OtelEvent, { type: 'step_inapplicable_refused' }>;
       (listener.feature(refused) ?? listener.recorder).onStepApplicability({
-        event: refused.type, step: refused.step, priorStatus: refused.priorStatus,
+        event: refused.type,
+        step: refused.step,
+        priorStatus: refused.priorStatus,
       });
     },
     loop_halt: (listener, event) => listener.closeFeature(event as Extract<OtelEvent, { type: 'loop_halt' }>, 'halted'),
@@ -128,7 +150,8 @@ export class MetricsListener {
   start(emitter: ConductorEventEmitter): void {
     this.emitter = emitter;
     const missing = missingMetricsHandlerTypes();
-    if (missing.length > 0) throw new Error(`MetricsListener lacks handlers for OTel event type(s): ${missing.join(', ')}`);
+    if (missing.length > 0)
+      throw new Error(`MetricsListener lacks handlers for OTel event type(s): ${missing.join(', ')}`);
     for (const type of otelEventTypes()) {
       const projection = MetricsListener.METRICS_HANDLERS[type];
       const handler: EventHandler = (event) => {
@@ -141,7 +164,9 @@ export class MetricsListener {
             return;
           }
           projection(this, event as MetricsEvent);
-        } catch { /* metrics are best effort */ }
+        } catch {
+          /* metrics are best effort */
+        }
       };
       this.handlers.push([type, handler]);
       emitter.on(type, handler);
@@ -151,7 +176,10 @@ export class MetricsListener {
     if (this.emitter) for (const [type, handler] of this.handlers) this.emitter.off(type, handler);
     this.handlers.length = 0;
     this.emitter = undefined;
-    this.starts.clear(); this.dispatchMetering.clear(); this.latestDispatchDimensions.clear(); this.terminal.clear();
+    this.starts.clear();
+    this.dispatchMetering.clear();
+    this.latestDispatchDimensions.clear();
+    this.terminal.clear();
   }
 
   private feature(event: ConductorEvent): MetricsRecorder | undefined {
@@ -159,9 +187,11 @@ export class MetricsListener {
     return slug ? this.recorder.forFeature(slug) : undefined;
   }
   private featureOf(event: ConductorEvent): string | undefined {
-    return forwardedFeatureOf(event)
-      ?? (('slug' in event && typeof event.slug === 'string') ? event.slug : undefined)
-      ?? this.featureName;
+    return (
+      forwardedFeatureOf(event) ??
+      ('slug' in event && typeof event.slug === 'string' ? event.slug : undefined) ??
+      this.featureName
+    );
   }
   private closeFeature(
     event: Extract<OtelEvent, { type: 'feature_complete' | 'loop_halt' }>,
@@ -182,13 +212,21 @@ export class MetricsListener {
     if (!identity) return;
     const featureStarts = this.starts.get(slug);
     const start = featureStarts?.get(identity.correlationKey);
-    const compatibilityDispatch = event.type === 'step_refused' || event.type === 'step_interrupted'
-      ? undefined
-      : this.observeDispatch(event as Extract<OtelEvent, { type: 'step_completed' | 'step_failed' }>);
+    const compatibilityDispatch =
+      event.type === 'step_refused' || event.type === 'step_interrupted'
+        ? undefined
+        : this.observeDispatch(event as Extract<OtelEvent, { type: 'step_completed' | 'step_failed' }>);
     const dimensions = this.dispatchDimensionsForClose(slug, identity.correlationKey, event, compatibilityDispatch);
     if (start !== undefined) {
       const endedAt = start.settledAt ?? this.now();
-      metric.onStepClose(identity.metricLabel, Math.max(0, endedAt - start.startedAt), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, compatibilityDispatch !== undefined, dimensions);
+      metric.onStepClose(
+        identity.metricLabel,
+        Math.max(0, endedAt - start.startedAt),
+        0,
+        event.type === 'step_completed' ? event.tokenUsage : undefined,
+        compatibilityDispatch !== undefined,
+        dimensions,
+      );
       metric.onStepTerminal(identity.metricLabel, terminalOutcome(event), dimensions);
     }
     this.latestDispatchDimensions.get(slug)?.delete(identity.correlationKey);
@@ -200,9 +238,8 @@ export class MetricsListener {
     if (event.phase !== 'result') return;
     const slug = this.featureOf(event);
     const identity = this.identityFor(event, event.member);
-    const started = slug === undefined || identity === undefined
-      ? undefined
-      : this.starts.get(slug)?.get(identity.correlationKey);
+    const started =
+      slug === undefined || identity === undefined ? undefined : this.starts.get(slug)?.get(identity.correlationKey);
     if (started !== undefined && started.settledAt === undefined) started.settledAt = this.now();
   }
 
@@ -227,8 +264,13 @@ export class MetricsListener {
   }
 
   private rememberDispatchDimensions(slug: string, key: string, dimensions: DispatchDimensions): void {
-    if (dimensions.model === undefined || dimensions.effort === undefined
-      || dimensions.provider === undefined || dimensions.tier === undefined) return;
+    if (
+      dimensions.model === undefined ||
+      dimensions.effort === undefined ||
+      dimensions.provider === undefined ||
+      dimensions.tier === undefined
+    )
+      return;
     const feature = this.latestDispatchDimensions.get(slug) ?? new Map<string, DispatchDimensions>();
     feature.set(key, dimensions);
     this.latestDispatchDimensions.set(slug, feature);
@@ -244,7 +286,10 @@ export class MetricsListener {
       ...this.latestDispatchDimensions.get(slug)?.get(key),
       ...(event.type === 'step_refused' || event.type === 'step_interrupted'
         ? {}
-        : stepDimensionsFrom(event as Extract<ConductorEvent, { type: 'step_completed' | 'step_failed' }>, observation)),
+        : stepDimensionsFrom(
+            event as Extract<ConductorEvent, { type: 'step_completed' | 'step_failed' }>,
+            observation,
+          )),
     };
   }
 
@@ -257,7 +302,6 @@ export class MetricsListener {
       executionContext: 'executionContext' in event ? event.executionContext : undefined,
     });
   }
-
 }
 
 function terminalOutcome(event: StepTerminalEvent): 'success' | 'failure' | 'interrupted' | 'refusal' {
