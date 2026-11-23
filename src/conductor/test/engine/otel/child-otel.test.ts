@@ -9,13 +9,17 @@ describe('child OTel projection identity', () => {
       harnessVersion: '1.2.3',
       sourceRef: 'owner/repo#1',
     });
+    const nextIdentity = buildDispatchTraceIdentity('/tmp/no-child-session', 'feature-a', {
+      harnessVersion: '1.2.3',
+      sourceRef: 'owner/repo#1',
+    });
     expect(identity).toMatchObject({
       project: '/tmp/no-child-session',
       branch: 'feat/daemon-feature-a',
       harnessVersion: '1.2.3',
       sourceRef: 'owner/repo#1',
     });
-    expect(identity.runId).not.toBe('');
+    expect(identity.runId).not.toBe(nextIdentity.runId);
   });
 
   it('reports that projection did not start when the worktree has no enabled OTel configuration', () => {
