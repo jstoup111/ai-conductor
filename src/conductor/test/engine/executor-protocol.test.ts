@@ -141,6 +141,16 @@ describe('engine/executor-protocol', () => {
     });
   });
 
+  it('keeps protocol version 1 and accepts legacy hello and work-order envelopes', () => {
+    expect(EXECUTOR_PROTOCOL_VERSION).toBe(1);
+    expect(parseExecutorMessage({ kind: 'hello', protocolVersion: 1, engineVersionId: 'v1' }))
+      .toMatchObject({ kind: 'ok', message: { kind: 'hello', engineVersionId: 'v1' } });
+    expect(parseExecutorMessage({
+      kind: 'work-order',
+      order: { repository: 'jstoup/ai-conductor', slug: 'legacy', baseSha: 'a'.repeat(40), manifest: [] },
+    })).toMatchObject({ kind: 'ok', message: { kind: 'work-order' } });
+  });
+
   it.each([
     ['an unknown meter operation', { kind: 'meter', op: 'observe', instrumentId: 'instrument-1' }],
     [
