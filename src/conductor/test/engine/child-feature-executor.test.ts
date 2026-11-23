@@ -30,6 +30,111 @@ afterEach(async () => {
 });
 
 describe('child feature executor dispatch lifecycle', () => {
+  it('negotiates projection only with a capable protocol-1 child and never reports a protocol mismatch', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-projection-'));
+    const messages: Array<(value?: unknown) => void> = [];
+    const sent: unknown[] = [];
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const rootEvents = new ConductorEventEmitter();
+    const mismatches: unknown[] = [];
+    rootEvents.on('executor_protocol_mismatch', (event) => mismatches.push(event));
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents,
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      acceptOtelProjection: () => ({
+        runId: 'child-session',
+        project: root!,
+        branch: 'feat/daemon-feature',
+        harnessVersion: '1.2.3',
+        sourceRef: 'owner/repo#1',
+      }),
+      fork: () => ({
+        send(message) {
+          sent.push(message);
+          return true;
+        },
+        on(event, listener) {
+          if (event === 'message') messages.push(listener);
+          return this;
+        },
+        once(_event, listener) {
+          exit = listener;
+          return this;
+        },
+        kill() {
+          return true;
+        },
+      }),
+    });
+
+    const execution = executor.execute(order);
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    messages[0]!({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION, otelProjection: true });
+    await vi.waitFor(() =>
+      expect(sent).toContainEqual(
+        expect.objectContaining({
+          kind: 'work-order',
+          otelProjection: {
+            trace: expect.objectContaining({ runId: 'child-session', harnessVersion: '1.2.3', sourceRef: 'owner/repo#1' }),
+          },
+        }),
+      ),
+    );
+    messages[0]!({ kind: 'outcome', outcome: { slug: order.slug, status: 'done' } });
+    exit?.(0, null);
+    await execution;
+
+    expect(mismatches).toEqual([]);
+  });
+
+  it.each([
+    ['legacy child', { kind: 'hello', protocolVersion: 1, engineVersionId: VERSION }],
+    ['supervisor without acceptance', { kind: 'hello', protocolVersion: 1, engineVersionId: VERSION, otelProjection: true }],
+  ] as const)('omits projection for a %s', async (_name, hello) => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-no-projection-'));
+    const messages: Array<(value?: unknown) => void> = [];
+    const sent: unknown[] = [];
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: new ConductorEventEmitter(),
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      ...(hello.otelProjection === undefined
+        ? { acceptOtelProjection: () => ({ runId: 'unused', project: root!, branch: 'b', harnessVersion: '1' }) }
+        : {}),
+      fork: () => ({
+        send(message) {
+          sent.push(message);
+          return true;
+        },
+        on(event, listener) {
+          if (event === 'message') messages.push(listener);
+          return this;
+        },
+        once(_event, listener) {
+          exit = listener;
+          return this;
+        },
+        kill() {
+          return true;
+        },
+      }),
+    });
+    const execution = executor.execute(order);
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    messages[0]!(hello);
+    await vi.waitFor(() => expect(sent).toContainEqual(expect.objectContaining({ kind: 'work-order' })));
+    expect(sent.find((message) => (message as { kind?: string }).kind === 'work-order')).not.toHaveProperty('otelProjection');
+    messages[0]!({ kind: 'outcome', outcome: { slug: order.slug, status: 'done' } });
+    exit?.(0, null);
+    await execution;
+  });
+
   // Covers: task:3
   it('sends yield only to a running child with the requested slug and retains its later outcome', async () => {
     root = await mkdtemp(join(tmpdir(), 'child-executor-'));

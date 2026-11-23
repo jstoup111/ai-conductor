@@ -78,7 +78,7 @@ describe('MetricsListener dispatch dimensions', () => {
       new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
       () => 1,
       undefined,
-      (slug) => slug === 'f',
+      (slug) => slug === 'f' || slug === 'f-without-terminal',
     );
     listener.start(root);
     try {
@@ -88,6 +88,8 @@ describe('MetricsListener dispatch dimensions', () => {
       await emitter.emit({ type: 'feature_shipped', slug: 'f', active: { state: 'unavailable' } });
       await emitter.emit({ type: 'feature_complete' });
       await root.emit({ type: 'feature_dispatch_ended', slug: 'f', outcome: 'complete' });
+      await root.emit({ type: 'feature_dispatch_started', slug: 'f-without-terminal', kind: 'initial' });
+      await root.emit({ type: 'feature_dispatch_ended', slug: 'f-without-terminal', outcome: 'terminated' });
       await root.emit({ type: 'feature_dispatch_ended', slug: 'other', outcome: 'terminated' });
       await root.emit({
         type: 'feature_dispatch_ended',
@@ -108,7 +110,12 @@ describe('MetricsListener dispatch dimensions', () => {
       expect(
         pointsForInstrument(exporter, 'conductor.run.outcomes').filter((point) => point.attributes.feature === 'other'),
       ).toHaveLength(1);
-      expect(pointsForInstrument(exporter, 'conductor.feature.dispatches')).toHaveLength(1);
+      expect(
+        pointsForInstrument(exporter, 'conductor.run.outcomes').filter(
+          (point) => point.attributes.feature === 'f-without-terminal' && point.attributes.outcome === 'terminated',
+        ),
+      ).toHaveLength(1);
+      expect(pointsForInstrument(exporter, 'conductor.feature.dispatches')).toHaveLength(2);
       expect(pointsForInstrument(exporter, 'conductor.feature.halts')).toHaveLength(1);
     } finally {
       listener.stop();
