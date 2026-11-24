@@ -540,6 +540,7 @@ import {
   type RebaseOutcome,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
+import { captureValidatorResidueBaseline, quarantineValidatorResidue } from './validator-residue.js';
 import { applyRebaseTransition, completeInterruptedRebaseOperation } from './rebase-transition.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
@@ -9182,6 +9183,36 @@ export class Conductor {
       breadcrumb.lastEventType = ev.type;
       return this.emitExecutionEvent(ev);
     };
+    const captureValidationResidueBaseline = async (): Promise<readonly string[] | undefined> => {
+      const baseline = await captureValidatorResidueBaseline(makeGitRunner(this.projectRoot));
+      if (baseline.kind === 'refused') {
+        this.log?.(`WARNING: validator residue baseline unavailable — ${baseline.reason}`);
+        return undefined;
+      }
+      return baseline.paths;
+    };
+    const quarantineValidationResidue = async (
+      source: StepName | 'validation',
+      baseline: readonly string[],
+    ): Promise<void> => {
+      const residue = await quarantineValidatorResidue({
+        projectRoot: this.projectRoot,
+        git: makeGitRunner(this.projectRoot),
+        baseline,
+        source,
+        now: new Date(),
+      });
+      if (residue.kind === 'moved') {
+        await emitTracked({
+          type: 'validator_residue_quarantined',
+          source,
+          paths: residue.paths,
+          directory: residue.directory,
+        });
+      } else if (residue.kind === 'refused') {
+        this.log?.(`WARNING: validator residue quarantine refused — ${residue.reason}`);
+      }
+    };
     // Acceptance RED telemetry records gate lifecycle but must not alter the
     // gate's authority: a failing sink leaves every later lifecycle event
     // eligible to emit and the completion verdict unchanged.
@@ -10144,6 +10175,7 @@ export class Conductor {
               // post-join reader to receive that exact attempt identity.
               let settledGroupRunIds = new Map<string, string>();
               const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
+                const validatorResidueBaseline = await captureValidationResidueBaseline();
                 // The validation join normally dispatches each member directly
                 // through group-core, bypassing the serial `prd_audit` branch
                 // below.  Capture must therefore happen before that fan-out,
@@ -10170,205 +10202,211 @@ export class Conductor {
                   roundChanges[syntheticKey] = 'stale';
                 }
                 await this.commitStateChanges(state, `start ${builtinGroup.name} verification group`, roundChanges);
-                return runWithConcurrency(
-                  members.map((member) => async () => {
-                    // This thunk is launched only after runWithConcurrency admits
-                    // a member under the group cap. A fresh scope therefore cannot
-                    // be fabricated for queued/cancelled work, while branch retries
-                    // retain this one context through their whole policy lifetime.
-                    if (this.shutdownRequested) return makeSkippedOutcome();
-                    // Auth recovery redispatches only the affected member. Its
-                    // previous branch has already settled a no-verdict result
-                    // (and therefore frozen its member interval), so terminalize
-                    // that scope before replacing the name-keyed context.
-                    if (memberExecutionContexts.has(member.name)) {
-                      await closeMemberRefusal(
-                        member,
-                        `Validation group "${step.name}" auth recovery redispatched "${member.name}".`,
-                      );
-                    }
-                    const executionContext: ExecutionContext = {
-                      executionId: randomUUID(),
-                      subject: { kind: 'lifecycle-step', step: member.name as StepName },
-                    };
-                    memberExecutionContexts.set(member.name, executionContext);
-                    // The lifecycle callbacks assign this asynchronously. Keep the
-                    // mutable value in a holder so both callback and finally
-                    // cleanup retain its declared union type.
-                    const stepInFlightTicker: { current: StepInFlightTicker | null } = { current: null };
-                    try {
-                      return await runGroupBranch(
-                        member,
-                        state,
-                        {
-                          stepRunner: this.stepRunner,
-                          providerAvailability: this.providerExecution?.providerAvailability,
-                          onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
-                          ...(member.name === 'prd_audit' && this.prdWideningReviewContext
-                            ? { prdWideningReviewContext: this.prdWideningReviewContext }
-                            : {}),
-                          executionContext,
-                          lifecycleObserver: {
-                            onAdmitted: async (observation) => {
-                              await emitTracked({
-                                type: 'step_started',
-                                step: observation.member as StepName,
-                                index: indexOf(observation.member as StepName),
-                                executionContext,
-                              });
-                              stepInFlightTicker.current = new StepInFlightTicker({
-                                events: this.events,
-                                step: member.name as StepName,
-                                startedAtMs: Date.now(),
-                                featureSlug: state.feature_desc,
-                                config: this.config,
-                              });
-                              stepInFlightTicker.current.start();
+                try {
+                  return await runWithConcurrency(
+                    members.map((member) => async () => {
+                      // This thunk is launched only after runWithConcurrency admits
+                      // a member under the group cap. A fresh scope therefore cannot
+                      // be fabricated for queued/cancelled work, while branch retries
+                      // retain this one context through their whole policy lifetime.
+                      if (this.shutdownRequested) return makeSkippedOutcome();
+                      // Auth recovery redispatches only the affected member. Its
+                      // previous branch has already settled a no-verdict result
+                      // (and therefore frozen its member interval), so terminalize
+                      // that scope before replacing the name-keyed context.
+                      if (memberExecutionContexts.has(member.name)) {
+                        await closeMemberRefusal(
+                          member,
+                          `Validation group "${step.name}" auth recovery redispatched "${member.name}".`,
+                        );
+                      }
+                      const executionContext: ExecutionContext = {
+                        executionId: randomUUID(),
+                        subject: { kind: 'lifecycle-step', step: member.name as StepName },
+                      };
+                      memberExecutionContexts.set(member.name, executionContext);
+                      // The lifecycle callbacks assign this asynchronously. Keep the
+                      // mutable value in a holder so both callback and finally
+                      // cleanup retain its declared union type.
+                      const stepInFlightTicker: { current: StepInFlightTicker | null } = { current: null };
+                      try {
+                        return await runGroupBranch(
+                          member,
+                          state,
+                          {
+                            stepRunner: this.stepRunner,
+                            providerAvailability: this.providerExecution?.providerAvailability,
+                            onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
+                            ...(member.name === 'prd_audit' && this.prdWideningReviewContext
+                              ? { prdWideningReviewContext: this.prdWideningReviewContext }
+                              : {}),
+                            executionContext,
+                            lifecycleObserver: {
+                              onAdmitted: async (observation) => {
+                                await emitTracked({
+                                  type: 'step_started',
+                                  step: observation.member as StepName,
+                                  index: indexOf(observation.member as StepName),
+                                  executionContext,
+                                });
+                                stepInFlightTicker.current = new StepInFlightTicker({
+                                  events: this.events,
+                                  step: member.name as StepName,
+                                  startedAtMs: Date.now(),
+                                  featureSlug: state.feature_desc,
+                                  config: this.config,
+                                });
+                                stepInFlightTicker.current.start();
+                              },
+                              onAttempt: async (observation) => {
+                                if (observation.result !== undefined) {
+                                  memberAttemptResults.set(observation.member, observation.result);
+                                }
+                              },
+                              onRetry: async (observation) => {
+                                memberRetryCounts.set(
+                                  observation.member,
+                                  (memberRetryCounts.get(observation.member) ?? 0) + 1,
+                                );
+                                const failedAttempt = memberAttemptResults.get(observation.member);
+                                const handshakeRetryReason = branchHandshakeRetryReasons.get(observation.member);
+                                branchHandshakeRetryReasons.delete(observation.member);
+                                await emitTracked({
+                                  type: 'step_retry',
+                                  step: observation.member as StepName,
+                                  attempt: observation.attempt,
+                                  maxAttempts: memberAttemptBudgets.get(observation.member) ?? observation.attempt,
+                                  reason: handshakeRetryReason ?? `group member ${observation.member} retry`,
+                                  ...(failedAttempt?.model !== undefined ? { model: failedAttempt.model } : {}),
+                                  ...(failedAttempt?.effort !== undefined ? { effort: failedAttempt.effort } : {}),
+                                  ...(failedAttempt?.actualProvider !== undefined
+                                    ? {
+                                        actualProvider: failedAttempt.actualProvider,
+                                        provider: failedAttempt.actualProvider,
+                                      }
+                                    : {}),
+                                  ...(failedAttempt?.preferredProvider !== undefined
+                                    ? { preferredProvider: failedAttempt.preferredProvider }
+                                    : {}),
+                                  ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                                  ...(failedAttempt?.exitFacts !== undefined
+                                    ? { providerExit: failedAttempt.exitFacts }
+                                    : {}),
+                                  executionContext,
+                                });
+                              },
+                              onSettled: async (observation) => {
+                                stepInFlightTicker.current?.stop();
+                                await emitTracked({
+                                  type: 'group_member_step',
+                                  member: observation.member,
+                                  skill: observation.skill,
+                                  phase: 'result',
+                                  outcome: classifyOutcome(observation.outcome),
+                                  ...(observation.executionContext === undefined
+                                    ? {}
+                                    : { executionContext: observation.executionContext }),
+                                });
+                              },
                             },
-                            onAttempt: async (observation) => {
-                              if (observation.result !== undefined) {
-                                memberAttemptResults.set(observation.member, observation.result);
-                              }
-                            },
-                            onRetry: async (observation) => {
-                              memberRetryCounts.set(
-                                observation.member,
-                                (memberRetryCounts.get(observation.member) ?? 0) + 1,
-                              );
-                              const failedAttempt = memberAttemptResults.get(observation.member);
-                              const handshakeRetryReason = branchHandshakeRetryReasons.get(observation.member);
-                              branchHandshakeRetryReasons.delete(observation.member);
-                              await emitTracked({
-                                type: 'step_retry',
-                                step: observation.member as StepName,
-                                attempt: observation.attempt,
-                                maxAttempts: memberAttemptBudgets.get(observation.member) ?? observation.attempt,
-                                reason: handshakeRetryReason ?? `group member ${observation.member} retry`,
-                                ...(failedAttempt?.model !== undefined ? { model: failedAttempt.model } : {}),
-                                ...(failedAttempt?.effort !== undefined ? { effort: failedAttempt.effort } : {}),
-                                ...(failedAttempt?.actualProvider !== undefined
-                                  ? {
-                                      actualProvider: failedAttempt.actualProvider,
-                                      provider: failedAttempt.actualProvider,
+                            ...(isVerdictRunIdentityStep(member.name as StepName)
+                              ? { runId: branchRunIds.get(member.name) }
+                              : {}),
+                            ...(isVerdictRunIdentityStep(member.name as StepName)
+                              ? {
+                                  verifyDispatch: async (result: StepRunResult) => {
+                                    await this.stampVerdictRunIdentity(
+                                      member.name as StepName,
+                                      branchRunIds.get(member.name),
+                                    );
+                                    const handshake = await this.verdictDispatchHandshake(
+                                      member.name as StepName,
+                                      branchRunIds.get(member.name),
+                                      branchDispatchStartedAt.get(member.name),
+                                      result.output,
+                                    );
+                                    if (handshake) {
+                                      const reason =
+                                        handshake.reason ??
+                                        `post-dispatch verdict write handshake failed for ${member.name}`;
+                                      if (this.verifyArtifacts) {
+                                        branchHandshakeFailures.set(member.name, handshake);
+                                        branchHandshakeRetryReasons.set(member.name, reason);
+                                        return reason;
+                                      }
+                                      // Verification-off groups retain their historic
+                                      // dispatch-success semantics. Observe this
+                                      // handshake for identity telemetry, but do not
+                                      // retain a failure that could affect the join.
+                                      branchHandshakeFailures.delete(member.name);
+                                      return undefined;
                                     }
-                                  : {}),
-                                ...(failedAttempt?.preferredProvider !== undefined
-                                  ? { preferredProvider: failedAttempt.preferredProvider }
-                                  : {}),
-                                ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
-                                ...(failedAttempt?.exitFacts !== undefined
-                                  ? { providerExit: failedAttempt.exitFacts }
-                                  : {}),
-                                executionContext,
-                              });
-                            },
-                            onSettled: async (observation) => {
-                              stepInFlightTicker.current?.stop();
-                              await emitTracked({
-                                type: 'group_member_step',
-                                member: observation.member,
-                                skill: observation.skill,
-                                phase: 'result',
-                                outcome: classifyOutcome(observation.outcome),
-                                ...(observation.executionContext === undefined
-                                  ? {}
-                                  : { executionContext: observation.executionContext }),
-                              });
-                            },
-                          },
-                          ...(isVerdictRunIdentityStep(member.name as StepName)
-                            ? { runId: branchRunIds.get(member.name) }
-                            : {}),
-                          ...(isVerdictRunIdentityStep(member.name as StepName)
-                            ? {
-                                verifyDispatch: async (result: StepRunResult) => {
-                                  await this.stampVerdictRunIdentity(
-                                    member.name as StepName,
-                                    branchRunIds.get(member.name),
-                                  );
-                                  const handshake = await this.verdictDispatchHandshake(
-                                    member.name as StepName,
-                                    branchRunIds.get(member.name),
-                                    branchDispatchStartedAt.get(member.name),
-                                    result.output,
-                                  );
-                                  if (handshake) {
-                                    const reason =
-                                      handshake.reason ??
-                                      `post-dispatch verdict write handshake failed for ${member.name}`;
-                                    if (this.verifyArtifacts) {
-                                      branchHandshakeFailures.set(member.name, handshake);
-                                      branchHandshakeRetryReasons.set(member.name, reason);
-                                      return reason;
-                                    }
-                                    // Verification-off groups retain their historic
-                                    // dispatch-success semantics. Observe this
-                                    // handshake for identity telemetry, but do not
-                                    // retain a failure that could affect the join.
                                     branchHandshakeFailures.delete(member.name);
                                     return undefined;
-                                  }
-                                  branchHandshakeFailures.delete(member.name);
-                                  return undefined;
-                                },
+                                  },
+                                }
+                              : {}),
+                            config: this.config,
+                            // Task 8 (#817): threaded so sweepStaleReviewArtifacts's
+                            // gate_code_validity kill-switch is honored on this
+                            // parallel-branch sweep path too.
+                            // Shared rate-limit episode: a rate-limited branch waits
+                            // on the coordinator WITHOUT blocking its siblings'
+                            // dispatch (acceptance flow E) and without burning its
+                            // own retry budget.
+                            rateLimitEpisode: this.rateLimitEpisode,
+                            operatorParkBoundary:
+                              this.daemon && this.featureSlug !== undefined ? this.operatorParkBoundary : undefined,
+                            // Record each member's completion into the pending
+                            // side-channel as soon as ITS OWN branch resolves — not
+                            // `state` itself, and not a disk write (that stays the
+                            // join's exclusive job, Task 17's single-writer
+                            // invariant). A SIGINT/SIGTERM/SIGHUP landing while
+                            // siblings are still in flight merges this into `state`
+                            // via the signal handlers above; a clean round below
+                            // clears it before any halt/allGreen/kickback branching
+                            // runs, so those paths are entirely unaffected.
+                            onMemberEvent: async (event) => {
+                              if (event.phase === 'dispatch') {
+                                branchDispatchStartedAt.set(event.member, Date.now());
                               }
-                            : {}),
-                          config: this.config,
-                          // Task 8 (#817): threaded so sweepStaleReviewArtifacts's
-                          // gate_code_validity kill-switch is honored on this
-                          // parallel-branch sweep path too.
-                          // Shared rate-limit episode: a rate-limited branch waits
-                          // on the coordinator WITHOUT blocking its siblings'
-                          // dispatch (acceptance flow E) and without burning its
-                          // own retry budget.
-                          rateLimitEpisode: this.rateLimitEpisode,
-                          operatorParkBoundary:
-                            this.daemon && this.featureSlug !== undefined ? this.operatorParkBoundary : undefined,
-                          // Record each member's completion into the pending
-                          // side-channel as soon as ITS OWN branch resolves — not
-                          // `state` itself, and not a disk write (that stays the
-                          // join's exclusive job, Task 17's single-writer
-                          // invariant). A SIGINT/SIGTERM/SIGHUP landing while
-                          // siblings are still in flight merges this into `state`
-                          // via the signal handlers above; a clean round below
-                          // clears it before any halt/allGreen/kickback branching
-                          // runs, so those paths are entirely unaffected.
-                          onMemberEvent: async (event) => {
-                            if (event.phase === 'dispatch') {
-                              branchDispatchStartedAt.set(event.member, Date.now());
-                            }
-                            if (event.phase === 'result' && event.outcome !== 'verdict:pass') {
-                              // Successful attempts already stamp and handshake in
-                              // verifyDispatch before runGroupBranch settles. Retain
-                              // terminal observation only for non-pass outcomes.
-                              await this.stampVerdictRunIdentity(
-                                event.member as StepName,
-                                branchRunIds.get(event.member),
-                              );
-                              const handshake = await this.verdictDispatchHandshake(
-                                event.member as StepName,
-                                branchRunIds.get(event.member),
-                                branchDispatchStartedAt.get(event.member),
-                                memberAttemptResults.get(event.member)?.output,
-                              );
-                              if (handshake) branchHandshakeFailures.set(event.member, handshake);
-                              else branchHandshakeFailures.delete(event.member);
-                            }
-                            if (event.phase === 'result' && event.outcome === 'verdict:pass') {
-                              const syntheticKey = `${builtinGroup.name}__${event.member}`;
-                              inFlightGroupCompletions![event.member] = 'done';
-                              inFlightGroupCompletions![syntheticKey] = 'done';
-                            }
+                              if (event.phase === 'result' && event.outcome !== 'verdict:pass') {
+                                // Successful attempts already stamp and handshake in
+                                // verifyDispatch before runGroupBranch settles. Retain
+                                // terminal observation only for non-pass outcomes.
+                                await this.stampVerdictRunIdentity(
+                                  event.member as StepName,
+                                  branchRunIds.get(event.member),
+                                );
+                                const handshake = await this.verdictDispatchHandshake(
+                                  event.member as StepName,
+                                  branchRunIds.get(event.member),
+                                  branchDispatchStartedAt.get(event.member),
+                                  memberAttemptResults.get(event.member)?.output,
+                                );
+                                if (handshake) branchHandshakeFailures.set(event.member, handshake);
+                                else branchHandshakeFailures.delete(event.member);
+                              }
+                              if (event.phase === 'result' && event.outcome === 'verdict:pass') {
+                                const syntheticKey = `${builtinGroup.name}__${event.member}`;
+                                inFlightGroupCompletions![event.member] = 'done';
+                                inFlightGroupCompletions![syntheticKey] = 'done';
+                              }
+                            },
                           },
-                        },
-                        memberAttemptBudgets.get(member.name)!,
-                      );
-                    } finally {
-                      stepInFlightTicker.current?.stop();
-                    }
-                  }),
-                  cap,
-                );
+                          memberAttemptBudgets.get(member.name)!,
+                        );
+                      } finally {
+                        stepInFlightTicker.current?.stop();
+                      }
+                    }),
+                    cap,
+                  );
+                } finally {
+                  if (validatorResidueBaseline !== undefined) {
+                    await quarantineValidationResidue('validation', validatorResidueBaseline);
+                  }
+                }
               };
 
               // Task 27: reset the pending-completions side-channel for THIS
@@ -12548,6 +12586,10 @@ export class Conductor {
             // this attempt produced from one it inherited is to record the marker's
             // identity here, before the attempt is dispatched.
             const haltBeforeAttempt = await snapshotHaltMarker(this.projectRoot);
+            const validatorResidueBaseline =
+              getGroupForStep(step.name)?.name === VALIDATION_GROUP.name
+                ? await captureValidationResidueBaseline()
+                : undefined;
 
             // An operator park declines the whole next provider attempt. Keep this
             // admission check ahead of escalation, telemetry, and every dispatch
@@ -13005,6 +13047,9 @@ export class Conductor {
                 // BUILD/SHIP step, not gated on step.name === 'build'.
                 removePhaseMarker(this.projectRoot);
                 cleanupEmptyPipelineDirIfNotPreexisting();
+                if (validatorResidueBaseline !== undefined) {
+                  await quarantineValidationResidue(step.name, validatorResidueBaseline);
+                }
                 // currentAttemptStartedAt stays set through the completion check
                 // just below (it needs a live attemptStartedAt to gate verdict
                 // freshness) — cleared unconditionally right after that check

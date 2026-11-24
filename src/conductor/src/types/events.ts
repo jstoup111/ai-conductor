@@ -2078,6 +2078,13 @@ type ConductorEventBody =
       directory: string;
     }
   | {
+      /** Validation output was moved under the ignored pipeline directory. */
+      type: 'validator_residue_quarantined';
+      source: StepName | 'validation';
+      paths: string[];
+      directory: string;
+    }
+  | {
       /** A persisted repair-obligation boundary was translated after a rebase. */
       type: 'repair_boundary_translated';
       obligationId: string;

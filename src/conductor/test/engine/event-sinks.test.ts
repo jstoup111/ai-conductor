@@ -378,6 +378,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'rebase_citation_residue',
   'rebase_supersession_verdict',
   'rebase_untracked_quarantined',
+  'validator_residue_quarantined',
   'repair_boundary_translated',
   'operator_rewind',
   'preemption_boundary',
@@ -619,31 +620,31 @@ void reclaimRetentionWithUnlistedReason;
 
 // prettier-ignore
 // @ts-expect-error -- probe-failure progress requires its closed kind and next disposition.
-const probeFailureMissingClosedMetadata = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure' } satisfies ConductorEvent;
+const probeFailureMissingClosedMetadata = { type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure' } satisfies ConductorEvent;
 // prettier-ignore
 // @ts-expect-error -- a terminal probe-failure disposition has no next polling delay.
-const probeFailureWithPollingDelay = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required', nextProbeDelaySeconds: 4 } satisfies ConductorEvent;
+const probeFailureWithPollingDelay = { type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required', nextProbeDelaySeconds: 4 } satisfies ConductorEvent;
 // prettier-ignore
 // @ts-expect-error -- recovery progress retains only the closed parser-rejection union, never raw doctor diagnostics.
-const probeFailureWithRawParserRejection = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'unparseable-output', parserRejection: 'sk-live-super-secret-token /private/codex/credentials.json', nextDisposition: 'trial-required' } satisfies ConductorEvent;
+const probeFailureWithRawParserRejection = { type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'unparseable-output', parserRejection: 'sk-live-super-secret-token /private/codex/credentials.json', nextDisposition: 'trial-required' } satisfies ConductorEvent;
 // prettier-ignore
 // @ts-expect-error -- conclusive credential progress cannot carry probe-only metadata.
-const credentialFailureWithProbeMetadata = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'unusable', elapsedSeconds: 3, nextProbeDelaySeconds: 4, degradation: 'credential-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
+const credentialFailureWithProbeMetadata = { type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login', readiness: 'unusable', elapsedSeconds: 3, nextProbeDelaySeconds: 4, degradation: 'credential-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
 // prettier-ignore
 // @ts-expect-error -- probe-failure degradation is valid only with probe-failed readiness.
-const probeFailureWithConclusiveReadiness = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'ready', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
+const probeFailureWithConclusiveReadiness = { type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login', readiness: 'ready', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
 // prettier-ignore
 // @ts-expect-error -- missing is conclusive readiness, not probe failure.
-const probeFailureWithMissingReadiness = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'missing', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
+const probeFailureWithMissingReadiness = { type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login', readiness: 'missing', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
 // prettier-ignore
 // @ts-expect-error -- unusable is conclusive readiness, not probe failure.
-const probeFailureWithUnusableReadiness = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'unusable', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
+const probeFailureWithUnusableReadiness = { type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login', readiness: 'unusable', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
 // prettier-ignore
 // @ts-expect-error -- probe-failed readiness cannot be represented as credential failure.
-const credentialFailureWithProbeFailedReadiness = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, nextProbeDelaySeconds: 4, degradation: 'credential-failure' } satisfies ConductorEvent;
+const credentialFailureWithProbeFailedReadiness = { type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, nextProbeDelaySeconds: 4, degradation: 'credential-failure' } satisfies ConductorEvent;
 // prettier-ignore
 // @ts-expect-error -- probe-failed readiness cannot be represented as unrelated degradation.
-const unrelatedDegradationWithProbeFailedReadiness = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, nextProbeDelaySeconds: 4, degradation: 'unrelated-diagnostic-degradation' } satisfies ConductorEvent;
+const unrelatedDegradationWithProbeFailedReadiness = { type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, nextProbeDelaySeconds: 4, degradation: 'unrelated-diagnostic-degradation' } satisfies ConductorEvent;
 void [
   probeFailureMissingClosedMetadata,
   probeFailureWithPollingDelay,
@@ -1047,6 +1048,38 @@ describe('event sink subscriptions', () => {
       expect(ledger).not.toContain(token);
       expect(ledger).not.toContain(tokenFile);
       expect(ledger).not.toMatch(/(?:gh|git)\s+(?:api|push|auth)/i);
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:2
+  it('persists validator residue quarantine occurrences through the shared ledger', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'validator-residue-quarantined-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const event = {
+      type: 'validator_residue_quarantined' as const,
+      source: 'manual_test' as const,
+      paths: ['docs/reports/manual-test-step17/report.html'],
+      directory: '.pipeline/validator-residue/manual_test-20261115T120000Z',
+    } satisfies ConductorEvent;
+
+    try {
+      persister.start();
+      await events.emit(event);
+      persister.stop();
+
+      expect({
+        sink: EVENT_SINKS.validator_residue_quarantined,
+        persisted: persistedEventTypes().includes(event.type),
+        ledger: JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')),
+      }).toEqual({
+        sink: { render: false, persist: true, audit: false, otel: false },
+        persisted: true,
+        ledger: { ...event, ts: expect.any(String) },
+      });
     } finally {
       persister.stop();
       await rm(projectRoot, { recursive: true, force: true });

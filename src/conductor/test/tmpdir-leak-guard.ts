@@ -240,6 +240,10 @@ export const IGNORED_TMPDIR_PREFIXES: readonly string[] = [
   '.', // dotfiles/dotdirs: .X11-unix, .ICE-unix, .font-unix, …
   'self-host-', // live provider homes owned by the running daemon
   'ai-conductor-claude-system-prompt-', // live daemon's in-flight Claude prompt files
+  // The editor PostToolUse hook keeps its debounce queue outside .pipeline.
+  // A queue owned by another worktree is concurrent operator tooling, not a
+  // test process escaping the TMPDIR redirect.
+  'ai-conductor-lint',
   'claude-', // active Claude Code session scratchpads
   'gem-miner-', // concurrent Gem Miner development test databases
   'moshi-codex-rl.json', // active Codex rate-limit state

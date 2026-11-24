@@ -208,3 +208,11 @@ Task 5 (independent)
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-R1: src/conductor/src/engine/validator-residue.ts: add a required `now: Date` field to QuarantineValidatorResidueInput and build the residue directory name from `input.now.toISOString()` instead of `new Date()`. In src/conductor/src/engine/conductor.ts, pass `now: new Date()` from the quarantineValidationResidue call site, since conductor.ts is already allowlisted for clock. Update src/conductor/test/engine/validator-residue.test.ts callers to pass a fixed Date, and assert the returned directory equals `.pipeline/validator-residue/<source>-<ISO with ':' replaced by '-'>` for that Date. Remove the `engine/validator-residue.ts -> clock` line from src/conductor/test/structural/boundary-allowlist.txt and confirm the structural boundary-ratchet test passes.
+**Gate:** as-built
+**Rationale:** Verified: src/conductor/src/engine/validator-residue.ts:63 calls zero-argument `new Date()` to stamp the per-dispatch residue directory, and this branch adds `engine/validator-residue.ts -> clock` to src/conductor/test/structural/boundary-allowlist.txt, which breaks ADR adr-2026-11-07-external-boundary-ports-registry-and-ratchet D4 (the allowlist may only shrink). The approved architecture already settles the fix, so no architectural decision is needed. The only caller, conductor.ts:9061, is already allowlisted as `engine/conductor.ts -> clock`. Inject the timestamp through the input and remove the added allowlist line. Plan Task 1, which created validator-residue.ts and its tests, admits this change. It preserves every Task 1 criterion: the directory stays under .pipeline/validator-residue/<source>-<timestamp>, and the moved, none and refused behavior is unchanged. Sibling check: no other file this branch adds is on the allowlist.
+**Governing clause:** adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 4
+**Done when:**
+- adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 4 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.

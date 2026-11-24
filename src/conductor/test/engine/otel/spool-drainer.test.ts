@@ -32,7 +32,7 @@ function listen(server: Server, port = 0): Promise<string> {
 }
 
 function close(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 }
 
 async function reserveEndpoint(): Promise<number> {
@@ -79,16 +79,26 @@ describe('SpoolDrainer', () => {
     await store.write('traces', Buffer.from('credential-protected'));
     const events = new ConductorEventEmitter();
     const errors: Array<{ rendererName: string; error: string }> = [];
-    events.on('renderer_error', (event) => { if (event.type === 'renderer_error') errors.push(event); });
+    events.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') errors.push(event);
+    });
     const fetch = vi.fn(async () => {
       throw new Error('a credential failure must prevent the POST');
     });
     const drainer = new SpoolDrainer(store, {
-      endpoint: 'http://collector.test', events, fetch,
+      endpoint: 'http://collector.test',
+      events,
+      fetch,
       headers: createOtelHeaderProvider(
         { authorization: { kind: 'command', argv: ['credential', '--token'] } },
         undefined,
-        { commandRunner: vi.fn().mockRejectedValue(Object.assign(new Error('failed'), { code: 3, stdout: 'SENTINEL-OUT', stderr: 'SENTINEL-ERR' })) },
+        {
+          commandRunner: vi
+            .fn()
+            .mockRejectedValue(
+              Object.assign(new Error('failed'), { code: 3, stdout: 'SENTINEL-OUT', stderr: 'SENTINEL-ERR' }),
+            ),
+        },
       ),
       sleep: async () => new Promise<void>(() => {}),
     });
@@ -96,7 +106,12 @@ describe('SpoolDrainer', () => {
     await waitFor(() => errors.length === 1, 'credential failure was not reported');
     expect(await store.list('traces')).toHaveLength(1);
     expect(fetch).not.toHaveBeenCalled();
-    expect(errors).toEqual([expect.objectContaining({ rendererName: 'otel', error: expect.stringMatching(/authorization.*credential.*exit code 3/i) })]);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        rendererName: 'otel',
+        error: expect.stringMatching(/authorization.*credential.*exit code 3/i),
+      }),
+    ]);
     expect(JSON.stringify(errors)).not.toContain('SENTINEL-OUT');
     expect(JSON.stringify(errors)).not.toContain('SENTINEL-ERR');
     await drainer.stop();
@@ -108,13 +123,20 @@ describe('SpoolDrainer', () => {
     await store.write('traces', Buffer.from('credential-protected'));
     const events = new ConductorEventEmitter();
     const errors: string[] = [];
-    events.on('renderer_error', (event) => { if (event.type === 'renderer_error') errors.push(event.error); });
+    events.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') errors.push(event.error);
+    });
     let calls = 0;
     const received: Array<{ authorization: string | undefined }> = [];
     const drainer = new SpoolDrainer(store, {
-      endpoint: 'http://collector.test', events,
+      endpoint: 'http://collector.test',
+      events,
       headers: async () => {
-        if (calls++ === 0) throw new CredentialUnavailableError('authorization', 'Command credential source credential is unavailable: command exited with exit code 3.');
+        if (calls++ === 0)
+          throw new CredentialUnavailableError(
+            'authorization',
+            'Command credential source credential is unavailable: command exited with exit code 3.',
+          );
         return { authorization: 'Bearer recovered-token' };
       },
       fetch: async (_url, init) => {
@@ -137,13 +159,19 @@ describe('SpoolDrainer', () => {
     await store.write('traces', Buffer.from('credential-protected'));
     const events = new ConductorEventEmitter();
     const errors: unknown[] = [];
-    events.on('renderer_error', (event) => { errors.push(event); });
+    events.on('renderer_error', (event) => {
+      errors.push(event);
+    });
     const delays: number[] = [];
     let attempts = 0;
     let release!: () => void;
-    const tenthAttempt = new Promise<void>((resolve) => { release = resolve; });
+    const tenthAttempt = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     let releaseMetrics!: () => void;
-    const metricsBlocked = new Promise<void>((resolve) => { releaseMetrics = resolve; });
+    const metricsBlocked = new Promise<void>((resolve) => {
+      releaseMetrics = resolve;
+    });
     const tracesOnlyStore = Object.create(store) as SpoolStore;
     const list = store.list.bind(store);
     tracesOnlyStore.list = async (signal) => {
@@ -151,14 +179,27 @@ describe('SpoolDrainer', () => {
       return list(signal);
     };
     const drainer = new SpoolDrainer(tracesOnlyStore, {
-      endpoint: 'http://collector.test', events,
+      endpoint: 'http://collector.test',
+      events,
       headers: async () => {
         attempts += 1;
         if (attempts === 10) release();
-        throw new CredentialUnavailableError('authorization', 'Command credential source credential is unavailable: command exited with exit code 3.');
+        throw new CredentialUnavailableError(
+          'authorization',
+          'Command credential source credential is unavailable: command exited with exit code 3.',
+        );
       },
-      fetch: async () => { throw new Error('credential failure must not POST'); },
-      sleep: async (delay) => { delays.push(delay); }, random: () => 0,
+      fetch: async () => {
+        throw new Error('credential failure must not POST');
+      },
+      // delay() deliberately subtracts elapsed time before reaching the sleep
+      // boundary. Pin the injected clock so this backoff-sequence assertion
+      // observes the requested schedule rather than wall-clock rounding.
+      now: () => 0,
+      sleep: async (delay) => {
+        delays.push(delay);
+      },
+      random: () => 0,
     });
     const draining = drainer.drainUntilStopped();
     await tenthAttempt;
@@ -166,7 +207,11 @@ describe('SpoolDrainer', () => {
     await drainer.stop();
     await draining;
 
-    expect({ attempts, credentialErrors: errors.filter((event) => JSON.stringify(event).includes('credential')), delays }).toEqual({
+    expect({
+      attempts,
+      credentialErrors: errors.filter((event) => JSON.stringify(event).includes('credential')),
+      delays,
+    }).toEqual({
       attempts: 10,
       credentialErrors: [expect.objectContaining({ rendererName: 'otel' })],
       delays: [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000],
@@ -187,14 +232,23 @@ describe('SpoolDrainer', () => {
     });
     let headerAttempts = 0;
     let releaseBacklog!: () => void;
-    const backlogReady = new Promise<void>((resolve) => { releaseBacklog = resolve; });
+    const backlogReady = new Promise<void>((resolve) => {
+      releaseBacklog = resolve;
+    });
     const drainer = new SpoolDrainer(store, {
-      endpoint: 'http://collector.test', events, random: () => 0,
+      endpoint: 'http://collector.test',
+      events,
+      random: () => 0,
       headers: async () => {
         if (headerAttempts++ === 0) return {};
-        throw new CredentialUnavailableError('authorization', 'Command credential --token is unavailable: command exited with exit code 3.');
+        throw new CredentialUnavailableError(
+          'authorization',
+          'Command credential --token is unavailable: command exited with exit code 3.',
+        );
       },
-      fetch: async () => { throw new TypeError('network unavailable'); },
+      fetch: async () => {
+        throw new TypeError('network unavailable');
+      },
       sleep: async () => new Promise<void>((resolve) => setImmediate(resolve)),
       backlogSleep: async () => backlogReady,
     });
@@ -207,7 +261,10 @@ describe('SpoolDrainer', () => {
 
     expect(errors).toEqual([
       expect.objectContaining({ rendererName: 'otel', error: expect.stringMatching(/network/i) }),
-      expect.objectContaining({ rendererName: 'otel', error: expect.stringMatching(/authorization.*credential --token/i) }),
+      expect.objectContaining({
+        rendererName: 'otel',
+        error: expect.stringMatching(/authorization.*credential --token/i),
+      }),
     ]);
     expect(backlog).toEqual([expect.objectContaining({ lastFailureClass: 'network' })]);
   });
@@ -233,7 +290,9 @@ describe('SpoolDrainer', () => {
     });
     const delivered: string[] = [];
     const drainer = new SpoolDrainer(flakyStore, {
-      endpoint: 'http://collector.test', headers: () => ({}), events,
+      endpoint: 'http://collector.test',
+      headers: () => ({}),
+      events,
       sleep: async () => undefined,
       fetch: async (url, init) => {
         delivered.push(`${url}:${Buffer.from(init?.body as ArrayBuffer).toString()}`);
@@ -243,10 +302,12 @@ describe('SpoolDrainer', () => {
 
     await drainUntilEmpty(drainer, store);
 
-    expect(delivered).toEqual(expect.arrayContaining([
-      'http://collector.test/v1/traces:retry-trace',
-      'http://collector.test/v1/metrics:independent-metric',
-    ]));
+    expect(delivered).toEqual(
+      expect.arrayContaining([
+        'http://collector.test/v1/traces:retry-trace',
+        'http://collector.test/v1/metrics:independent-metric',
+      ]),
+    );
     expect(errors.filter((error) => error.includes('spool delivery failed'))).toHaveLength(1);
   });
 
@@ -269,7 +330,8 @@ describe('SpoolDrainer', () => {
     };
     const delivered: string[] = [];
     const drainer = new SpoolDrainer(racingStore, {
-      endpoint: 'http://collector.test', headers: () => ({}),
+      endpoint: 'http://collector.test',
+      headers: () => ({}),
       fetch: async (_url, init) => {
         delivered.push(Buffer.from(init?.body as ArrayBuffer).toString());
         return new Response(undefined, { status: 200 });
@@ -299,7 +361,8 @@ describe('SpoolDrainer', () => {
     await drainUntilEmpty(drainer, store);
 
     expect({ delivered, remaining: await store.list('traces') }).toEqual({
-      delivered: ['first', 'appended-during-drain'], remaining: [],
+      delivered: ['first', 'appended-during-drain'],
+      remaining: [],
     });
   });
 
@@ -339,7 +402,12 @@ describe('SpoolDrainer', () => {
   });
 
   it('sends both signals with protobuf content type and headers resolved when draining', async () => {
-    const received: Array<{ path: string; contentType: string | undefined; authorization: string | undefined; body: Buffer }> = [];
+    const received: Array<{
+      path: string;
+      contentType: string | undefined;
+      authorization: string | undefined;
+      body: Buffer;
+    }> = [];
     const server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -364,10 +432,22 @@ describe('SpoolDrainer', () => {
 
     await drainUntilEmpty(drainer, store);
 
-    expect(received).toEqual(expect.arrayContaining([
-      { path: '/v1/traces', contentType: 'application/x-protobuf', authorization: 'Bearer value-at-drain-time', body: Buffer.from('trace-protobuf') },
-      { path: '/v1/metrics', contentType: 'application/x-protobuf', authorization: 'Bearer value-at-drain-time', body: Buffer.from('metric-protobuf') },
-    ]));
+    expect(received).toEqual(
+      expect.arrayContaining([
+        {
+          path: '/v1/traces',
+          contentType: 'application/x-protobuf',
+          authorization: 'Bearer value-at-drain-time',
+          body: Buffer.from('trace-protobuf'),
+        },
+        {
+          path: '/v1/metrics',
+          contentType: 'application/x-protobuf',
+          authorization: 'Bearer value-at-drain-time',
+          body: Buffer.from('metric-protobuf'),
+        },
+      ]),
+    );
   });
 
   it('posts a days-old spool body without a local age check', async () => {
@@ -379,14 +459,16 @@ describe('SpoolDrainer', () => {
       response.writeHead(200).end();
     });
     const endpoint = await listen(server);
-    const daysOld = 1_727_000_000_000 - (7 * 24 * 60 * 60 * 1_000);
+    const daysOld = 1_727_000_000_000 - 7 * 24 * 60 * 60 * 1_000;
     const store = new SpoolStore(await temporaryDirectory(), { now: () => daysOld });
     const batch = await store.write('traces', Buffer.from('days-old-protobuf-body'));
 
     await drainUntilEmpty(new SpoolDrainer(store, { endpoint, headers: () => ({}) }), store);
 
     expect({ received, remaining: await store.list('traces'), batch: batch.name }).toEqual({
-      received: [Buffer.from('days-old-protobuf-body')], remaining: [], batch: expect.any(String),
+      received: [Buffer.from('days-old-protobuf-body')],
+      remaining: [],
+      batch: expect.any(String),
     });
   });
 
@@ -394,15 +476,19 @@ describe('SpoolDrainer', () => {
     const events = new ConductorEventEmitter();
     const drops: unknown[] = [];
     const failures: unknown[] = [];
-    events.on('otel_spool_drop', (event) => { drops.push(event); });
-    events.on('renderer_error', (event) => { failures.push(event); });
+    events.on('otel_spool_drop', (event) => {
+      drops.push(event);
+    });
+    events.on('renderer_error', (event) => {
+      failures.push(event);
+    });
     const server = createServer((request, response) => {
       request.resume();
       response.writeHead(status).end();
     });
     const endpoint = await listen(server);
     const store = new SpoolStore(await temporaryDirectory(), {
-      now: () => 1_727_000_000_000 - (7 * 24 * 60 * 60 * 1_000),
+      now: () => 1_727_000_000_000 - 7 * 24 * 60 * 60 * 1_000,
     });
     await store.write('traces', Buffer.from('rejected-days-old-batch'), 2);
 
@@ -418,7 +504,9 @@ describe('SpoolDrainer', () => {
     const events = new ConductorEventEmitter();
     const drops: unknown[] = [];
     const received: string[] = [];
-    events.on('otel_spool_drop', (event) => { drops.push(event); });
+    events.on('otel_spool_drop', (event) => {
+      drops.push(event);
+    });
     const server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -443,38 +531,47 @@ describe('SpoolDrainer', () => {
     [401, 'auth'],
     [403, 'auth'],
     [404, 'endpoint'],
-  ] as const)('keeps HTTP %i batches without emitting a drop event and preserves %s for backlog reporting', async (status, failureClass) => {
-    const events = new ConductorEventEmitter();
-    const drops: unknown[] = [];
-    const failures: unknown[] = [];
-    events.on('otel_spool_drop', (event) => { drops.push(event); });
-    events.on('renderer_error', (event) => { failures.push(event); });
-    const server = createServer((request, response) => {
-      request.resume();
-      response.writeHead(status).end();
-    });
-    const endpoint = await listen(server);
-    const store = new SpoolStore(await temporaryDirectory());
-    await store.write('traces', Buffer.from(`keep-${status}`));
-    const failure = events.waitFor('renderer_error');
-    const drainer = new SpoolDrainer(store, {
-      endpoint,
-      headers: () => ({}),
-      events,
-      sleep: async () => new Promise<void>(() => undefined),
-    });
-    const draining = drainer.drainUntilStopped();
+  ] as const)(
+    'keeps HTTP %i batches without emitting a drop event and preserves %s for backlog reporting',
+    async (status, failureClass) => {
+      const events = new ConductorEventEmitter();
+      const drops: unknown[] = [];
+      const failures: unknown[] = [];
+      events.on('otel_spool_drop', (event) => {
+        drops.push(event);
+      });
+      events.on('renderer_error', (event) => {
+        failures.push(event);
+      });
+      const server = createServer((request, response) => {
+        request.resume();
+        response.writeHead(status).end();
+      });
+      const endpoint = await listen(server);
+      const store = new SpoolStore(await temporaryDirectory());
+      await store.write('traces', Buffer.from(`keep-${status}`));
+      const failure = events.waitFor('renderer_error');
+      const drainer = new SpoolDrainer(store, {
+        endpoint,
+        headers: () => ({}),
+        events,
+        sleep: async () => new Promise<void>(() => undefined),
+      });
+      const draining = drainer.drainUntilStopped();
 
-    try {
-      await failure;
-      expect(await store.list('traces')).toHaveLength(1);
-      expect(drops).toEqual([]);
-      expect(failures).toContainEqual(expect.objectContaining({ error: `OTLP traces delivery failed: ${failureClass}` }));
-    } finally {
-      await drainer.stop();
-      await draining.catch(() => undefined);
-    }
-  });
+      try {
+        await failure;
+        expect(await store.list('traces')).toHaveLength(1);
+        expect(drops).toEqual([]);
+        expect(failures).toContainEqual(
+          expect.objectContaining({ error: `OTLP traces delivery failed: ${failureClass}` }),
+        );
+      } finally {
+        await drainer.stop();
+        await draining.catch(() => undefined);
+      }
+    },
+  );
 
   it('redelivers exactly once after an accepted batch is left behind by a crash, then continues', async () => {
     const received: string[] = [];
@@ -491,7 +588,9 @@ describe('SpoolDrainer', () => {
     now += 1;
     await store.write('traces', Buffer.from('next-batch'));
     let signalDeleteAttempted!: () => void;
-    const deleteAttempted = new Promise<void>((resolve) => { signalDeleteAttempted = resolve; });
+    const deleteAttempted = new Promise<void>((resolve) => {
+      signalDeleteAttempted = resolve;
+    });
     const crashBeforeDelete = Object.assign(Object.create(store) as SpoolStore, {
       delete: async () => {
         signalDeleteAttempted();
@@ -538,7 +637,10 @@ describe('SpoolDrainer', () => {
       endpoint,
       headers: () => ({}),
       now: () => now,
-      sleep: async (delay: number) => { delays.push(delay); now += delay; },
+      sleep: async (delay: number) => {
+        delays.push(delay);
+        now += delay;
+      },
       random: () => 0,
     });
     await drainUntilEmpty(drainer, store);
@@ -564,7 +666,9 @@ describe('SpoolDrainer', () => {
     const delays: number[] = [];
     let releaseSleep: (() => void) | undefined;
     let signalSleepStarted!: () => void;
-    const sleepStarted = new Promise<void>((resolve) => { signalSleepStarted = resolve; });
+    const sleepStarted = new Promise<void>((resolve) => {
+      signalSleepStarted = resolve;
+    });
     const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
     await store.write('traces', Buffer.from('respect-retry-after'));
 
@@ -572,13 +676,14 @@ describe('SpoolDrainer', () => {
       endpoint,
       headers: () => ({}),
       now: () => now,
-      sleep: async (delay: number) => new Promise<void>((resolve) => {
-        if (delay === 30_000) {
-          delays.push(delay);
-          releaseSleep = resolve;
-          signalSleepStarted();
-        }
-      }),
+      sleep: async (delay: number) =>
+        new Promise<void>((resolve) => {
+          if (delay === 30_000) {
+            delays.push(delay);
+            releaseSleep = resolve;
+            signalSleepStarted();
+          }
+        }),
       random: () => 0,
     });
     const draining = drainer.drainUntilStopped();
@@ -621,7 +726,9 @@ describe('SpoolDrainer', () => {
     const delays: number[] = [];
     let releaseSleep: (() => void) | undefined;
     let signalSleepStarted!: () => void;
-    const sleepStarted = new Promise<void>((resolve) => { signalSleepStarted = resolve; });
+    const sleepStarted = new Promise<void>((resolve) => {
+      signalSleepStarted = resolve;
+    });
     const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
     await store.write('traces', Buffer.from('respect-retry-after'));
 
@@ -629,13 +736,14 @@ describe('SpoolDrainer', () => {
       endpoint,
       headers: () => ({}),
       now: () => now,
-      sleep: async (delay: number) => new Promise<void>((resolve) => {
-        if (delay === 30_000) {
-          delays.push(delay);
-          releaseSleep = resolve;
-          signalSleepStarted();
-        }
-      }),
+      sleep: async (delay: number) =>
+        new Promise<void>((resolve) => {
+          if (delay === 30_000) {
+            delays.push(delay);
+            releaseSleep = resolve;
+            signalSleepStarted();
+          }
+        }),
       random: () => 0,
     });
     const draining = drainer.drainUntilStopped();
@@ -670,7 +778,9 @@ describe('SpoolDrainer', () => {
     let sleepCount = 0;
     let releaseFirstTraceRetry: (() => void) | undefined;
     let signalFirstTraceRetry!: () => void;
-    const firstTraceRetry = new Promise<void>((resolve) => { signalFirstTraceRetry = resolve; });
+    const firstTraceRetry = new Promise<void>((resolve) => {
+      signalFirstTraceRetry = resolve;
+    });
     const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
     await store.write('traces', Buffer.from('oldest-trace'));
     now += 1;
@@ -748,7 +858,9 @@ describe('SpoolDrainer', () => {
       headers: () => ({}),
       exportTimeoutMs: 10,
       now: () => now,
-      sleep: async (delay: number) => { now += delay; },
+      sleep: async (delay: number) => {
+        now += delay;
+      },
       // Deliberately ignore cancellation so the drainer's own timeout race,
       // rather than a real HTTP socket's shutdown timing, owns this boundary.
       fetch: async () => {
@@ -775,8 +887,12 @@ describe('SpoolDrainer', () => {
     const events = new ConductorEventEmitter();
     const backlog: unknown[] = [];
     const failures: unknown[] = [];
-    events.on('otel_spool_backlog', (event) => { backlog.push(event); });
-    events.on('renderer_error', (event) => { failures.push(event); });
+    events.on('otel_spool_backlog', (event) => {
+      backlog.push(event);
+    });
+    events.on('renderer_error', (event) => {
+      failures.push(event);
+    });
     const server = createServer((request, response) => {
       request.resume();
       response.writeHead(503).end();
@@ -799,13 +915,14 @@ describe('SpoolDrainer', () => {
       now: () => now,
       random: () => 0,
       sleep: async () => new Promise<void>(() => undefined),
-      backlogSleep: async () => new Promise<void>((resolve) => {
-        releaseBacklogInterval = () => {
-          now += 30_000;
-          resolve();
-        };
-        backlogSleepStarted.shift()?.();
-      }),
+      backlogSleep: async () =>
+        new Promise<void>((resolve) => {
+          releaseBacklogInterval = () => {
+            now += 30_000;
+            resolve();
+          };
+          backlogSleepStarted.shift()?.();
+        }),
     });
 
     const firstBacklogSleep = nextBacklogSleep();
@@ -824,19 +941,68 @@ describe('SpoolDrainer', () => {
     await draining;
 
     expect(backlog).toEqual([
-      { type: 'otel_spool_backlog', signal: 'traces', files: 2, bytes: 17, oldestAgeMs: 31_000, lastFailureClass: 'server' },
-      { type: 'otel_spool_backlog', signal: 'metrics', files: 1, bytes: 6, oldestAgeMs: 30_000, lastFailureClass: 'server' },
-      { type: 'otel_spool_backlog', signal: 'traces', files: 2, bytes: 17, oldestAgeMs: 61_000, lastFailureClass: 'server' },
-      { type: 'otel_spool_backlog', signal: 'metrics', files: 1, bytes: 6, oldestAgeMs: 60_000, lastFailureClass: 'server' },
-      { type: 'otel_spool_backlog', signal: 'traces', files: 2, bytes: 17, oldestAgeMs: 91_000, lastFailureClass: 'server' },
-      { type: 'otel_spool_backlog', signal: 'metrics', files: 1, bytes: 6, oldestAgeMs: 90_000, lastFailureClass: 'server' },
+      {
+        type: 'otel_spool_backlog',
+        signal: 'traces',
+        files: 2,
+        bytes: 17,
+        oldestAgeMs: 31_000,
+        lastFailureClass: 'server',
+      },
+      {
+        type: 'otel_spool_backlog',
+        signal: 'metrics',
+        files: 1,
+        bytes: 6,
+        oldestAgeMs: 30_000,
+        lastFailureClass: 'server',
+      },
+      {
+        type: 'otel_spool_backlog',
+        signal: 'traces',
+        files: 2,
+        bytes: 17,
+        oldestAgeMs: 61_000,
+        lastFailureClass: 'server',
+      },
+      {
+        type: 'otel_spool_backlog',
+        signal: 'metrics',
+        files: 1,
+        bytes: 6,
+        oldestAgeMs: 60_000,
+        lastFailureClass: 'server',
+      },
+      {
+        type: 'otel_spool_backlog',
+        signal: 'traces',
+        files: 2,
+        bytes: 17,
+        oldestAgeMs: 91_000,
+        lastFailureClass: 'server',
+      },
+      {
+        type: 'otel_spool_backlog',
+        signal: 'metrics',
+        files: 1,
+        bytes: 6,
+        oldestAgeMs: 90_000,
+        lastFailureClass: 'server',
+      },
     ]);
 
     const emptyEvents = new ConductorEventEmitter();
     const emptyBacklog: unknown[] = [];
-    emptyEvents.on('otel_spool_backlog', (event) => { emptyBacklog.push(event); });
+    emptyEvents.on('otel_spool_backlog', (event) => {
+      emptyBacklog.push(event);
+    });
     const emptyStore = new SpoolStore(await temporaryDirectory(), { now: () => now });
-    const emptyDrainer = new SpoolDrainer(emptyStore, { endpoint, headers: () => ({}), events: emptyEvents, now: () => now });
+    const emptyDrainer = new SpoolDrainer(emptyStore, {
+      endpoint,
+      headers: () => ({}),
+      events: emptyEvents,
+      now: () => now,
+    });
     for (let interval = 0; interval < 3; interval += 1) {
       now += 30_000;
       const draining = emptyDrainer.drainUntilStopped();
@@ -849,7 +1015,9 @@ describe('SpoolDrainer', () => {
   it('reports a traces network failure once after a healthy export and suppresses further network failures', async () => {
     const events = new ConductorEventEmitter();
     const rendererErrors: unknown[] = [];
-    events.on('renderer_error', (event) => { rendererErrors.push(event); });
+    events.on('renderer_error', (event) => {
+      rendererErrors.push(event);
+    });
     let failNetworkRequests = false;
     let networkAttempts = 0;
     const server = createServer((request, response) => {
@@ -868,7 +1036,10 @@ describe('SpoolDrainer', () => {
       endpoint,
       headers: () => ({}),
       events,
-      sleep: async () => new Promise<void>((resolve) => { pendingSleeps.push(resolve); }),
+      sleep: async () =>
+        new Promise<void>((resolve) => {
+          pendingSleeps.push(resolve);
+        }),
     });
     await store.write('traces', Buffer.from('healthy-trace'));
     const healthyDrain = drainer.drainUntilStopped();
@@ -894,18 +1065,22 @@ describe('SpoolDrainer', () => {
 
     expect({ networkAttempts, rendererErrors }).toEqual({
       networkAttempts: 6,
-      rendererErrors: [expect.objectContaining({
-        type: 'renderer_error',
-        rendererName: 'otel',
-        error: expect.stringMatching(/traces.*network/i),
-      })],
+      rendererErrors: [
+        expect.objectContaining({
+          type: 'renderer_error',
+          rendererName: 'otel',
+          error: expect.stringMatching(/traces.*network/i),
+        }),
+      ],
     });
   });
 
   it('reports recovery after a network failure, then reports a later network refusal again', async () => {
     const events = new ConductorEventEmitter();
     const rendererErrors: unknown[] = [];
-    events.on('renderer_error', (event) => { rendererErrors.push(event); });
+    events.on('renderer_error', (event) => {
+      rendererErrors.push(event);
+    });
     const pendingSleeps: Array<() => void> = [];
     let traceAttempts = 0;
     const store = new SpoolStore(await temporaryDirectory());
@@ -919,7 +1094,10 @@ describe('SpoolDrainer', () => {
         if (++traceAttempts === 2) return new Response(undefined, { status: 200 });
         throw new TypeError('network refusal');
       },
-      sleep: async () => new Promise<void>((resolve) => { pendingSleeps.push(resolve); }),
+      sleep: async () =>
+        new Promise<void>((resolve) => {
+          pendingSleeps.push(resolve);
+        }),
     });
     const draining = drainer.drainUntilStopped();
 
@@ -972,7 +1150,9 @@ describe('SpoolDrainer', () => {
   it('reports an auth error when a traces failure changes from network to HTTP 401', async () => {
     const events = new ConductorEventEmitter();
     const rendererErrors: unknown[] = [];
-    events.on('renderer_error', (event) => { rendererErrors.push(event); });
+    events.on('renderer_error', (event) => {
+      rendererErrors.push(event);
+    });
     const pendingSleeps: Array<() => void> = [];
     let attempts = 0;
     const server = createServer((request, response) => {
@@ -983,8 +1163,13 @@ describe('SpoolDrainer', () => {
     const store = new SpoolStore(await temporaryDirectory());
     await store.write('traces', Buffer.from('network-then-auth'));
     const drainer = new SpoolDrainer(store, {
-      endpoint: await listen(server), headers: () => ({}), events,
-      sleep: async () => new Promise<void>((resolve) => { pendingSleeps.push(resolve); }),
+      endpoint: await listen(server),
+      headers: () => ({}),
+      events,
+      sleep: async () =>
+        new Promise<void>((resolve) => {
+          pendingSleeps.push(resolve);
+        }),
     });
     const draining = drainer.drainUntilStopped();
 

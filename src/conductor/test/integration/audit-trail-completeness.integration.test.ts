@@ -241,6 +241,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<AuditedEventType, 'friction-mapped' | 'n
   rebase_conflict_halt: 'not-audited-by-design',
   rebase_merge_audit: 'not-audited-by-design',
   rebase_untracked_quarantined: 'not-audited-by-design',
+  validator_residue_quarantined: 'not-audited-by-design',
   repair_boundary_translated: 'not-audited-by-design',
   rebase_citation_residue: 'not-audited-by-design',
   rebase_supersession_verdict: 'not-audited-by-design',
@@ -1233,6 +1234,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'rebase_untracked_quarantined',
     paths: ['generated.txt'],
     directory: '.pipeline/rebase-untracked-quarantine',
+  },
+  validator_residue_quarantined: {
+    type: 'validator_residue_quarantined',
+    source: 'manual_test',
+    paths: ['docs/reports/manual-test-step17/report.html'],
+    directory: '.pipeline/validator-residue/manual_test-test',
   },
   repair_boundary_translated: {
     type: 'repair_boundary_translated',

@@ -10,7 +10,11 @@ import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { readRevalidationQueue } from '../../../src/engine/routing/route-record-store.js';
 import { revalidationQueueRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { readRestackJournal, journalRefFor, writeRestackJournalBlob } from '../../../src/engine/restack/restack-journal.js';
+import {
+  readRestackJournal,
+  journalRefFor,
+  writeRestackJournalBlob,
+} from '../../../src/engine/restack/restack-journal.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { sealStack } from './restack-sweepG2-fixture.js';
@@ -61,17 +65,27 @@ async function fixture(routingEnabled = true) {
   await commit('leaf', 'leaf.ts', 'export const leaf = true;\n');
   if (routingEnabled) {
     await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-    await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+    await writeFile(
+      join(repo, '.ai-conductor', 'config.yml'),
+      'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n',
+    );
     await git(['add', '.ai-conductor/config.yml']);
     await git(['commit', '-qm', 'enable routed queue']);
   } else {
     await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-    await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: false\n');
+    await writeFile(
+      join(repo, '.ai-conductor', 'config.yml'),
+      'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: false\n',
+    );
     await git(['add', '.ai-conductor/config.yml']);
     await git(['commit', '-qm', 'disable routed queue']);
   }
   await git(['checkout', '-q', 'main']);
-  const advanced = await commit('advance parseA', 'a.ts', 'export function parseA(value: string, radix = 10) { return Number.parseInt(value, radix); }\n');
+  const advanced = await commit(
+    'advance parseA',
+    'a.ts',
+    'export function parseA(value: string, radix = 10) { return Number.parseInt(value, radix); }\n',
+  );
   await git(['checkout', '-q', 'feat/daemon-demo']);
   await sealStack(repo);
   return { repo, advanced, c1, c2, git: makeGitRunner(repo) };
@@ -98,7 +112,10 @@ async function leafOnlyFixture() {
   await git(['config', 'user.email', 'restack-queue@example.test']);
   await git(['config', 'user.name', 'Restack queue']);
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+  await writeFile(
+    join(repo, '.ai-conductor', 'config.yml'),
+    'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n',
+  );
   await writeFile(join(repo, 'base.txt'), 'base\n');
   await git(['add', '.ai-conductor/config.yml', 'base.txt']);
   await git(['commit', '-qm', 'base']);
@@ -121,18 +138,24 @@ describe('restack queue production (real local Git)', () => {
     const subject = await fixture();
     const recorded = recordingRunner(subject.git);
 
-    await expect(runRestack({
-      worktree: subject.repo,
-      slug: 'demo',
-      cause: 'base-refresh',
-      newDefault: subject.advanced,
-      git: recorded.git,
-    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({
+        worktree: subject.repo,
+        slug: 'demo',
+        cause: 'base-refresh',
+        newDefault: subject.advanced,
+        git: recorded.git,
+      }),
+    ).resolves.toMatchObject({ kind: 'applied' });
 
     const queue = await readRevalidationQueue(subject.repo, 'demo', { git: subject.git });
     expect(queue).toMatchObject({
       kind: 'queue',
-      queue: { entries: expect.arrayContaining([expect.objectContaining({ child: 2, position: 2, gates: expect.arrayContaining(['test_suite']) })]) },
+      queue: {
+        entries: expect.arrayContaining([
+          expect.objectContaining({ child: 2, position: 2, gates: expect.arrayContaining(['test_suite']) }),
+        ]),
+      },
     });
     if (queue.kind !== 'queue') throw new Error('queue was not readable');
     const childTwo = queue.queue.entries.find((entry) => entry.child === 2);
@@ -144,7 +167,12 @@ describe('restack queue production (real local Git)', () => {
       },
     });
     const queueTransactions = recorded.calls
-      .filter((call) => call.args[0] === 'update-ref' && call.args[1] === '--stdin' && call.input?.includes(revalidationQueueRefFor('demo')))
+      .filter(
+        (call) =>
+          call.args[0] === 'update-ref' &&
+          call.args[1] === '--stdin' &&
+          call.input?.includes(revalidationQueueRefFor('demo')),
+      )
       .map((call) => call.input!);
     expect(queueTransactions).toHaveLength(1);
     expect(queueTransactions[0]).toContain(journalRefFor('demo'));
@@ -156,77 +184,110 @@ describe('restack queue production (real local Git)', () => {
     const queueOld = await seedQueue(subject);
     const recorded = recordingRunner(subject.git);
 
-    await expect(runRestack({
-      worktree: subject.repo,
-      slug: 'demo',
-      cause: 'base-refresh',
-      newDefault: subject.advanced,
-      git: recorded.git,
-    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({
+        worktree: subject.repo,
+        slug: 'demo',
+        cause: 'base-refresh',
+        newDefault: subject.advanced,
+        git: recorded.git,
+      }),
+    ).resolves.toMatchObject({ kind: 'applied' });
 
-    expect(recorded.calls.some((call) => call.args.join(' ').includes(revalidationQueueRefFor('demo')) || call.input?.includes(revalidationQueueRefFor('demo')))).toBe(false);
+    expect(
+      recorded.calls.some(
+        (call) =>
+          call.args.join(' ').includes(revalidationQueueRefFor('demo')) ||
+          call.input?.includes(revalidationQueueRefFor('demo')),
+      ),
+    ).toBe(false);
     await expect(queueBlob(subject)).resolves.toBe(queueOld);
   });
 
   // Covers: task:31
-  it('writes equivalent queue generations for base refresh, operator feature repair, and synced recovery', async () => {
+  it('writes a queue generation for base refresh', async () => {
     const baseRefresh = await fixture();
-    await expect(runRestack({
-      worktree: baseRefresh.repo,
-      slug: 'demo',
-      cause: 'base-refresh',
-      newDefault: baseRefresh.advanced,
-      git: baseRefresh.git,
-    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({
+        worktree: baseRefresh.repo,
+        slug: 'demo',
+        cause: 'base-refresh',
+        newDefault: baseRefresh.advanced,
+        git: baseRefresh.git,
+      }),
+    ).resolves.toMatchObject({ kind: 'applied' });
     const baseQueue = await readRevalidationQueue(baseRefresh.repo, 'demo', { git: baseRefresh.git });
     expect(baseQueue).toMatchObject({ kind: 'queue' });
+    expect(baseQueue.kind === 'queue' && baseQueue.queue.entries.some((entry) => entry.child === 2)).toBe(true);
+  });
 
+  it('writes a queue generation for an operator feature repair', async () => {
     const repair = await fixture();
     await repair.git(['checkout', '-q', 'feat/c1/demo']);
     await mkdir(join(repair.repo, '.ai-conductor'), { recursive: true });
-    await writeFile(join(repair.repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+    await writeFile(
+      join(repair.repo, '.ai-conductor', 'config.yml'),
+      'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n',
+    );
     await repair.git(['add', '.ai-conductor/config.yml']);
     await repair.git(['commit', '-qm', 'operator repair']);
-    await expect(runRestack({
-      worktree: repair.repo,
-      slug: 'demo',
-      cause: 'feature-repair',
-      git: repair.git,
-    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({
+        worktree: repair.repo,
+        slug: 'demo',
+        cause: 'feature-repair',
+        git: repair.git,
+      }),
+    ).resolves.toMatchObject({ kind: 'applied' });
     await expect(readRevalidationQueue(repair.repo, 'demo', { git: repair.git })).resolves.toMatchObject({
       kind: 'queue',
       queue: { entries: expect.arrayContaining([expect.objectContaining({ child: 2 })]) },
     });
+  });
 
+  it('restores the journalled queue generation during synced recovery', async () => {
     const recovery = await fixture();
     let interrupted = false;
     const crashBeforeApplied: GitRunner = async (args, options) => {
-      if (!interrupted && args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(revalidationQueueRefFor('demo'))) {
+      if (
+        !interrupted &&
+        args[0] === 'update-ref' &&
+        args[1] === '--stdin' &&
+        options?.input?.includes(revalidationQueueRefFor('demo'))
+      ) {
         interrupted = true;
         throw new Error('simulated crash after queue plan');
       }
       const result = await recovery.git(args, options);
       return result;
     };
-    await expect(runRestack({
-      worktree: recovery.repo,
-      slug: 'demo',
-      cause: 'base-refresh',
-      newDefault: recovery.advanced,
-      git: crashBeforeApplied,
-    })).resolves.toMatchObject({ kind: 'unavailable' });
+    await expect(
+      runRestack({
+        worktree: recovery.repo,
+        slug: 'demo',
+        cause: 'base-refresh',
+        newDefault: recovery.advanced,
+        git: crashBeforeApplied,
+      }),
+    ).resolves.toMatchObject({ kind: 'unavailable' });
     const synced = await readRestackJournal(recovery.repo, 'demo', { git: recovery.git });
-    if (synced.kind !== 'journal' || synced.journal.queueNew === undefined) throw new Error('queue plan was not journalled');
+    if (synced.kind !== 'journal' || synced.journal.queueNew === undefined)
+      throw new Error('queue plan was not journalled');
     const queueNew = synced.journal.queueNew;
-    const dead = await writeRestackJournalBlob(recovery.repo, {
-      ...synced.journal,
-      owner: { host: 'dead-restack-owner', pid: 1, processStartTime: '0' },
-    }, { git: recovery.git });
+    const dead = await writeRestackJournalBlob(
+      recovery.repo,
+      {
+        ...synced.journal,
+        owner: { host: 'dead-restack-owner', pid: 1, processStartTime: '0' },
+      },
+      { git: recovery.git },
+    );
     await recovery.git(['update-ref', journalRefFor('demo'), dead, synced.blob]);
-    await expect(recoverRestackJournal({ worktree: recovery.repo, slug: 'demo', git: recovery.git }))
-      .resolves.toEqual({ kind: 'recovered', fromState: 'synced' });
+    await expect(recoverRestackJournal({ worktree: recovery.repo, slug: 'demo', git: recovery.git })).resolves.toEqual({
+      kind: 'recovered',
+      fromState: 'synced',
+    });
     await expect(queueBlob(recovery)).resolves.toBe(queueNew);
-    expect(baseQueue.kind === 'queue' && baseQueue.queue.entries.some((entry) => entry.child === 2)).toBe(true);
   });
 
   // Covers: task:31
@@ -239,24 +300,28 @@ describe('restack queue production (real local Git)', () => {
     await rollback.git(['commit', '-qm', 'conflicting default change']);
     const conflictingDefault = (await rollback.git(['rev-parse', 'HEAD'])).stdout.trim();
     await rollback.git(['checkout', '-q', 'feat/daemon-demo']);
-    await expect(runRestack({
-      worktree: rollback.repo,
-      slug: 'demo',
-      cause: 'base-refresh',
-      newDefault: conflictingDefault,
-      git: rollback.git,
-    })).resolves.not.toMatchObject({ kind: 'applied' });
+    await expect(
+      runRestack({
+        worktree: rollback.repo,
+        slug: 'demo',
+        cause: 'base-refresh',
+        newDefault: conflictingDefault,
+        git: rollback.git,
+      }),
+    ).resolves.not.toMatchObject({ kind: 'applied' });
     await expect(queueBlob(rollback)).resolves.toBe(rollbackQueue);
 
     const leafOnly = await leafOnlyFixture();
     const leafQueue = await seedQueue(leafOnly);
     await leafOnly.git(['commit', '--allow-empty', '-qm', 'leaf-only operator repair']);
-    await expect(runRestack({
-      worktree: leafOnly.repo,
-      slug: 'demo',
-      cause: 'feature-repair',
-      git: leafOnly.git,
-    })).resolves.toMatchObject({ kind: 'unavailable' });
+    await expect(
+      runRestack({
+        worktree: leafOnly.repo,
+        slug: 'demo',
+        cause: 'feature-repair',
+        git: leafOnly.git,
+      }),
+    ).resolves.toMatchObject({ kind: 'unavailable' });
     await expect(queueBlob(leafOnly)).resolves.toBe(leafQueue);
   });
 
@@ -265,33 +330,52 @@ describe('restack queue production (real local Git)', () => {
     const subject = await fixture();
     let raced = false;
     const racing: GitRunner = async (args, options) => {
-      if (!raced && args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(`create ${revalidationQueueRefFor('demo')}`)) {
+      if (
+        !raced &&
+        args[0] === 'update-ref' &&
+        args[1] === '--stdin' &&
+        options?.input?.includes(`create ${revalidationQueueRefFor('demo')}`)
+      ) {
         raced = true;
-        const blob = await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ concurrent: true }) });
+        const blob = await subject.git(['hash-object', '-w', '--stdin'], {
+          input: JSON.stringify({ concurrent: true }),
+        });
         await subject.git(['update-ref', revalidationQueueRefFor('demo'), blob.stdout.trim()]);
       }
       return subject.git(args, options);
     };
 
-    await expect(runRestack({
-      worktree: subject.repo,
-      slug: 'demo',
-      cause: 'base-refresh',
-      newDefault: subject.advanced,
-      git: racing,
-    })).resolves.toMatchObject({ kind: 'halted' });
+    await expect(
+      runRestack({
+        worktree: subject.repo,
+        slug: 'demo',
+        cause: 'base-refresh',
+        newDefault: subject.advanced,
+        git: racing,
+      }),
+    ).resolves.toMatchObject({ kind: 'halted' });
 
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(revalidationQueueRefFor('demo'));
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      revalidationQueueRefFor('demo'),
+    );
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     const journal = await readRestackJournal(subject.repo, 'demo', { git: subject.git });
     if (journal.kind !== 'journal') throw new Error('restack journal was not retained after the lost queue CAS');
-    const dead = await writeRestackJournalBlob(subject.repo, {
-      ...journal.journal,
-      owner: { host: 'dead-restack-owner', pid: 1, processStartTime: '0' },
-    }, { git: subject.git });
+    const dead = await writeRestackJournalBlob(
+      subject.repo,
+      {
+        ...journal.journal,
+        owner: { host: 'dead-restack-owner', pid: 1, processStartTime: '0' },
+      },
+      { git: subject.git },
+    );
     await subject.git(['update-ref', journalRefFor('demo'), dead, journal.blob]);
 
-    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: subject.git })).resolves.toMatchObject({ kind: 'halted' });
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(revalidationQueueRefFor('demo'));
+    await expect(
+      recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: subject.git }),
+    ).resolves.toMatchObject({ kind: 'halted' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      revalidationQueueRefFor('demo'),
+    );
   });
 });
