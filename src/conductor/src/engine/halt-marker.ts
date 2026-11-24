@@ -18,6 +18,8 @@ import {
   type HaltRecordRemoteOptions,
 } from './halt-record.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { acquireFeatureDispatchLease } from './feature-dispatch-lease.js';
+import { resolveMainRepoRoot } from './park-marker.js';
 import { readRestackJournal, isJournalOwnerAlive } from './restack/restack-journal.js';
 import { recoverRestackJournal } from './restack/restack-recovery.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
@@ -138,6 +140,15 @@ export async function writeHaltMarker(
   events?: ConductorEventEmitter,
   recordRemote?: HaltRecordRemoteOptions,
 ): Promise<HaltMarkerWriteResult> {
+  // This is the same feature-scoped ownership boundary used by verified
+  // rebase admission.  A recovery cannot validate an old halt while a writer
+  // replaces it, then clear the replacement after its own transition.
+  const mainRoot = await resolveMainRepoRoot(projectRoot);
+  const acquired = await acquireFeatureDispatchLease(mainRoot, basename(projectRoot), 'halt marker write');
+  if (acquired.kind !== 'acquired') {
+    return { status: 'failed', path: join(projectRoot, HALT_MARKER), reason: 'feature serialization boundary unavailable' };
+  }
+  const release = () => acquired.lease.release().catch(() => undefined);
   const markerPath = join(projectRoot, HALT_MARKER);
   const haltClassPath = join(projectRoot, HALT_CLASS_MARKER);
   const haltClassTempPath = `${haltClassPath}.tmp`;
@@ -152,6 +163,7 @@ export async function writeHaltMarker(
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     await events?.emit({ type: 'halt_marker_write_failed', path: markerPath, reason }).catch(() => {});
+    await release();
     return { status: 'failed', path: markerPath, reason };
   }
 
@@ -162,11 +174,13 @@ export async function writeHaltMarker(
       ...recordRemote,
       events: recordRemote?.events ?? events,
     });
+    await release();
     return { status: 'written' };
   } catch (error) {
     await unlink(haltClassTempPath).catch(() => {});
     const reason = error instanceof Error ? error.message : String(error);
     await events?.emit({ type: 'halt_marker_write_failed', path: haltClassPath, reason }).catch(() => {});
+    await release();
     return { status: 'partial', writtenPath: markerPath, path: haltClassPath, reason };
   }
 }
