@@ -362,3 +362,37 @@ dispatch bookkeeping. 11 tasks, single PR, blocked by #3333.
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-4a: spool-store.ts: bound withCapLock acquisition with a deadline, reclaim a stale or orphaned .cap.lock, and reject the write on timeout so the direct-send fallback runs; surface unlock failures instead of silently suppressing them
+**Gate:** prd-audit
+**Rationale:** This is an implementation defect under approved architecture, so no architecture decision is needed. The unplanned withCapLock in spool-store.ts loops forever on EEXIST. It has no deadline and no stale-owner recovery, and it swallows unlock failures. One orphaned .cap.lock therefore stalls every later child and supervisor spool write. Task 4 (store-only writer runtime) owns the spool store path the writer uses. Task 5 already requires the behaviour a fix must restore: a failing spool write takes the direct-send fallback with one bounded renderer_error. The repair has three parts. Bound lock acquisition with a deadline. Reclaim an abandoned lock, judged by owner pid liveness or lock age. When acquisition times out, reject the write so the existing fallback runs. Add tests for the orphaned lock and the timeout. Existing cap enforcement and the Task 4 Done-when checks must survive.
+**Criterion:** S1.5
+**Parent task:** 4
+**Done when:**
+- [test] S1.5 is satisfied by this task.
+- The repair for task rem-prd-audit-4a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-4b: spool-store / child-otel tests: an orphaned .cap.lock neither hangs span nor metric writes; the write rejects or reclaims within the bound, and the Task 5 fallback check (one bounded renderer_error, child bus keeps emitting) passes
+**Gate:** prd-audit
+**Rationale:** This is an implementation defect under approved architecture, so no architecture decision is needed. The unplanned withCapLock in spool-store.ts loops forever on EEXIST. It has no deadline and no stale-owner recovery, and it swallows unlock failures. One orphaned .cap.lock therefore stalls every later child and supervisor spool write. Task 4 (store-only writer runtime) owns the spool store path the writer uses. Task 5 already requires the behaviour a fix must restore: a failing spool write takes the direct-send fallback with one bounded renderer_error. The repair has three parts. Bound lock acquisition with a deadline. Reclaim an abandoned lock, judged by owner pid liveness or lock age. When acquisition times out, reject the write so the existing fallback runs. Add tests for the orphaned lock and the timeout. Existing cap enforcement and the Task 4 Done-when checks must survive.
+**Criterion:** S1.5
+**Parent task:** 4
+**Done when:**
+- [test] S1.5 is satisfied by this task.
+- The repair for task rem-prd-audit-4b is committed and its targeted tests pass.
+
+### Task rem-as-built-6a: child-otel.ts/daemon-cli.ts: move the conduct-session-id file read out of buildDispatchTraceIdentity into the daemon-cli composition site (inject the run id or a reader), removing the node:fs import from child-otel.ts
+**Gate:** as-built
+**Rationale:** ADR external-boundary D4 makes the allowlist shrink-only, and the as-built review cited it. The finding is that this branch added `engine/otel/child-otel.ts -> filesystem`. The cause is the readFileSync of conduct-session-id in buildDispatchTraceIdentity, which Task 6 extracted into child-otel.ts. Its only callers are in daemon-cli.ts, a composition site that is already permitted. Task 6 admits the repair because it governs both buildDispatchTraceIdentity and the daemon-cli wiring. Read the session id in daemon-cli.ts, or have the helper take an injected reader. Then drop the node:fs import from child-otel.ts and remove the added allowlist line. The Task 6 Done-when checks must survive: the runId comes from conduct-session-id, and a missing worktree yields a fresh id.
+**Governing clause:** adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 4
+**Done when:**
+- adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 4 is satisfied by this task.
+- The repair for task rem-as-built-6a is committed and its targeted tests pass.
+
+### Task rem-as-built-6b: boundary-allowlist.txt: remove the added `engine/otel/child-otel.ts -> filesystem` exception and keep the Task 6 trace-identity tests (session-id runId, fresh id without worktree) passing
+**Gate:** as-built
+**Rationale:** ADR external-boundary D4 makes the allowlist shrink-only, and the as-built review cited it. The finding is that this branch added `engine/otel/child-otel.ts -> filesystem`. The cause is the readFileSync of conduct-session-id in buildDispatchTraceIdentity, which Task 6 extracted into child-otel.ts. Its only callers are in daemon-cli.ts, a composition site that is already permitted. Task 6 admits the repair because it governs both buildDispatchTraceIdentity and the daemon-cli wiring. Read the session id in daemon-cli.ts, or have the helper take an injected reader. Then drop the node:fs import from child-otel.ts and remove the added allowlist line. The Task 6 Done-when checks must survive: the runId comes from conduct-session-id, and a missing worktree yields a fresh id.
+**Governing clause:** adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 4
+**Done when:**
+- adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 4 is satisfied by this task.
+- The repair for task rem-as-built-6b is committed and its targeted tests pass.
