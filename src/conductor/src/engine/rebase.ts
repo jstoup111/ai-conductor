@@ -1,6 +1,6 @@
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { writeFile, readFile, access, lstat, mkdir, rename } from 'node:fs/promises';
+import { writeFile, readFile, access, lstat, mkdir, rename, unlink } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
 import { isRegionStep, type ChildId } from './child-context.js';
@@ -56,6 +56,8 @@ import {
   type RebaseRegradeJudge,
 } from './rebase-regrade-judgement.js';
 import type { ConductorEvent } from '../types/events.js';
+
+const rebaseRecoveryAttemptFilesystem = { mkdir, readFile, rename, unlink, writeFile };
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -1383,7 +1385,7 @@ export async function writeRebaseOutcomeHalt(
     );
   }
   if (!outcome.startFailure) {
-    const attempt = await readRebaseRecoveryAttempt(projectRoot);
+    const attempt = await readRebaseRecoveryAttempt(projectRoot, rebaseRecoveryAttemptFilesystem);
     const haltClass = matchesRebaseRecoveryAttempt(attempt, outcome.recoveryAttempt)
       ? 'rebase-recovery'
       : 'needs-human';
@@ -1731,7 +1733,12 @@ export async function performRebase(
     mergeBase: (await git(['merge-base', 'HEAD', base.ref])).stdout.trim(),
     target: (await git(['rev-parse', base.ref])).stdout.trim(),
   };
-  const persistedRecoveryAttempt = await persistRebaseRecoveryAttempt(projectRoot, replaySeed, opts?.executionChild);
+  const persistedRecoveryAttempt = await persistRebaseRecoveryAttempt(
+    projectRoot,
+    replaySeed,
+    rebaseRecoveryAttemptFilesystem,
+    opts?.executionChild,
+  );
   if (persistedRecoveryAttempt.kind === 'failed') {
     return {
       kind: 'conflict_halt',

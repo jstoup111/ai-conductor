@@ -306,8 +306,6 @@ engine/rate-card-cli.ts -> clock
 engine/rate-card-cli.ts -> filesystem
 engine/rate-limit-episode.ts -> clock
 engine/rebase-fence-decision-note.ts -> filesystem
-engine/rebase-recovery-attempt.ts -> filesystem
-engine/rebase-replay.ts -> filesystem
 engine/rebase-transition.ts -> clock
 engine/rebase-translate.ts -> filesystem
 engine/rebase.ts -> clock

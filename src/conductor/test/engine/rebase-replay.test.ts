@@ -1,6 +1,6 @@
 // Covers: task:3
 import { execFile as execFileCallback } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -28,6 +28,17 @@ function scripted(results: ReadonlyArray<{ exitCode: number; stdout?: string; st
   return async () => {
     const result = results[index++] ?? { exitCode: 1 };
     return { exitCode: result.exitCode, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  };
+}
+
+function absentRebaseStateFilesystem(): { access: (path: string) => Promise<never>; calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    async access(path: string): Promise<never> {
+      calls.push(path);
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    },
   };
 }
 
@@ -160,7 +171,7 @@ describe('compareReplayTree', () => {
     expect(result).not.toHaveProperty('completedTree');
   });
 
-  // Covers: task:2
+  // Covers: task:2, task:rem-as-built-10
   it('retains the HALT when the resolved rebase-state path cannot be inspected', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rebase-replay-state-'));
     const blocked = join(root, 'blocked');
@@ -175,7 +186,7 @@ describe('compareReplayTree', () => {
           preRebaseHead: 'a'.repeat(40),
           mergeBase: 'b'.repeat(40),
           target: 'c'.repeat(40),
-        }),
+        }, { access }),
       ).resolves.toEqual({ kind: 'blocked', reason: 'cannot inspect whether rebase is still active' });
     } finally {
       await chmod(blocked, 0o700);
@@ -260,7 +271,7 @@ describe('verifyCompletedReplay', () => {
     ['a failed git-path lookup', { exitCode: 128, stderr: 'not a repository' }],
     ['an empty git-path lookup', { exitCode: 0, stdout: '' }],
   ])('retains the HALT when %s makes rebase-state inspection inconclusive', async (_name, lookup) => {
-    await expect(verifyCompletedReplay(scripted([lookup]), '/fixture', attempt)).resolves.toEqual({
+    await expect(verifyCompletedReplay(scripted([lookup]), '/fixture', attempt, absentRebaseStateFilesystem())).resolves.toEqual({
       kind: 'blocked',
       reason: 'cannot inspect whether rebase is still active',
     });
@@ -268,6 +279,7 @@ describe('verifyCompletedReplay', () => {
 
   // Covers: task:2
   it('rejects a clean revision with matching subjects when no feature content remains', async () => {
+    const filesystem = absentRebaseStateFilesystem();
     const result = await verifyCompletedReplay(
       scripted([
         { exitCode: 0, stdout: '.git/rebase-merge\n' },
@@ -280,15 +292,17 @@ describe('verifyCompletedReplay', () => {
       ]),
       '/fixture',
       attempt,
+      filesystem,
     );
 
     expect(result).toEqual({ kind: 'blocked', reason: 'completed revision has no preserved feature content' });
   });
 
-  // Covers: task:2
+  // Covers: task:2, task:rem-as-built-10
   it('accepts a clean completed revision only when the attempt identity and reconstructed tree agree', async () => {
     const tree = 'e'.repeat(40);
     const completed = 'd'.repeat(40);
+    const filesystem = absentRebaseStateFilesystem();
     const result = await verifyCompletedReplay(
       scripted([
         { exitCode: 0, stdout: '.git/rebase-merge\n' },
@@ -303,6 +317,7 @@ describe('verifyCompletedReplay', () => {
       ]),
       '/fixture',
       attempt,
+      filesystem,
     );
 
     expect(result).toMatchObject({
@@ -310,10 +325,12 @@ describe('verifyCompletedReplay', () => {
       identity: { ...attempt, completedHead: completed },
       comparison: { kind: 'unchanged', expectedTree: tree, completedTree: tree },
     });
+    expect(filesystem.calls).toEqual(['/fixture/.git/rebase-merge', '/fixture/.git/rebase-apply']);
   });
 
   // Covers: task:2
   it('retains a completed conflict resolution until its exact revision has accepted intent evidence', async () => {
+    const filesystem = absentRebaseStateFilesystem();
     const result = await verifyCompletedReplay(
       scripted([
         { exitCode: 0, stdout: '.git/rebase-merge\n' },
@@ -328,6 +345,7 @@ describe('verifyCompletedReplay', () => {
       ]),
       '/fixture',
       attempt,
+      filesystem,
     );
 
     expect(result).toEqual({

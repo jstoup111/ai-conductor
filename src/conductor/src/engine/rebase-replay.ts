@@ -1,7 +1,10 @@
-import { access } from 'node:fs/promises';
+import type * as fsp from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import type { GitRunner } from './rebase.js';
 import type { RebaseRecoveryAttempt } from './rebase-recovery-attempt.js';
+
+/** Filesystem inspection is supplied by the recovery owner. */
+export type ReplayFilesystem = Pick<typeof fsp, 'access'>;
 
 /** Immutable identities captured around one completed replay. */
 export interface ReplayIdentity {
@@ -125,6 +128,7 @@ export async function verifyCompletedReplay(
   git: GitRunner,
   projectRoot: string,
   attempt: RebaseRecoveryAttempt | undefined,
+  filesystem: ReplayFilesystem,
 ): Promise<CompletedReplayVerification> {
   if (!attempt) return { kind: 'blocked', reason: 'rebase recovery attempt evidence is missing or invalid' };
 
@@ -140,7 +144,7 @@ export async function verifyCompletedReplay(
     const path = state.stdout.trim();
     const absolute = isAbsolute(path) ? path : join(projectRoot, path);
     try {
-      await access(absolute);
+      await filesystem.access(absolute);
       return { kind: 'blocked', reason: 'rebase is still active' };
     } catch (error) {
       // Only a successful git-path lookup followed by ENOENT proves that the

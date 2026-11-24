@@ -766,7 +766,7 @@ describe('engine/rebase — HALT (FR-8)', () => {
     const seed = { preRebaseHead: 'a'.repeat(40), mergeBase: 'b'.repeat(40), target: 'c'.repeat(40) };
     const path = join(dir, REBASE_RECOVERY_ATTEMPT_PATH);
     await writeFile(path, `${JSON.stringify({ version: 1, generation: 'attempt-1', feature: 'feature', ...seed })}\n`);
-    const expected = await readRebaseRecoveryAttempt(dir);
+    const expected = await readRebaseRecoveryAttempt(dir, { readFile });
 
     await writeRebaseOutcomeHalt(dir, {
       kind: 'conflict_halt',

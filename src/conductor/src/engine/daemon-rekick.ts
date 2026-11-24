@@ -1,4 +1,4 @@
-import { readdir, readFile, rename, rm, writeFile, stat } from 'node:fs/promises';
+import { access, readdir, readFile, rename, rm, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   HALT_MARKER,
@@ -101,7 +101,7 @@ export async function evaluateRebaseRecoveryHalt(opts: {
     }
   | { kind: 'retained'; reason: string }
 > {
-  const attempt = await readRebaseRecoveryAttempt(opts.worktreePath);
+  const attempt = await readRebaseRecoveryAttempt(opts.worktreePath, { readFile });
   if (!attempt) return { kind: 'retained', reason: 'rebase recovery attempt evidence is missing or invalid' };
   if (attempt.feature !== opts.feature)
     return { kind: 'retained', reason: 'rebase recovery attempt feature does not match the halted feature' };
@@ -112,6 +112,7 @@ export async function evaluateRebaseRecoveryHalt(opts: {
     opts.git ?? makeGitRunner(opts.worktreePath),
     opts.worktreePath,
     attempt,
+    { access },
   );
   return verified.kind === 'accepted'
     ? {

@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import type * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ReplayIdentitySeed } from './rebase-replay.js';
+
+/** Filesystem read supplied by the composition path that inspects replay state. */
+export type RebaseRecoveryAttemptReader = Pick<typeof fsp, 'readFile'>;
+
+/** Filesystem writes supplied by the composition path that owns replay state. */
+export type RebaseRecoveryAttemptWriter = Pick<typeof fsp, 'mkdir' | 'readFile' | 'rename' | 'unlink' | 'writeFile'>;
 
 /** Durable, feature-local authority for one replay that may later be recovered. */
 export interface RebaseRecoveryAttempt extends ReplayIdentitySeed {
@@ -36,9 +42,12 @@ function validAttempt(value: unknown): value is RebaseRecoveryAttempt {
 }
 
 /** Missing, partial, or malformed evidence is deliberately not recoverable. */
-export async function readRebaseRecoveryAttempt(projectRoot: string): Promise<RebaseRecoveryAttempt | undefined> {
+export async function readRebaseRecoveryAttempt(
+  projectRoot: string,
+  filesystem: RebaseRecoveryAttemptReader,
+): Promise<RebaseRecoveryAttempt | undefined> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(join(projectRoot, REBASE_RECOVERY_ATTEMPT_PATH), 'utf8'));
+    const parsed: unknown = JSON.parse(await filesystem.readFile(join(projectRoot, REBASE_RECOVERY_ATTEMPT_PATH), 'utf8'));
     return validAttempt(parsed) ? parsed : undefined;
   } catch {
     return undefined;
@@ -49,6 +58,7 @@ export async function readRebaseRecoveryAttempt(projectRoot: string): Promise<Re
 export async function persistRebaseRecoveryAttempt(
   projectRoot: string,
   seed: ReplayIdentitySeed,
+  filesystem: RebaseRecoveryAttemptWriter,
   child?: number,
 ): Promise<
   | { kind: 'persisted'; attempt: RebaseRecoveryAttempt }
@@ -58,7 +68,7 @@ export async function persistRebaseRecoveryAttempt(
   let feature: unknown;
   try {
     feature = (
-      JSON.parse(await readFile(join(projectRoot, '.pipeline', 'conduct-state.json'), 'utf8')) as {
+      JSON.parse(await filesystem.readFile(join(projectRoot, '.pipeline', 'conduct-state.json'), 'utf8')) as {
         feature_desc?: unknown;
       }
     ).feature_desc;
@@ -82,12 +92,12 @@ export async function persistRebaseRecoveryAttempt(
   const path = join(projectRoot, REBASE_RECOVERY_ATTEMPT_PATH);
   const temporary = `${path}.${attempt.generation}.tmp`;
   try {
-    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    await writeFile(temporary, `${JSON.stringify(attempt)}\n`, 'utf8');
-    await rename(temporary, path);
+    await filesystem.mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await filesystem.writeFile(temporary, `${JSON.stringify(attempt)}\n`, 'utf8');
+    await filesystem.rename(temporary, path);
     return { kind: 'persisted', attempt };
   } catch (error) {
-    await unlink(temporary).catch(() => {});
+    await filesystem.unlink(temporary).catch(() => {});
     return { kind: 'failed', reason: error instanceof Error ? error.message : String(error) };
   }
 }

@@ -2597,7 +2597,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         await admitVerifiedRebaseRecoveries({
           listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
           worktreePath: (slug) => join(worktreeBase, slug),
-          readAttempt: (slug) => readRebaseRecoveryAttempt(join(worktreeBase, slug)),
+          readAttempt: (slug) => readRebaseRecoveryAttempt(join(worktreeBase, slug), { readFile }),
           verify: async (slug, _attempt, child) => {
             const result = await evaluateRebaseRecoveryHalt({
               worktreePath: join(worktreeBase, slug),
