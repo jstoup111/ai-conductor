@@ -1277,7 +1277,9 @@ export function attachFeatureEventRenderer(
 /** Filesystem composition stays at the daemon boundary, outside child OTel wiring. */
 function readDispatchSessionId(projectRoot: string, slug: string): string | undefined {
   try {
-    return readFileSync(join(projectRoot, '.worktrees', slug, '.pipeline', 'conduct-session-id'), 'utf8').trim() || undefined;
+    return (
+      readFileSync(join(projectRoot, '.worktrees', slug, '.pipeline', 'conduct-session-id'), 'utf8').trim() || undefined
+    );
   } catch {
     return undefined;
   }

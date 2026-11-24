@@ -41,11 +41,17 @@ describe('SpoolStore', () => {
           const handle = await open(path, flags);
           return {
             writeFile: handle.writeFile.bind(handle),
-            sync: async () => { events.push('sync'); await handle.sync(); },
+            sync: async () => {
+              events.push('sync');
+              await handle.sync();
+            },
             close: handle.close.bind(handle),
           };
         },
-        rename: async (source, destination) => { events.push('rename'); await rename(source, destination); },
+        rename: async (source, destination) => {
+          events.push('rename');
+          await rename(source, destination);
+        },
       }),
     });
     const body = Buffer.from([0x0a, 0x02, 0x08, 0x01]);
@@ -53,14 +59,20 @@ describe('SpoolStore', () => {
     const batch = await store.write('traces', body);
 
     expect({ events, bytes: await readFile(batch.path), name: batch.name.endsWith('.pb') }).toEqual({
-      events: ['sync', 'rename'], bytes: body, name: true,
+      events: ['sync', 'rename'],
+      bytes: body,
+      name: true,
     });
   });
 
   it('removes its temporary file and does not expose a final protobuf file when publication rename fails', async () => {
     const directory = await temporaryDirectory();
     const store = new SpoolStore(directory, {
-      filesystem: filesystem({ rename: vi.fn(async () => { throw new Error('rename failed'); }) }),
+      filesystem: filesystem({
+        rename: vi.fn(async () => {
+          throw new Error('rename failed');
+        }),
+      }),
     });
 
     await expect(store.write('metrics', Buffer.from('metric-batch'))).rejects.toThrow('rename failed');
@@ -101,8 +113,10 @@ describe('SpoolStore', () => {
     ]);
     const batches = await first.list('traces');
 
-    expect({ names: new Set(batches.map((batch) => batch.name)).size, bodies: await Promise.all(batches.map((batch) => first.read(batch))) })
-      .toEqual({ names: 2, bodies: expect.arrayContaining([Buffer.from('first-batch'), Buffer.from('second-batch')]) });
+    expect({
+      names: new Set(batches.map((batch) => batch.name)).size,
+      bodies: await Promise.all(batches.map((batch) => first.read(batch))),
+    }).toEqual({ names: 2, bodies: expect.arrayContaining([Buffer.from('first-batch'), Buffer.from('second-batch')]) });
   });
 
   it('lists only final protobuf batches oldest-first, deletes one, and totals remaining bytes', async () => {
@@ -176,10 +190,9 @@ describe('SpoolStore', () => {
       isProcessAlive: (pid) => pid !== 41_001,
     });
 
-    await expect(Promise.all([
-      store.write('traces', Buffer.from('span')),
-      store.write('metrics', Buffer.from('metric')),
-    ])).resolves.toHaveLength(2);
+    await expect(
+      Promise.all([store.write('traces', Buffer.from('span')), store.write('metrics', Buffer.from('metric'))]),
+    ).resolves.toHaveLength(2);
 
     await expect(Promise.all([store.list('traces'), store.list('metrics')])).resolves.toEqual([
       [expect.objectContaining({ size: 4 })],
@@ -215,7 +228,9 @@ describe('SpoolStore', () => {
       },
     });
 
-    await expect(store.write('traces', Buffer.from('span'))).rejects.toThrow('Timed out acquiring spool cap lock after 5ms');
+    await expect(store.write('traces', Buffer.from('span'))).rejects.toThrow(
+      'Timed out acquiring spool cap lock after 5ms',
+    );
   });
 
   it('reclaims an orphaned recovery lock so trace and metric writes both complete', async () => {
@@ -232,7 +247,9 @@ describe('SpoolStore', () => {
       capLockAcquireTimeoutMs: 10,
       lockNow: () => lockNow,
       isProcessAlive: () => false,
-      yieldForCapLock: async () => { lockNow += 1; },
+      yieldForCapLock: async () => {
+        lockNow += 1;
+      },
     });
 
     await expect(store.write('traces', Buffer.from('span'))).resolves.toMatchObject({ size: 4 });
@@ -264,8 +281,9 @@ describe('SpoolStore', () => {
       }),
     });
 
-    await (store as unknown as { reclaimOrphanedCapRecoveryLock(path: string): Promise<void> })
-      .reclaimOrphanedCapRecoveryLock(recoveryPath);
+    await (
+      store as unknown as { reclaimOrphanedCapRecoveryLock(path: string): Promise<void> }
+    ).reclaimOrphanedCapRecoveryLock(recoveryPath);
 
     await expect(readFile(recoveryPath)).resolves.toEqual(freshContents);
   });
@@ -280,7 +298,9 @@ describe('SpoolStore', () => {
       isProcessAlive: () => true,
     });
 
-    await expect(store.write('metrics', Buffer.from('metric'))).rejects.toThrow('Timed out acquiring spool cap lock after 5ms');
+    await expect(store.write('metrics', Buffer.from('metric'))).rejects.toThrow(
+      'Timed out acquiring spool cap lock after 5ms',
+    );
   });
 
   it('surfaces cap-lock release failures after attempting cleanup', async () => {
@@ -303,7 +323,9 @@ describe('SpoolStore', () => {
       }),
     });
 
-    await expect(store.write('traces', Buffer.from('span'))).rejects.toThrow('Spool cap lock operation or release failed');
+    await expect(store.write('traces', Buffer.from('span'))).rejects.toThrow(
+      'Spool cap lock operation or release failed',
+    );
     await expect(readdir(directory)).resolves.not.toContain('.cap.lock');
   });
 });

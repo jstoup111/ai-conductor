@@ -283,10 +283,7 @@ export class SpoolStore {
     }
     if (failure !== undefined || releaseFailures.length > 0) {
       throw new AggregateError(
-        [
-          ...(failure === undefined ? [] : [failure]),
-          ...releaseFailures,
-        ],
+        [...(failure === undefined ? [] : [failure]), ...releaseFailures],
         'Spool cap lock operation or release failed',
       );
     }
@@ -319,10 +316,7 @@ export class SpoolStore {
       let contents: Buffer;
       let metadata: { mtimeMs: number };
       try {
-        [contents, metadata] = await Promise.all([
-          this.filesystem.readFile(lockPath),
-          this.filesystem.stat(lockPath),
-        ]);
+        [contents, metadata] = await Promise.all([this.filesystem.readFile(lockPath), this.filesystem.stat(lockPath)]);
       } catch (error) {
         if (isMissing(error)) {
           reclaimed = true;
@@ -359,10 +353,7 @@ export class SpoolStore {
     }
     if (failure !== undefined || releaseFailures.length > 0) {
       throw new AggregateError(
-        [
-          ...(failure === undefined ? [] : [failure]),
-          ...releaseFailures,
-        ],
+        [...(failure === undefined ? [] : [failure]), ...releaseFailures],
         'Spool cap lock recovery failed',
       );
     }
