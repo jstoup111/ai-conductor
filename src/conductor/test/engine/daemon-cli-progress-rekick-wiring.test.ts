@@ -47,13 +47,17 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 describe('T14 — daemon-cli wires the real progress-gated re-kick predicate into runDaemon deps', () => {
-  // Covers: task:4
-  it('keeps an evidenced-recovery halt when its durable replay attempt is absent', async () => {
+  // Covers: task:4, task:rem-prd-audit-5
+  it('reports a missing recovery attempt, retains the halt, and spends no build attempts across repeated evaluation', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'verified-rebase-recovery-wiring-'));
     const worktreeBase = join(projectRoot, '.worktrees');
     const slug = 'recovery';
     const pipeline = join(worktreeBase, slug, '.pipeline');
+    const logs: string[] = [];
+    const originalConsoleLog = console.log;
+    let buildAttempts = 0;
     try {
+      console.log = ((...args: unknown[]) => logs.push(args.map(String).join(' '))) as typeof console.log;
       await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
       await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), '');
       await mkdir(pipeline, { recursive: true });
@@ -68,7 +72,12 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
         probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
         runHaltClassMigration: async () => worktreeBase,
-        workSource: { discover: async () => [] },
+        workSource: {
+          discover: async () => {
+            buildAttempts += 1;
+            return [];
+          },
+        },
         watch: false,
         runDaemon: async (deps) => {
           captured = deps;
@@ -77,11 +86,20 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
       });
 
       await captured!.reconcileVerifiedRebaseRecoveries!();
+      await captured!.reconcileVerifiedRebaseRecoveries!();
+      expect(logs.filter((line) => line.includes('verified-rebase recovery: retained'))).toEqual([
+        expect.stringContaining('rebase recovery attempt evidence is missing or invalid'),
+        expect.stringContaining('rebase recovery attempt evidence is missing or invalid'),
+      ]);
+      // The recovery hook is only allowed to make a verified feature eligible;
+      // absent evidence must retain it rather than run the scheduler again.
+      expect(buildAttempts).toBe(0);
       await expect(readFile(join(pipeline, 'HALT'), 'utf8')).resolves.toContain(
         'completed rebase requires verification',
       );
       await expect(readFile(join(pipeline, 'HALT.class'), 'utf8')).resolves.toBe('rebase-recovery\n');
     } finally {
+      console.log = originalConsoleLog;
       await rm(projectRoot, { recursive: true, force: true });
     }
   });
