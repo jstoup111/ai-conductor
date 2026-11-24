@@ -204,7 +204,10 @@ export async function admitVerifiedRebaseRecoveries(deps: VerifiedRebaseRecovery
       if ((await deps.readHaltClass(slug)).trim() !== 'rebase-recovery') continue;
 
       const expected = await deps.readAttempt(slug);
-      if (!expected) continue;
+      if (!expected) {
+        deps.log?.(`verified-rebase ${slug}: retained — rebase recovery attempt evidence is missing or invalid`);
+        continue;
+      }
       const expectedHead = await deps.readHead(slug);
       const expectedChild = await deps.readExecutionChild(slug);
       const verification = await deps.verify(slug, expected, expectedChild);

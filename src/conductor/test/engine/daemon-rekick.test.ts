@@ -1908,6 +1908,41 @@ describe('admitVerifiedRebaseRecoveries', () => {
     target: 'c'.repeat(40),
   };
 
+  // Covers: S1.2, task:rem-prd-audit-5
+  it('reports a missing recovery attempt and spends no dispatch attempts on repeated maintenance', async () => {
+    const logs: string[] = [];
+    const verify = vi.fn();
+    const acquire = vi.fn();
+    const admit = vi.fn();
+    const run = () =>
+      admitVerifiedRebaseRecoveries({
+        listHaltedWorktrees: async () => ['feature'],
+        worktreePath: () => '/feature',
+        readAttempt: async () => undefined,
+        verify,
+        readHead: async () => 'd'.repeat(40),
+        readExecutionChild: async () => undefined,
+        isOperatorParked: async () => false,
+        readHaltClass: async () => 'rebase-recovery',
+        readHaltGeneration: async () => 'g1',
+        acquireFeatureDispatchLease: acquire,
+        recheckScheduler: async () => true,
+        admit,
+        log: (message) => logs.push(message),
+      });
+
+    await expect(run()).resolves.toEqual([]);
+    await expect(run()).resolves.toEqual([]);
+
+    expect(logs).toEqual([
+      'verified-rebase feature: retained — rebase recovery attempt evidence is missing or invalid',
+      'verified-rebase feature: retained — rebase recovery attempt evidence is missing or invalid',
+    ]);
+    expect(verify).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalled();
+    expect(admit).not.toHaveBeenCalled();
+  });
+
   // Covers: task:3
   it('keeps parks and replacement ownership that race verification from reaching admission', async () => {
     let parked = false;
