@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-24T13:35:38.378Z
 Slug: newer-engine-child-events-vanish-from-otel-when-th
 Class: needs-human
 Halting step: unknown
