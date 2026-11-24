@@ -1,6 +1,7 @@
-// Covers: task:4, task:6, task:14, task:15, task:16, task:31, task:rem-prd-audit-rem-vg-4
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+// Covers: task:4, task:6, task:7, task:11, task:14, task:15, task:16, task:31, task:rem-prd-audit-rem-vg-4
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -15,6 +16,9 @@ import { installDaemonBotCoAuthor, withDaemonCoAuthorTrailer } from '../../src/e
 import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
 import { parseShippedRecord } from '../../src/engine/shipped-record.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { startChildOtelProjection } from '../../src/engine/otel/child-otel.js';
+import { wireDaemonOtel } from '../../src/engine/otel/wire.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
@@ -564,6 +568,104 @@ describe('executor child entrypoint', () => {
     expect(port.sent[projection]).toEqual({ kind: 'otel-projection', started: false });
     expect(projection).toBeGreaterThanOrEqual(0);
     expect(projection).toBeLessThan(firstFeatureEvent);
+  });
+
+  it('flushes the child root span as terminated on SIGTERM before its executor exits', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-sigterm-'));
+    const worktree = join(root, '.worktrees', order.slug);
+    const port = new FakePort();
+    let releaseRun!: () => void;
+    const output = join(worktree, '.pipeline', 'child-otel.jsonl');
+    const done = runExecutorChild(port, {
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => {
+        await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
+        await writeFile(join(worktree, '.ai-conductor', 'config.yml'), `otel:\n  exporter: file\n  file: ${output}\n`);
+        return { path: worktree };
+      },
+      run: async ({ events }) => {
+        await events.emit({ type: 'step_started', step: 'build', index: 1 });
+        await new Promise<void>((resolve) => {
+          releaseRun = resolve;
+        });
+        return { slug: order.slug, status: 'done' };
+      },
+    });
+
+    port.dispatch({
+      kind: 'work-order',
+      order,
+      otelProjection: { trace: { runId: 'run', project: root, branch: 'feat/daemon-feature', harnessVersion: '1.2.3' } },
+    });
+    await vi.waitFor(() => expect(releaseRun).toBeTypeOf('function'));
+    process.emit('SIGTERM');
+    await vi.waitFor(async () => expect(await readFile(output, 'utf8')).toContain('conductor.run.outcome'));
+    releaseRun();
+    await done;
+
+    await expect(readFile(output, 'utf8')).resolves.toContain('terminated');
+    expect(port.sent).toContainEqual(expect.objectContaining({ kind: 'outcome' }));
+  });
+
+  it('drains an accepted child span batch from the main-root spool while keeping its gate verdict off the supervisor bus', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-spool-handoff-'));
+    vi.stubEnv('AI_CONDUCTOR_OTEL_SMOKE', '1');
+    const slug = 'skewed-child';
+    const worktree = join(root, '.worktrees', slug);
+    const received: string[] = [];
+    let acceptTraces = false;
+    const server = createServer((request, response) => {
+      received.push(request.url ?? '');
+      request.resume();
+      response.writeHead(request.url === '/v1/traces' && !acceptTraces ? 503 : 200).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('expected local OTLP endpoint');
+    const endpoint = `http://127.0.0.1:${address.port}`;
+    const rootEvents = new ConductorEventEmitter();
+    const supervisorGateVerdicts: unknown[] = [];
+    rootEvents.on('gate_verdict', (event) => supervisorGateVerdicts.push(event));
+    const daemon = wireDaemonOtel(
+      { otel: { exporter: 'otlp', endpoint, spool: { enabled: true } } },
+      { mainRoot: root, project: root, projectName: 'test', rootEvents },
+    );
+    if (!daemon) throw new Error('expected daemon OTel');
+    daemon.acceptedChildren.add(slug);
+    const meterHandler = daemon.instrumentHost.forDispatch(slug);
+    const childEvents = new ConductorEventEmitter();
+    const childLedger = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), childEvents);
+    childLedger.start();
+    const child = startChildOtelProjection({
+      config: { otel: { exporter: 'otlp', endpoint, spool: { enabled: true } } },
+      trace: { runId: 'child-run', project: root, branch: `feat/daemon-${slug}`, harnessVersion: '1.2.3' },
+      engineVersionId: VERSION,
+      slug,
+      mainRoot: join(worktree, '../..'),
+      events: childEvents,
+      sendMeter: (message) => meterHandler.handle(message),
+    });
+    try {
+      await childEvents.emit({ type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'accepted' });
+      await child.stop();
+      await vi.waitFor(async () => expect(await readdir(join(root, '.daemon', 'otel-spool', 'traces'))).not.toHaveLength(0));
+      acceptTraces = true;
+      await vi.waitFor(() => expect(received).toContain('/v1/traces'), { timeout: 5_000 });
+      await daemon.flush();
+      await vi.waitFor(() => expect(received).toContain('/v1/metrics'), { timeout: 5_000 });
+
+      expect({
+        supervisorGateVerdicts,
+        childLedger: await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8'),
+      }).toEqual({
+        supervisorGateVerdicts: [],
+        childLedger: expect.stringContaining('gate_verdict'),
+      });
+    } finally {
+      childLedger.stop();
+      await daemon.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('stops an in-flight child through its abort signal, retains feature state, and reports parked', async () => {

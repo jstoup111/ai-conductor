@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { link, mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type SpoolSignal = 'traces' | 'metrics';
@@ -33,7 +33,6 @@ interface SpoolFileHandle {
 
 /** Injectable filesystem boundary for durability and publication failure tests. */
 export interface SpoolFilesystem {
-  link(existingPath: string, newPath: string): Promise<void>;
   mkdir(path: string, options: { recursive: true; mode: number }): Promise<string | undefined>;
   open(path: string, flags: string): Promise<SpoolFileHandle>;
   readdir(path: string): Promise<string[]>;
@@ -53,18 +52,15 @@ export interface SpoolStoreOptions {
   lockNow?: () => number;
   /** Bound contention so an unavailable cap lock falls back to direct export. */
   capLockAcquireTimeoutMs?: number;
-  /** Treat a lock this old as abandoned even when its owner cannot be identified. */
-  capLockStaleAfterMs?: number;
   /** Injectable liveness probe for crash-recovery tests. */
   isProcessAlive?: (pid: number) => boolean;
   /** Injectable retry seam; production retries on the next event-loop turn. */
   yieldForCapLock?: () => Promise<void>;
 }
 
-const filesystem: SpoolFilesystem = { link, mkdir, open, readdir, readFile, rename, rm, stat };
+const filesystem: SpoolFilesystem = { mkdir, open, readdir, readFile, rename, rm, stat };
 const TEMPORARY_FILE_GRACE_MS = 60_000;
 const CAP_LOCK_ACQUIRE_TIMEOUT_MS = 1_000;
-const CAP_LOCK_STALE_AFTER_MS = 60_000;
 
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -88,15 +84,27 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function lockOwnerPid(contents: Buffer): number | undefined {
+interface LockOwner {
+  pid: number;
+  token: string;
+}
+
+function lockOwner(contents: Buffer): LockOwner | undefined {
   try {
     const parsed: unknown = JSON.parse(contents.toString('utf8'));
-    if (typeof parsed !== 'object' || parsed === null || !('pid' in parsed)) return undefined;
-    const pid = (parsed as { pid?: unknown }).pid;
-    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : undefined;
+    if (typeof parsed !== 'object' || parsed === null || !('pid' in parsed) || !('token' in parsed)) return undefined;
+    const { pid, token } = parsed as { pid?: unknown; token?: unknown };
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 && typeof token === 'string' && token.length > 0
+      ? { pid, token }
+      : undefined;
   } catch {
     return undefined;
   }
+}
+
+function isOwner(contents: Buffer, owner: LockOwner): boolean {
+  const current = lockOwner(contents);
+  return current?.pid === owner.pid && current.token === owner.token;
 }
 
 /**
@@ -111,7 +119,6 @@ export class SpoolStore {
   private readonly lockNow: () => number;
   private readonly maxBytes: number | undefined;
   private readonly capLockAcquireTimeoutMs: number;
-  private readonly capLockStaleAfterMs: number;
   private readonly processIsAlive: (pid: number) => boolean;
   private readonly yieldForCapLock: () => Promise<void>;
 
@@ -126,7 +133,6 @@ export class SpoolStore {
     this.lockNow = options.lockNow ?? Date.now;
     this.maxBytes = options.maxBytes;
     this.capLockAcquireTimeoutMs = options.capLockAcquireTimeoutMs ?? CAP_LOCK_ACQUIRE_TIMEOUT_MS;
-    this.capLockStaleAfterMs = options.capLockStaleAfterMs ?? CAP_LOCK_STALE_AFTER_MS;
     this.processIsAlive = options.isProcessAlive ?? isProcessAlive;
     this.yieldForCapLock = options.yieldForCapLock ?? yieldForCapLock;
   }
@@ -243,13 +249,19 @@ export class SpoolStore {
   private async withCapLock<T>(operation: () => Promise<T>): Promise<T> {
     const lockPath = join(this.root, '.cap.lock');
     let lock: SpoolFileHandle;
+    let owner: LockOwner;
     const deadline = this.lockNow() + this.capLockAcquireTimeoutMs;
     for (;;) {
       if (this.lockNow() >= deadline) {
         throw new Error(`Timed out acquiring spool cap lock after ${this.capLockAcquireTimeoutMs}ms`);
       }
+      if (await this.reclaimAbandonedCapRecoveryLocks(lockPath)) {
+        await this.yieldForCapLock();
+        continue;
+      }
       try {
         lock = await this.filesystem.open(lockPath, 'wx');
+        owner = { pid: this.pid, token: this.randomBytes(16).toString('hex') };
         break;
       } catch (error) {
         if (!alreadyExists(error)) throw error;
@@ -264,7 +276,7 @@ export class SpoolStore {
     let value: T | undefined;
     let failure: unknown;
     try {
-      await lock.writeFile(Buffer.from(JSON.stringify({ pid: this.pid, createdAt: this.lockNow() })));
+      await lock.writeFile(Buffer.from(JSON.stringify({ ...owner, createdAt: this.lockNow() })));
       await lock.sync();
       value = await operation();
     } catch (error) {
@@ -277,7 +289,7 @@ export class SpoolStore {
       releaseFailures.push(error);
     }
     try {
-      await this.filesystem.rm(lockPath, { force: true });
+      await this.removeOwnedLock(lockPath, owner);
     } catch (error) {
       releaseFailures.push(error);
     }
@@ -290,15 +302,27 @@ export class SpoolStore {
     return value as T;
   }
 
-  /** Atomically moves an orphan aside; another reclaimer can never unlink a new owner. */
+  /**
+   * Every recovery attempt is keyed by the cap owner's immutable token. That
+   * makes one reclaimer the sole actor allowed to remove that incarnation;
+   * later cap owners have another token and are never addressed by stale work.
+   */
   private async reclaimAbandonedCapLock(lockPath: string): Promise<boolean> {
-    const recoveryPath = `${lockPath}.reclaim`;
+    let observed: LockOwner;
+    try {
+      observed = lockOwner(await this.filesystem.readFile(lockPath))!;
+    } catch (error) {
+      if (isMissing(error)) return true;
+      throw error;
+    }
+    if (observed === undefined || this.processIsAlive(observed.pid)) return false;
+
+    const recoveryPath = `${lockPath}.reclaim.${observed.token}`;
     let recovery: SpoolFileHandle;
+    const recoveryOwner = { pid: this.pid, token: this.randomBytes(16).toString('hex') };
     try {
       recovery = await this.filesystem.open(recoveryPath, 'wx');
     } catch (error) {
-      // One reclaimer owns the check-and-move window. The writer will retry,
-      // then either see its result or time out into direct-send fallback.
       if (alreadyExists(error)) {
         await this.reclaimOrphanedCapRecoveryLock(recoveryPath);
         return false;
@@ -309,32 +333,21 @@ export class SpoolStore {
     let reclaimed = false;
     let failure: unknown;
     try {
-      // A crash can leave this lock behind before its owner record reaches
-      // disk. Its mtime remains a recovery fallback for that window.
-      await recovery.writeFile(Buffer.from(JSON.stringify({ pid: this.pid, createdAt: this.lockNow() })));
+      await recovery.writeFile(Buffer.from(JSON.stringify({ ...recoveryOwner, createdAt: this.lockNow() })));
       await recovery.sync();
-      let contents: Buffer;
-      let metadata: { mtimeMs: number };
       try {
-        [contents, metadata] = await Promise.all([this.filesystem.readFile(lockPath), this.filesystem.stat(lockPath)]);
+        const current = await this.filesystem.readFile(lockPath);
+        // A recovery marker blocks new contenders before this unlink. Its
+        // owner-keyed name also means no second stale reclaimer can repeat it.
+        if (isOwner(current, observed) && !this.processIsAlive(observed.pid)) {
+          await this.removeOwnedLock(lockPath, observed);
+          reclaimed = true;
+        }
       } catch (error) {
         if (isMissing(error)) {
           reclaimed = true;
-          contents = Buffer.alloc(0);
-          metadata = { mtimeMs: 0 };
         } else {
           throw error;
-        }
-      }
-      if (!reclaimed) {
-        const ownerPid = lockOwnerPid(contents);
-        const ownerDead = ownerPid !== undefined && !this.processIsAlive(ownerPid);
-        const tooOld = this.lockNow() - metadata.mtimeMs >= this.capLockStaleAfterMs;
-        if (ownerDead || tooOld) {
-          const abandonedPath = `${lockPath}.${this.pid}.${this.randomBytes(4).toString('hex')}.abandoned`;
-          await this.filesystem.rename(lockPath, abandonedPath);
-          await this.filesystem.rm(abandonedPath, { force: true });
-          reclaimed = true;
         }
       }
     } catch (error) {
@@ -347,7 +360,7 @@ export class SpoolStore {
       releaseFailures.push(error);
     }
     try {
-      await this.filesystem.rm(recoveryPath, { force: true });
+      await this.removeOwnedLock(recoveryPath, recoveryOwner);
     } catch (error) {
       releaseFailures.push(error);
     }
@@ -360,49 +373,53 @@ export class SpoolStore {
     return reclaimed;
   }
 
-  /** A crashed reclaimer must not permanently prevent later cap-lock recovery. */
+  /** A crashed reclaimer can be removed only when its own recorded owner is dead. */
   private async reclaimOrphanedCapRecoveryLock(recoveryPath: string): Promise<void> {
-    const abandonedPath = `${recoveryPath}.${this.pid}.${this.randomBytes(4).toString('hex')}.abandoned`;
-    try {
-      // Claim the recovery record before inspecting it. Inspecting first lets
-      // another contender replace the stale record between our check and move,
-      // which would let us remove that new contender's active recovery lock.
-      await this.filesystem.rename(recoveryPath, abandonedPath);
-    } catch (error) {
-      // Another reclaimer finished before our move. Retrying the cap lock is
-      // safe and may now acquire it directly.
-      if (isMissing(error)) return;
-      throw error;
-    }
-
     let contents: Buffer;
-    let metadata: { mtimeMs: number };
     try {
-      [contents, metadata] = await Promise.all([
-        this.filesystem.readFile(abandonedPath),
-        this.filesystem.stat(abandonedPath),
-      ]);
+      contents = await this.filesystem.readFile(recoveryPath);
     } catch (error) {
       if (isMissing(error)) return;
       throw error;
     }
-    const ownerPid = lockOwnerPid(contents);
-    const ownerDead = ownerPid !== undefined && !this.processIsAlive(ownerPid);
-    const tooOld = this.lockNow() - metadata.mtimeMs >= this.capLockStaleAfterMs;
-    if (ownerDead || tooOld) {
-      await this.filesystem.rm(abandonedPath, { force: true });
-      return;
-    }
+    const owner = lockOwner(contents);
+    if (owner !== undefined && !this.processIsAlive(owner.pid)) await this.removeOwnedLock(recoveryPath, owner);
+  }
 
-    // Do not overwrite a recovery lock a new contender created after the
-    // move. A hard link restores the claimed active record only when the
-    // recovery slot is still vacant.
+  /** Returns true while a live or unproven recovery marker owns the gap. */
+  private async reclaimAbandonedCapRecoveryLocks(lockPath: string): Promise<boolean> {
+    let names: string[];
     try {
-      await this.filesystem.link(abandonedPath, recoveryPath);
+      names = await this.filesystem.readdir(this.root);
     } catch (error) {
-      if (!alreadyExists(error)) throw error;
+      if (isMissing(error)) return false;
+      throw error;
     }
-    await this.filesystem.rm(abandonedPath, { force: true });
+    const prefix = `${lockPath.split('/').pop()}.reclaim.`;
+    let blocked = false;
+    for (const name of names.filter((candidate) => candidate.startsWith(prefix))) {
+      const path = join(this.root, name);
+      await this.reclaimOrphanedCapRecoveryLock(path);
+      try {
+        const owner = lockOwner(await this.filesystem.readFile(path));
+        if (owner === undefined || this.processIsAlive(owner.pid)) blocked = true;
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
+    }
+    return blocked;
+  }
+
+  /** Never remove a reused path unless it still contains this caller's token. */
+  private async removeOwnedLock(path: string, owner: LockOwner): Promise<void> {
+    let contents: Buffer;
+    try {
+      contents = await this.filesystem.readFile(path);
+    } catch (error) {
+      if (isMissing(error)) return;
+      throw error;
+    }
+    if (isOwner(contents, owner)) await this.filesystem.rm(path, { force: true });
   }
 
   private async allBatches(): Promise<SpoolBatch[]> {

@@ -1,6 +1,6 @@
 // Covers: task:3, task:4, task:rem-prd-audit-4a, task:rem-prd-audit-4b
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { link, mkdtemp, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SpoolStore, type SpoolFilesystem } from '../../../src/engine/otel/spool-store.js';
@@ -15,7 +15,6 @@ async function temporaryDirectory(): Promise<string> {
 
 function filesystem(overrides: Partial<SpoolFilesystem> = {}): SpoolFilesystem {
   return {
-    link,
     mkdir: (path, options) => import('node:fs/promises').then((fs) => fs.mkdir(path, options)),
     open,
     readdir,
@@ -25,6 +24,10 @@ function filesystem(overrides: Partial<SpoolFilesystem> = {}): SpoolFilesystem {
     stat,
     ...overrides,
   };
+}
+
+function owner(pid: number, token: string): string {
+  return JSON.stringify({ pid, token, createdAt: 0 });
 }
 
 afterEach(async () => {
@@ -184,7 +187,7 @@ describe('SpoolStore', () => {
   it('reclaims a cap lock held by a dead writer so trace and metric writers both complete', async () => {
     const directory = await temporaryDirectory();
     await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, '.cap.lock'), JSON.stringify({ pid: 41_001, createdAt: Date.now() }));
+    await writeFile(join(directory, '.cap.lock'), owner(41_001, 'dead-cap-owner'));
     const store = new SpoolStore(directory, {
       maxBytes: 1024,
       isProcessAlive: (pid) => pid !== 41_001,
@@ -201,22 +204,30 @@ describe('SpoolStore', () => {
     await expect(readdir(directory)).resolves.not.toContain('.cap.lock');
   });
 
-  it('reclaims an old cap lock when its owner record is missing or corrupt', async () => {
+  it('bounds acquisition when a cap lock has no provable owner', async () => {
     const directory = await temporaryDirectory();
     const lockPath = join(directory, '.cap.lock');
     await mkdir(directory, { recursive: true });
     await writeFile(lockPath, 'incomplete owner record');
     await utimes(lockPath, (Date.now() - 60_001) / 1_000, (Date.now() - 60_001) / 1_000);
-    const store = new SpoolStore(directory, { maxBytes: 1024 });
+    let lockNow = 0;
+    const store = new SpoolStore(directory, {
+      maxBytes: 1024,
+      capLockAcquireTimeoutMs: 2,
+      lockNow: () => lockNow,
+      yieldForCapLock: async () => {
+        lockNow += 1;
+      },
+    });
 
-    await expect(store.write('traces', Buffer.from('span'))).resolves.toMatchObject({ size: 4 });
-    await expect(readdir(directory)).resolves.not.toContain('.cap.lock');
+    await expect(store.write('traces', Buffer.from('span'))).rejects.toThrow('Timed out acquiring spool cap lock after 2ms');
+    await expect(readFile(lockPath, 'utf8')).resolves.toBe('incomplete owner record');
   });
 
   it('does not retry acquisition after reclaiming a lock consumes its deadline', async () => {
     const directory = await temporaryDirectory();
     await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, '.cap.lock'), JSON.stringify({ pid: 41_002, createdAt: 0 }));
+    await writeFile(join(directory, '.cap.lock'), owner(41_002, 'expired-cap-owner'));
     let lockNow = 0;
     const store = new SpoolStore(directory, {
       maxBytes: 1024,
@@ -238,10 +249,9 @@ describe('SpoolStore', () => {
     await mkdir(directory, { recursive: true });
     let lockNow = 1_727_000_000_000;
     await Promise.all([
-      writeFile(join(directory, '.cap.lock'), JSON.stringify({ pid: 41_003, createdAt: 0 })),
-      writeFile(join(directory, '.cap.lock.reclaim'), ''),
+      writeFile(join(directory, '.cap.lock'), owner(41_003, 'dead-cap-owner')),
+      writeFile(join(directory, '.cap.lock.reclaim.dead-cap-owner'), owner(41_004, 'dead-reclaimer')),
     ]);
-    await utimes(join(directory, '.cap.lock.reclaim'), (lockNow - 60_001) / 1_000, (lockNow - 60_001) / 1_000);
     const store = new SpoolStore(directory, {
       maxBytes: 1024,
       capLockAcquireTimeoutMs: 10,
@@ -254,17 +264,16 @@ describe('SpoolStore', () => {
 
     await expect(store.write('traces', Buffer.from('span'))).resolves.toMatchObject({ size: 4 });
     await expect(store.write('metrics', Buffer.from('metric'))).resolves.toMatchObject({ size: 6 });
-    await expect(readdir(directory)).resolves.not.toEqual(expect.arrayContaining(['.cap.lock', '.cap.lock.reclaim']));
+    await expect(readdir(directory)).resolves.not.toEqual(expect.arrayContaining(['.cap.lock', '.cap.lock.reclaim.dead-cap-owner']));
   });
 
   it('does not remove a fresh recovery lock created after it claims an orphan', async () => {
     const directory = await temporaryDirectory();
-    const recoveryPath = join(directory, '.cap.lock.reclaim');
-    const staleContents = Buffer.from(JSON.stringify({ pid: 41_004, createdAt: 0 }));
-    const freshContents = Buffer.from(JSON.stringify({ pid: 41_005, createdAt: Date.now() }));
+    const recoveryPath = join(directory, '.cap.lock.reclaim.abandoned-cap-owner');
+    const staleContents = Buffer.from(owner(41_004, 'stale-reclaimer'));
+    const freshContents = Buffer.from(owner(41_005, 'fresh-reclaimer'));
     await mkdir(directory, { recursive: true });
     await writeFile(recoveryPath, staleContents);
-    await utimes(recoveryPath, (Date.now() - 60_001) / 1_000, (Date.now() - 60_001) / 1_000);
     let replaced = false;
     const store = new SpoolStore(directory, {
       maxBytes: 1024,
@@ -288,10 +297,94 @@ describe('SpoolStore', () => {
     await expect(readFile(recoveryPath)).resolves.toEqual(freshContents);
   });
 
+  it('does not remove a successor cap lock when a stale reclaimer loses its observed owner', async () => {
+    const directory = await temporaryDirectory();
+    const capPath = join(directory, '.cap.lock');
+    const abandonedContents = Buffer.from(owner(41_006, 'abandoned-cap-owner'));
+    const successorContents = Buffer.from(owner(41_007, 'successor-cap-owner'));
+    await mkdir(directory, { recursive: true });
+    await writeFile(capPath, abandonedContents);
+    let replaced = false;
+    const store = new SpoolStore(directory, {
+      maxBytes: 1024,
+      pid: 41_008,
+      isProcessAlive: (pid) => pid === 41_007,
+      filesystem: filesystem({
+        readFile: async (path) => {
+          const contents = await readFile(path);
+          if (!replaced && path === capPath) {
+            replaced = true;
+            await writeFile(capPath, successorContents);
+          }
+          return contents;
+        },
+      }),
+    });
+
+    await (
+      store as unknown as { reclaimAbandonedCapLock(path: string): Promise<boolean> }
+    ).reclaimAbandonedCapLock(capPath);
+
+    await expect(readFile(capPath)).resolves.toEqual(successorContents);
+    await expect(readdir(directory)).resolves.not.toContain('.cap.lock.reclaim.abandoned-cap-owner');
+  });
+
+  it('serializes two reclaimers through one abandoned cap-lock incarnation and preserves the byte cap', async () => {
+    const directory = await temporaryDirectory();
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, '.cap.lock'), owner(41_009, 'dead-cap-owner'));
+    let activeCriticalSections = 0;
+    let maximumCriticalSections = 0;
+    let releaseFirst!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstPublication = true;
+    const criticalFilesystem = filesystem({
+      rename: async (source, destination) => {
+        if (destination.endsWith('.pb')) {
+          activeCriticalSections += 1;
+          maximumCriticalSections = Math.max(maximumCriticalSections, activeCriticalSections);
+          if (firstPublication) {
+            firstPublication = false;
+            await firstEntered;
+          }
+          activeCriticalSections -= 1;
+        }
+        await rename(source, destination);
+      },
+    });
+    const first = new SpoolStore(directory, {
+      maxBytes: 12,
+      pid: 41_010,
+      randomBytes: (size) => Buffer.alloc(size, 1),
+      isProcessAlive: (pid) => pid !== 41_009,
+      filesystem: criticalFilesystem,
+    });
+    const second = new SpoolStore(directory, {
+      maxBytes: 12,
+      pid: 41_011,
+      randomBytes: (size) => Buffer.alloc(size, 2),
+      isProcessAlive: (pid) => pid !== 41_009,
+      filesystem: criticalFilesystem,
+    });
+
+    const firstWrite = first.write('traces', Buffer.alloc(8));
+    await vi.waitFor(() => expect(activeCriticalSections).toBe(1));
+    const secondWrite = second.write('metrics', Buffer.alloc(8));
+    releaseFirst();
+    await Promise.all([firstWrite, secondWrite]);
+
+    expect({ maximumCriticalSections, totalBytes: await first.totalBytes() }).toEqual({
+      maximumCriticalSections: 1,
+      totalBytes: 8,
+    });
+  });
+
   it('rejects a capped write when a live cap lock remains held past its acquisition deadline', async () => {
     const directory = await temporaryDirectory();
     await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, '.cap.lock'), JSON.stringify({ pid: 41_002, createdAt: Date.now() }));
+    await writeFile(join(directory, '.cap.lock'), owner(41_002, 'live-cap-owner'));
     const store = new SpoolStore(directory, {
       maxBytes: 1024,
       capLockAcquireTimeoutMs: 5,
