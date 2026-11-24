@@ -494,7 +494,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
         sha: parseCommitSha('f'.repeat(40))!,
         roundId: parseRoundId('r1')!,
         owner: parseChildId(1)!,
-        placements: [{ child: parseChildId(1)!, paths: ['src/feature.ts'], reason: 'owner' }],
+        placements: [
+          { child: parseChildId(1)!, paths: ['src/feature.ts'], reason: 'owner' },
+          { child: 'leaf', paths: ['src/retained-on-leaf.ts'], reason: 'introduced-above-owner' },
+        ],
       },
     ],
   },

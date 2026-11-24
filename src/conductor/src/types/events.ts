@@ -2358,7 +2358,8 @@ type ConductorEventBody =
         sha: CommitSha;
         roundId: RoundId;
         owner: ChildId;
-        placements: Array<{ child: ChildId; paths: string[]; reason: 'owner' | 'introduced-above-owner' }>;
+        /** `leaf` is a valid retained placement when no child can accept a hunk. */
+        placements: Array<{ child: ChildId | 'leaf'; paths: string[]; reason: 'owner' | 'introduced-above-owner' }>;
       }>;
     }
   | {

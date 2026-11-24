@@ -1153,17 +1153,11 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
           sha: source.sha,
           roundId: source.roundId,
           owner: source.owner,
-          placements: source.parts.flatMap((part) =>
-            part.child === 'leaf'
-              ? []
-              : [
-                  {
-                    child: part.child,
-                    paths: part.kind === 'hunks' ? [part.path] : [],
-                    reason: part.reason,
-                  },
-                ],
-          ),
+          placements: source.parts.map((part) => ({
+            child: part.child,
+            paths: part.kind === 'hunks' ? [part.path] : [],
+            reason: part.reason,
+          })),
         })),
       });
 
