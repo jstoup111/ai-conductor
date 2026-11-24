@@ -1,6 +1,6 @@
 // Covers: task:3, task:4, task:rem-prd-audit-4a, task:rem-prd-audit-4b
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, open, readdir, readFile, rename, rm, utimes, writeFile } from 'node:fs/promises';
+import { link, mkdtemp, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SpoolStore, type SpoolFilesystem } from '../../../src/engine/otel/spool-store.js';
@@ -15,13 +15,14 @@ async function temporaryDirectory(): Promise<string> {
 
 function filesystem(overrides: Partial<SpoolFilesystem> = {}): SpoolFilesystem {
   return {
+    link,
     mkdir: (path, options) => import('node:fs/promises').then((fs) => fs.mkdir(path, options)),
     open,
     readdir,
     readFile,
     rename,
     rm,
-    stat: (path) => import('node:fs/promises').then((fs) => fs.stat(path)),
+    stat,
     ...overrides,
   };
 }
@@ -237,6 +238,36 @@ describe('SpoolStore', () => {
     await expect(store.write('traces', Buffer.from('span'))).resolves.toMatchObject({ size: 4 });
     await expect(store.write('metrics', Buffer.from('metric'))).resolves.toMatchObject({ size: 6 });
     await expect(readdir(directory)).resolves.not.toEqual(expect.arrayContaining(['.cap.lock', '.cap.lock.reclaim']));
+  });
+
+  it('does not remove a fresh recovery lock created after it claims an orphan', async () => {
+    const directory = await temporaryDirectory();
+    const recoveryPath = join(directory, '.cap.lock.reclaim');
+    const staleContents = Buffer.from(JSON.stringify({ pid: 41_004, createdAt: 0 }));
+    const freshContents = Buffer.from(JSON.stringify({ pid: 41_005, createdAt: Date.now() }));
+    await mkdir(directory, { recursive: true });
+    await writeFile(recoveryPath, staleContents);
+    await utimes(recoveryPath, (Date.now() - 60_001) / 1_000, (Date.now() - 60_001) / 1_000);
+    let replaced = false;
+    const store = new SpoolStore(directory, {
+      maxBytes: 1024,
+      isProcessAlive: (pid) => pid === 41_005,
+      filesystem: filesystem({
+        readFile: async (path) => {
+          const contents = await readFile(path);
+          if (!replaced && path.includes('.cap.lock.reclaim')) {
+            replaced = true;
+            await writeFile(recoveryPath, freshContents);
+          }
+          return contents;
+        },
+      }),
+    });
+
+    await (store as unknown as { reclaimOrphanedCapRecoveryLock(path: string): Promise<void> })
+      .reclaimOrphanedCapRecoveryLock(recoveryPath);
+
+    await expect(readFile(recoveryPath)).resolves.toEqual(freshContents);
   });
 
   it('rejects a capped write when a live cap lock remains held past its acquisition deadline', async () => {

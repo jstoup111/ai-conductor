@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
+import { link, mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type SpoolSignal = 'traces' | 'metrics';
@@ -33,6 +33,7 @@ interface SpoolFileHandle {
 
 /** Injectable filesystem boundary for durability and publication failure tests. */
 export interface SpoolFilesystem {
+  link(existingPath: string, newPath: string): Promise<void>;
   mkdir(path: string, options: { recursive: true; mode: number }): Promise<string | undefined>;
   open(path: string, flags: string): Promise<SpoolFileHandle>;
   readdir(path: string): Promise<string[]>;
@@ -60,7 +61,7 @@ export interface SpoolStoreOptions {
   yieldForCapLock?: () => Promise<void>;
 }
 
-const filesystem: SpoolFilesystem = { mkdir, open, readdir, readFile, rename, rm, stat };
+const filesystem: SpoolFilesystem = { link, mkdir, open, readdir, readFile, rename, rm, stat };
 const TEMPORARY_FILE_GRACE_MS = 60_000;
 const CAP_LOCK_ACQUIRE_TIMEOUT_MS = 1_000;
 const CAP_LOCK_STALE_AFTER_MS = 60_000;
@@ -370,32 +371,45 @@ export class SpoolStore {
 
   /** A crashed reclaimer must not permanently prevent later cap-lock recovery. */
   private async reclaimOrphanedCapRecoveryLock(recoveryPath: string): Promise<void> {
+    const abandonedPath = `${recoveryPath}.${this.pid}.${this.randomBytes(4).toString('hex')}.abandoned`;
+    try {
+      // Claim the recovery record before inspecting it. Inspecting first lets
+      // another contender replace the stale record between our check and move,
+      // which would let us remove that new contender's active recovery lock.
+      await this.filesystem.rename(recoveryPath, abandonedPath);
+    } catch (error) {
+      // Another reclaimer finished before our move. Retrying the cap lock is
+      // safe and may now acquire it directly.
+      if (isMissing(error)) return;
+      throw error;
+    }
+
     let contents: Buffer;
     let metadata: { mtimeMs: number };
     try {
       [contents, metadata] = await Promise.all([
-        this.filesystem.readFile(recoveryPath),
-        this.filesystem.stat(recoveryPath),
+        this.filesystem.readFile(abandonedPath),
+        this.filesystem.stat(abandonedPath),
       ]);
     } catch (error) {
-      // Another reclaimer finished before our inspection. Retrying the cap
-      // lock is safe and may now acquire it directly.
       if (isMissing(error)) return;
       throw error;
     }
     const ownerPid = lockOwnerPid(contents);
     const ownerDead = ownerPid !== undefined && !this.processIsAlive(ownerPid);
     const tooOld = this.lockNow() - metadata.mtimeMs >= this.capLockStaleAfterMs;
-    if (!ownerDead && !tooOld) return;
+    if (ownerDead || tooOld) {
+      await this.filesystem.rm(abandonedPath, { force: true });
+      return;
+    }
 
-    const abandonedPath = `${recoveryPath}.${this.pid}.${this.randomBytes(4).toString('hex')}.abandoned`;
+    // Do not overwrite a recovery lock a new contender created after the
+    // move. A hard link restores the claimed active record only when the
+    // recovery slot is still vacant.
     try {
-      await this.filesystem.rename(recoveryPath, abandonedPath);
+      await this.filesystem.link(abandonedPath, recoveryPath);
     } catch (error) {
-      // Losing the move race means no currently-live recovery lock was
-      // removed; retry the normal acquisition path.
-      if (isMissing(error)) return;
-      throw error;
+      if (!alreadyExists(error)) throw error;
     }
     await this.filesystem.rm(abandonedPath, { force: true });
   }
