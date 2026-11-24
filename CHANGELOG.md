@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-11-23
+## [1.7.0] - 2026-11-24
 
 ### Added
 
@@ -287,6 +287,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A BUILD attempt that finishes with uncommitted work is no longer failed and retried on a dirty tree; the engine commits that work (trailered with the tasks the builder declared active) before the completion check, reports it as a `build_uncommitted_work` event and daemon log line, and falls back to the previous uncommitted-paths failure with the commit error only when its own commit is refused. ([implementation PR #3762](https://github.com/jstoup111/ai-conductor/pull/3762)).
 - Stacked routed features now run required leaf gates before whole-feature validation. ([implementation PR #3755](https://github.com/jstoup111/ai-conductor/pull/3755)).
 - Daemon telemetry retains child shutdown events and flushes each dispatch metrics before the scheduler records completion. ([implementation PR #3690](https://github.com/jstoup111/ai-conductor/pull/3690)).
+- Validation runs keep generated residue out of product worktrees. ([implementation PR #3713](https://github.com/jstoup111/ai-conductor/pull/3713)).
 
 ## Migration
 
