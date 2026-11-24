@@ -1,6 +1,6 @@
 // Covers: task:5, task:6, task:12
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BasicTracerProvider, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
@@ -517,6 +517,42 @@ describe('spooling exporters', () => {
       { code: ExportResultCode.SUCCESS },
     ]);
     expect(warnings).toEqual([`[otel] spool write failed; sending directly: spool write failed: ${code}`]);
+  });
+
+  it('keeps accepting child-projected spans through direct export when a live cap lock times out', async () => {
+    const directory = await temporaryDirectory();
+    await writeFile(join(directory, '.cap.lock'), JSON.stringify({ pid: 41_003, createdAt: Date.now() }));
+    const store = new SpoolStore(directory, {
+      maxBytes: 1024,
+      capLockAcquireTimeoutMs: 5,
+      isProcessAlive: () => true,
+    });
+    const events = new ConductorEventEmitter();
+    const warnings: string[] = [];
+    const directBatches: ReadableSpan[][] = [];
+    events.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') warnings.push(event.error);
+    });
+    const exporter = new SpoolingSpanExporter(store, {
+      export(spans, callback): void {
+        directBatches.push(spans);
+        callback({ code: ExportResultCode.SUCCESS });
+      },
+      async shutdown(): Promise<void> {},
+      async forceFlush(): Promise<void> {},
+    }, events);
+    const provider = new BasicTracerProvider();
+    const span = provider.getTracer('spooling-exporter-test').startSpan('child-bus-remains-open');
+    span.end();
+    const spans = [span as unknown as ReadableSpan];
+
+    const results = await Promise.all(Array.from({ length: 2 }, () => new Promise<{ code: number }>((resolve) => {
+      exporter.export(spans, resolve);
+    })));
+
+    expect(results).toEqual([{ code: ExportResultCode.SUCCESS }, { code: ExportResultCode.SUCCESS }]);
+    expect(directBatches).toEqual([spans, spans]);
+    expect(warnings).toEqual([expect.stringContaining('Timed out acquiring spool cap lock after 5ms')]);
   });
 
   it.each([

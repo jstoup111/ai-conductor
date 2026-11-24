@@ -48,10 +48,22 @@ export interface SpoolStoreOptions {
   now?: () => number;
   pid?: number;
   randomBytes?: (size: number) => Buffer;
+  /** Monotonic-enough clock for lock deadlines and stale-owner checks. */
+  lockNow?: () => number;
+  /** Bound contention so an unavailable cap lock falls back to direct export. */
+  capLockAcquireTimeoutMs?: number;
+  /** Treat a lock this old as abandoned even when its owner cannot be identified. */
+  capLockStaleAfterMs?: number;
+  /** Injectable liveness probe for crash-recovery tests. */
+  isProcessAlive?: (pid: number) => boolean;
+  /** Injectable retry seam; production retries on the next event-loop turn. */
+  yieldForCapLock?: () => Promise<void>;
 }
 
 const filesystem: SpoolFilesystem = { mkdir, open, readdir, readFile, rename, rm, stat };
 const TEMPORARY_FILE_GRACE_MS = 60_000;
+const CAP_LOCK_ACQUIRE_TIMEOUT_MS = 1_000;
+const CAP_LOCK_STALE_AFTER_MS = 60_000;
 
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -65,6 +77,27 @@ function yieldForCapLock(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 1));
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM proves a process exists but is not signalable; only ESRCH is dead.
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+function lockOwnerPid(contents: Buffer): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(contents.toString('utf8'));
+    if (typeof parsed !== 'object' || parsed === null || !('pid' in parsed)) return undefined;
+    const pid = (parsed as { pid?: unknown }).pid;
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Stores immutable OTLP/HTTP protobuf request bodies. A final .pb file is only
  * visible after its same-directory temporary file has been fsynced and renamed.
@@ -74,7 +107,12 @@ export class SpoolStore {
   private readonly now: () => number;
   private readonly pid: number;
   private readonly randomBytes: (size: number) => Buffer;
+  private readonly lockNow: () => number;
   private readonly maxBytes: number | undefined;
+  private readonly capLockAcquireTimeoutMs: number;
+  private readonly capLockStaleAfterMs: number;
+  private readonly processIsAlive: (pid: number) => boolean;
+  private readonly yieldForCapLock: () => Promise<void>;
 
   constructor(
     private readonly root: string,
@@ -84,7 +122,12 @@ export class SpoolStore {
     this.now = options.now ?? Date.now;
     this.pid = options.pid ?? process.pid;
     this.randomBytes = options.randomBytes ?? randomBytes;
+    this.lockNow = options.lockNow ?? Date.now;
     this.maxBytes = options.maxBytes;
+    this.capLockAcquireTimeoutMs = options.capLockAcquireTimeoutMs ?? CAP_LOCK_ACQUIRE_TIMEOUT_MS;
+    this.capLockStaleAfterMs = options.capLockStaleAfterMs ?? CAP_LOCK_STALE_AFTER_MS;
+    this.processIsAlive = options.isProcessAlive ?? isProcessAlive;
+    this.yieldForCapLock = options.yieldForCapLock ?? yieldForCapLock;
   }
 
   write(signal: SpoolSignal, body: Uint8Array): Promise<SpoolBatch>;
@@ -199,21 +242,120 @@ export class SpoolStore {
   private async withCapLock<T>(operation: () => Promise<T>): Promise<T> {
     const lockPath = join(this.root, '.cap.lock');
     let lock: SpoolFileHandle;
+    const deadline = this.lockNow() + this.capLockAcquireTimeoutMs;
     for (;;) {
       try {
         lock = await this.filesystem.open(lockPath, 'wx');
         break;
       } catch (error) {
         if (!alreadyExists(error)) throw error;
-        await yieldForCapLock();
+        if (await this.reclaimAbandonedCapLock(lockPath)) continue;
+        if (this.lockNow() >= deadline) {
+          throw new Error(`Timed out acquiring spool cap lock after ${this.capLockAcquireTimeoutMs}ms`);
+        }
+        await this.yieldForCapLock();
       }
     }
+
+    let value: T | undefined;
+    let failure: unknown;
     try {
-      return await operation();
-    } finally {
-      await lock.close().catch(() => undefined);
-      await this.filesystem.rm(lockPath, { force: true }).catch(() => undefined);
+      await lock.writeFile(Buffer.from(JSON.stringify({ pid: this.pid, createdAt: this.lockNow() })));
+      await lock.sync();
+      value = await operation();
+    } catch (error) {
+      failure = error;
     }
+    const releaseFailures: unknown[] = [];
+    try {
+      await lock.close();
+    } catch (error) {
+      releaseFailures.push(error);
+    }
+    try {
+      await this.filesystem.rm(lockPath, { force: true });
+    } catch (error) {
+      releaseFailures.push(error);
+    }
+    if (failure !== undefined || releaseFailures.length > 0) {
+      throw new AggregateError(
+        [
+          ...(failure === undefined ? [] : [failure]),
+          ...releaseFailures,
+        ],
+        'Spool cap lock operation or release failed',
+      );
+    }
+    return value as T;
+  }
+
+  /** Atomically moves an orphan aside; another reclaimer can never unlink a new owner. */
+  private async reclaimAbandonedCapLock(lockPath: string): Promise<boolean> {
+    const recoveryPath = `${lockPath}.reclaim`;
+    let recovery: SpoolFileHandle;
+    try {
+      recovery = await this.filesystem.open(recoveryPath, 'wx');
+    } catch (error) {
+      // One reclaimer owns the check-and-move window. The writer will retry,
+      // then either see its result or time out into direct-send fallback.
+      if (alreadyExists(error)) return false;
+      throw error;
+    }
+
+    let reclaimed = false;
+    let failure: unknown;
+    try {
+      let contents: Buffer;
+      let metadata: { mtimeMs: number };
+      try {
+        [contents, metadata] = await Promise.all([
+          this.filesystem.readFile(lockPath),
+          this.filesystem.stat(lockPath),
+        ]);
+      } catch (error) {
+        if (isMissing(error)) {
+          reclaimed = true;
+          contents = Buffer.alloc(0);
+          metadata = { mtimeMs: 0 };
+        } else {
+          throw error;
+        }
+      }
+      if (!reclaimed) {
+        const ownerPid = lockOwnerPid(contents);
+        const ownerDead = ownerPid !== undefined && !this.processIsAlive(ownerPid);
+        const tooOld = this.lockNow() - metadata.mtimeMs >= this.capLockStaleAfterMs;
+        if (ownerDead || tooOld) {
+          const abandonedPath = `${lockPath}.${this.pid}.${this.randomBytes(4).toString('hex')}.abandoned`;
+          await this.filesystem.rename(lockPath, abandonedPath);
+          await this.filesystem.rm(abandonedPath, { force: true });
+          reclaimed = true;
+        }
+      }
+    } catch (error) {
+      failure = error;
+    }
+    const releaseFailures: unknown[] = [];
+    try {
+      await recovery.close();
+    } catch (error) {
+      releaseFailures.push(error);
+    }
+    try {
+      await this.filesystem.rm(recoveryPath, { force: true });
+    } catch (error) {
+      releaseFailures.push(error);
+    }
+    if (failure !== undefined || releaseFailures.length > 0) {
+      throw new AggregateError(
+        [
+          ...(failure === undefined ? [] : [failure]),
+          ...releaseFailures,
+        ],
+        'Spool cap lock recovery failed',
+      );
+    }
+    return reclaimed;
   }
 
   private async allBatches(): Promise<SpoolBatch[]> {

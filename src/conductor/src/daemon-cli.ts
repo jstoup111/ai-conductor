@@ -8,7 +8,7 @@ import {
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { access, mkdir, readFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -1274,6 +1274,15 @@ export function attachFeatureEventRenderer(
   };
 }
 
+/** Filesystem composition stays at the daemon boundary, outside child OTel wiring. */
+function readDispatchSessionId(projectRoot: string, slug: string): string | undefined {
+  try {
+    return readFileSync(join(projectRoot, '.worktrees', slug, '.pipeline', 'conduct-session-id'), 'utf8').trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const engineRoot = opts.engineRoot ?? {
@@ -1773,6 +1782,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const dispatchTrace = buildDispatchTraceIdentity(projectRoot, trace.slug, {
       harnessVersion: daemonHarnessVersion,
       sourceRef: trace.sourceRef,
+      runId: readDispatchSessionId(projectRoot, trace.slug),
     });
     const visualizerContext = {
       pipelineDir,
@@ -1889,6 +1899,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             buildDispatchTraceIdentity(projectRoot, slug, {
               harnessVersion: daemonHarnessVersion,
               sourceRef: order.sourceRef,
+              runId: readDispatchSessionId(projectRoot, slug),
             }),
         }
       : {}),

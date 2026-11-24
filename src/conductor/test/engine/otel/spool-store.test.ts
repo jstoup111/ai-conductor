@@ -1,6 +1,6 @@
 // Covers: task:3, task:4
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, open, readdir, readFile, rename, rm, utimes } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readdir, readFile, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SpoolStore, type SpoolFilesystem } from '../../../src/engine/otel/spool-store.js';
@@ -164,5 +164,75 @@ describe('SpoolStore', () => {
       batches: [retained.name],
       body: Buffer.from('retained'),
     });
+  });
+
+  it('reclaims a cap lock held by a dead writer so trace and metric writers both complete', async () => {
+    const directory = await temporaryDirectory();
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, '.cap.lock'), JSON.stringify({ pid: 41_001, createdAt: Date.now() }));
+    const store = new SpoolStore(directory, {
+      maxBytes: 1024,
+      isProcessAlive: (pid) => pid !== 41_001,
+    });
+
+    await expect(Promise.all([
+      store.write('traces', Buffer.from('span')),
+      store.write('metrics', Buffer.from('metric')),
+    ])).resolves.toHaveLength(2);
+
+    await expect(Promise.all([store.list('traces'), store.list('metrics')])).resolves.toEqual([
+      [expect.objectContaining({ size: 4 })],
+      [expect.objectContaining({ size: 6 })],
+    ]);
+    await expect(readdir(directory)).resolves.not.toContain('.cap.lock');
+  });
+
+  it('reclaims an old cap lock when its owner record is missing or corrupt', async () => {
+    const directory = await temporaryDirectory();
+    const lockPath = join(directory, '.cap.lock');
+    await mkdir(directory, { recursive: true });
+    await writeFile(lockPath, 'incomplete owner record');
+    await utimes(lockPath, (Date.now() - 60_001) / 1_000, (Date.now() - 60_001) / 1_000);
+    const store = new SpoolStore(directory, { maxBytes: 1024 });
+
+    await expect(store.write('traces', Buffer.from('span'))).resolves.toMatchObject({ size: 4 });
+    await expect(readdir(directory)).resolves.not.toContain('.cap.lock');
+  });
+
+  it('rejects a capped write when a live cap lock remains held past its acquisition deadline', async () => {
+    const directory = await temporaryDirectory();
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, '.cap.lock'), JSON.stringify({ pid: 41_002, createdAt: Date.now() }));
+    const store = new SpoolStore(directory, {
+      maxBytes: 1024,
+      capLockAcquireTimeoutMs: 5,
+      isProcessAlive: () => true,
+    });
+
+    await expect(store.write('metrics', Buffer.from('metric'))).rejects.toThrow('Timed out acquiring spool cap lock after 5ms');
+  });
+
+  it('surfaces cap-lock release failures after attempting cleanup', async () => {
+    const directory = await temporaryDirectory();
+    const store = new SpoolStore(directory, {
+      maxBytes: 1024,
+      filesystem: filesystem({
+        open: async (path, flags) => {
+          const handle = await open(path, flags);
+          if (!path.endsWith('.cap.lock')) return handle;
+          return {
+            writeFile: handle.writeFile.bind(handle),
+            sync: handle.sync.bind(handle),
+            close: async () => {
+              await handle.close();
+              throw new Error('cap lock close failed');
+            },
+          };
+        },
+      }),
+    });
+
+    await expect(store.write('traces', Buffer.from('span'))).rejects.toThrow('Spool cap lock operation or release failed');
+    await expect(readdir(directory)).resolves.not.toContain('.cap.lock');
   });
 });

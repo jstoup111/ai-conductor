@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { HarnessConfig } from '../../types/config.js';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
@@ -15,15 +14,10 @@ import { wireOtelVisualizer } from './wire.js';
 export function buildDispatchTraceIdentity(
   projectRoot: string,
   slug: string,
-  identity: { harnessVersion: string; sourceRef?: string },
+  identity: { harnessVersion: string; sourceRef?: string; runId?: string },
 ): ExecutorOtelProjectionTrace {
-  const pipeline = join(projectRoot, '.worktrees', slug, '.pipeline');
-  let runId = '';
-  try {
-    runId = readFileSync(join(pipeline, 'conduct-session-id'), 'utf8').trim();
-  } catch {}
   return {
-    runId: runId || createSessionEventIdentity(),
+    runId: identity.runId || createSessionEventIdentity(),
     project: projectRoot,
     branch: leafBranchFor(slug),
     harnessVersion: identity.harnessVersion,
