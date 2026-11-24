@@ -6,17 +6,17 @@ import type { StateResult } from '../types/state.js';
 import { formatDashboardSnapshot } from './dashboard-text.js';
 import { buildDashboardSnapshot, type ArtifactsByStep } from './dashboard-snapshot.js';
 import type { DashboardSnapshot, UIRenderer, ViewMode } from './types.js';
-import {
-  buildArtifactResolutionContext,
-  getArtifactStatus,
-  STEP_ARTIFACT_GLOBS,
-} from '../engine/artifacts.js';
+import { buildArtifactResolutionContext, getArtifactStatus, STEP_ARTIFACT_GLOBS } from '../engine/artifacts.js';
 import { createLiveRegion, type LiveRegion } from './live-region.js';
 import { formatProgressDelta, formatRetryCounter, displayBuildPosition } from '../engine/format-retry-line.js';
 import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
 import { formatSessionOccurrence, renderedEventTypes } from '../engine/event-sinks.js';
 import { resolveExecutionIdentity } from '../engine/execution-identity.js';
-import { formatGithubCredentialFallback, formatGithubOperationRefusal, formatGithubOperationTarget } from '../engine/github-operations.js';
+import {
+  formatGithubCredentialFallback,
+  formatGithubOperationRefusal,
+  formatGithubOperationTarget,
+} from '../engine/github-operations.js';
 import { formatProviderStartLine } from './provider-start-line.js';
 
 export interface TerminalRendererOptions {
@@ -114,14 +114,16 @@ export class TerminalRenderer implements UIRenderer {
   }
 
   private renderedExecutionSubject(event: ConductorEvent, legacyStep: string): string {
-    return resolveExecutionIdentity({
-      scope: {
-        featureId: this.featureDesc ?? this.stateFilePath,
-        runId: 'terminal-renderer',
-      },
-      legacyStep,
-      executionContext: 'executionContext' in event ? event.executionContext : undefined,
-    })?.subjectLabel ?? legacyStep;
+    return (
+      resolveExecutionIdentity({
+        scope: {
+          featureId: this.featureDesc ?? this.stateFilePath,
+          runId: 'terminal-renderer',
+        },
+        legacyStep,
+        executionContext: 'executionContext' in event ? event.executionContext : undefined,
+      })?.subjectLabel ?? legacyStep
+    );
   }
 
   async handle(event: ConductorEvent): Promise<void> {
@@ -135,7 +137,7 @@ export class TerminalRenderer implements UIRenderer {
       case 'step_started': {
         const def = this.steps.find((s) => s.name === event.step);
         const subject = this.renderedExecutionSubject(event, event.step);
-        const label = subject === event.step ? def?.label ?? event.step : subject;
+        const label = subject === event.step ? (def?.label ?? event.step) : subject;
         this.currentStep = {
           name: event.step,
           label,
@@ -153,7 +155,12 @@ export class TerminalRenderer implements UIRenderer {
         }
         this.region.resume();
         if (event.step === 'build' && event.treeBefore !== undefined && event.treeAfter !== undefined) {
-          const treeAnnotation = event.treeBefore === null || event.treeAfter === null ? 'tree unknown' : event.treeBefore === event.treeAfter ? `tree ${event.treeAfter.slice(0, 7)} unchanged` : `tree ${event.treeBefore.slice(0, 7)}..${event.treeAfter.slice(0, 7)}`;
+          const treeAnnotation =
+            event.treeBefore === null || event.treeAfter === null
+              ? 'tree unknown'
+              : event.treeBefore === event.treeAfter
+                ? `tree ${event.treeAfter.slice(0, 7)} unchanged`
+                : `tree ${event.treeBefore.slice(0, 7)}..${event.treeAfter.slice(0, 7)}`;
           this.region.log(`  ${chalk.green('✓')} build ${chalk.green(event.status)} (${treeAnnotation})`);
         }
         await this.renderDashboard();
@@ -179,7 +186,9 @@ export class TerminalRenderer implements UIRenderer {
       case 'step_interrupted':
         this.currentStep = undefined;
         this.region.resume();
-        this.region.log(chalk.yellow(`  ⏸ STEP INTERRUPTED: ${this.renderedExecutionSubject(event, event.step)} — ${event.reason}`));
+        this.region.log(
+          chalk.yellow(`  ⏸ STEP INTERRUPTED: ${this.renderedExecutionSubject(event, event.step)} — ${event.reason}`),
+        );
         await this.renderDashboard();
         break;
 
@@ -198,7 +207,11 @@ export class TerminalRenderer implements UIRenderer {
         break;
 
       case 'github_operation_failed':
-        this.region.log(chalk.red(`  ✗ GitHub operation failed: ${event.operation} on ${formatGithubOperationTarget(event.target)} — ${event.error}`));
+        this.region.log(
+          chalk.red(
+            `  ✗ GitHub operation failed: ${event.operation} on ${formatGithubOperationTarget(event.target)} — ${event.error}`,
+          ),
+        );
         break;
 
       case 'session_command_refused':
@@ -232,7 +245,11 @@ export class TerminalRenderer implements UIRenderer {
 
       case 'test_suite_verification':
         if (event.executionSummary) {
-          this.region.log(chalk.dim(`  · test suite ${event.executionSummary.attemptedEntryCount}/${event.executionSummary.plannedEntryCount}: ${event.executionSummary.entries.map((entry) => `#${entry.index + 1} ${entry.result} (${entry.durationMs}ms)`).join(', ')}`));
+          this.region.log(
+            chalk.dim(
+              `  · test suite ${event.executionSummary.attemptedEntryCount}/${event.executionSummary.plannedEntryCount}: ${event.executionSummary.entries.map((entry) => `#${entry.index + 1} ${entry.result} (${entry.durationMs}ms)`).join(', ')}`,
+            ),
+          );
         }
         break;
 
@@ -244,12 +261,14 @@ export class TerminalRenderer implements UIRenderer {
         );
         break;
 
-      case 'session_policy':
+      case 'ship_validator_fallback':
         this.region.log(
-          chalk.yellow(
-            `  ⟳  ${event.step}: ${event.provider} session policy — ${event.reason}`,
-          ),
+          chalk.bold.yellow(`  ⚠ SHIP VALIDATOR FALLBACK: ${event.step} — ${event.provider}: ${event.reason}`),
         );
+        break;
+
+      case 'session_policy':
+        this.region.log(chalk.yellow(`  ⟳  ${event.step}: ${event.provider} session policy — ${event.reason}`));
         break;
 
       case 'provider_attempt_started':
@@ -289,9 +308,7 @@ export class TerminalRenderer implements UIRenderer {
       case 'feature_complete': {
         this.currentStep = undefined;
         await this.renderDashboard();
-        const title = event.featureDesc
-          ? `   FEATURE COMPLETE: ${event.featureDesc}   `
-          : '   FEATURE COMPLETE   ';
+        const title = event.featureDesc ? `   FEATURE COMPLETE: ${event.featureDesc}   ` : '   FEATURE COMPLETE   ';
         // Pad both sides of the title bar to a fixed minimum so the banner
         // is unmistakable even on a long terminal.
         const minWidth = Math.max(title.length, 44);
@@ -304,20 +321,13 @@ export class TerminalRenderer implements UIRenderer {
           chalk.bold.bgGreen.black(bar),
           '',
           chalk.green(
-            event.prUrl
-              ? `  PR: ${event.prUrl}`
-              : '  No PR (chosen outcome was merge-local / keep / discard).',
+            event.prUrl ? `  PR: ${event.prUrl}` : '  No PR (chosen outcome was merge-local / keep / discard).',
           ),
-          chalk.dim(
-            '  All 14 steps verified. Re-run with --fresh to start a new feature.',
-          ),
+          chalk.dim('  All 14 steps verified. Re-run with --fresh to start a new feature.'),
           '',
         ];
         this.region.log(lines.join('\n'));
-        this.notify(
-          'Conductor',
-          event.featureDesc ? `Feature complete: ${event.featureDesc}` : 'Pipeline complete!',
-        );
+        this.notify('Conductor', event.featureDesc ? `Feature complete: ${event.featureDesc}` : 'Pipeline complete!');
         break;
       }
 
@@ -357,36 +367,56 @@ export class TerminalRenderer implements UIRenderer {
         this.region.log(chalk.red(`  ✗ ${event.step} — branch "${event.branch}" failed: ${event.error}`));
         break;
       case 'build_progress': {
-        const task = event.currentTaskId ? ` — ${event.currentTaskId}${event.currentTaskName ? ` ${event.currentTaskName}` : ''}` : '';
-        const resolved = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId || event.currentTaskName));
+        const task = event.currentTaskId
+          ? ` — ${event.currentTaskId}${event.currentTaskName ? ` ${event.currentTaskName}` : ''}`
+          : '';
+        const resolved = displayBuildPosition(
+          event.resolved,
+          event.total,
+          Boolean(event.currentTaskId || event.currentTaskName),
+        );
         this.region.log(chalk.cyan(`  ⠿ ${event.step} — progress ${resolved}/${event.total}${task}`));
         break;
       }
       case 'unattributed_progress': {
         const before = event.headBefore?.slice(0, 12) ?? '(none)';
         const after = event.headAfter?.slice(0, 12) ?? '(none)';
-        this.region.log(chalk.dim(`  · ${event.step} — unattributed progress on attempt ${event.attempt}: ${event.resolvedCount} resolved (${before} → ${after})`));
+        this.region.log(
+          chalk.dim(
+            `  · ${event.step} — unattributed progress on attempt ${event.attempt}: ${event.resolvedCount} resolved (${before} → ${after})`,
+          ),
+        );
         break;
       }
       case 'build_no_progress': {
         const task = event.currentTaskId ? ` — stuck on ${event.currentTaskId}` : '';
         const resolved = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId));
-        this.region.log(chalk.yellow(`  ⚠ ${event.step} — no progress for ${event.quietMinutes}m (${resolved}/${event.total})${task}`));
+        this.region.log(
+          chalk.yellow(
+            `  ⚠ ${event.step} — no progress for ${event.quietMinutes}m (${resolved}/${event.total})${task}`,
+          ),
+        );
         break;
       }
       case 'build_active_stall': {
         const resolved = displayBuildPosition(event.resolved, event.total, false);
-        this.region.log(chalk.yellow(`  ⚠ ${event.step} — active without movement for ${event.minutes}m (${resolved}/${event.total}); action ${event.action}`));
+        this.region.log(
+          chalk.yellow(
+            `  ⚠ ${event.step} — active without movement for ${event.minutes}m (${resolved}/${event.total}); action ${event.action}`,
+          ),
+        );
         break;
       }
       case 'build_stall':
-        this.region.log(chalk.bold.red(`  ⛔ ${event.step} — build stalled (${event.reason}): ${event.resolvedBefore}→${event.resolvedAfter} resolved`));
+        this.region.log(
+          chalk.bold.red(
+            `  ⛔ ${event.step} — build stalled (${event.reason}): ${event.resolvedBefore}→${event.resolvedAfter} resolved`,
+          ),
+        );
         break;
       case 'gate_verdict':
         if (!event.satisfied) {
-          this.region.log(
-            chalk.dim(`  gate ${event.step}: unsatisfied${event.reason ? ` — ${event.reason}` : ''}`),
-          );
+          this.region.log(chalk.dim(`  gate ${event.step}: unsatisfied${event.reason ? ` — ${event.reason}` : ''}`));
         }
         break;
       case 'kickback':
@@ -421,5 +451,48 @@ export class TerminalRenderer implements UIRenderer {
 }
 
 const DEDICATED_EVENT_TYPES = new Set<ConductorEvent['type']>([
-  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'github_operation_refused', 'github_operation_failed', 'github_write_credential_fallback', 'session_command_refused', 'github_bypass_attempt', 'github_bypass_result', 'github_possible_bypass', 'session_event_delivery_diagnostic', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'provider_fallback', 'session_policy', 'provider_attempt_started', 'rate_limit', 'session_reset', 'credentials_park_progress', 'tier_skip', 'config_skip', 'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached', 'renderer_error', 'pipeline_tail_diagnostic', 'when_skip', 'parallel_started', 'parallel_completed', 'parallel_failure', 'build_progress', 'unattributed_progress', 'build_no_progress', 'build_active_stall', 'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
+  'step_started',
+  'step_completed',
+  'step_failed',
+  'step_interrupted',
+  'github_operation_refused',
+  'github_operation_failed',
+  'github_write_credential_fallback',
+  'session_command_refused',
+  'github_bypass_attempt',
+  'github_bypass_result',
+  'github_possible_bypass',
+  'session_event_delivery_diagnostic',
+  'step_retry',
+  'feature_usage_total',
+  'test_suite_verification',
+  'provider_fallback',
+  'ship_validator_fallback',
+  'session_policy',
+  'provider_attempt_started',
+  'rate_limit',
+  'session_reset',
+  'credentials_park_progress',
+  'tier_skip',
+  'config_skip',
+  'gate_blocked',
+  'feature_complete',
+  'dashboard_refresh',
+  'checkpoint_reached',
+  'renderer_error',
+  'pipeline_tail_diagnostic',
+  'when_skip',
+  'parallel_started',
+  'parallel_completed',
+  'parallel_failure',
+  'build_progress',
+  'unattributed_progress',
+  'build_no_progress',
+  'build_active_stall',
+  'build_stall',
+  'gate_verdict',
+  'kickback',
+  'loop_halt',
+  'halt_marker_write_failed',
+  'loop_converged',
 ]);

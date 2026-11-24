@@ -3084,7 +3084,13 @@ export function resetRenderedReclaimRetentions(): void {
  * dispatch without forwarding it to the untagged daemon logger.
  */
 export function subscribeScopedProviderRendering(events: ConductorEventEmitter, log: (msg: string) => void): void {
-  for (const type of ['provider_attempt', 'provider_fallback', 'session_policy', 'provider_attempt_started'] as const) {
+  for (const type of [
+    'provider_attempt',
+    'provider_fallback',
+    'ship_validator_fallback',
+    'session_policy',
+    'provider_attempt_started',
+  ] as const) {
     events.on(type, (event) => renderDaemonEvent(event, log));
   }
 }
@@ -3505,6 +3511,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
           `⚠ PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}${event.recoveryAction ? `; recovery: ${event.recoveryAction}` : ''}); trying ${event.nextProvider}`,
         ),
       );
+      break;
+    case 'ship_validator_fallback':
+      log(chalk.bold.yellow(`⚠ SHIP VALIDATOR FALLBACK: ${event.step} — ${event.provider}: ${event.reason}`));
       break;
     case 'session_policy':
       log(chalk.yellow(`${dot}   ${event.step}: ${event.provider} session policy — ${event.reason}`));

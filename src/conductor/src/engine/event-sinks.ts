@@ -164,6 +164,7 @@ export const EVENT_SINKS = {
   feature_usage_total: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
   feature_cost_snapshot: { render: false, persist: false, audit: false, otel: true, otelTrace: false },
   provider_fallback: { render: true, persist: true, audit: false, otel: false },
+  ship_validator_fallback: { render: true, persist: true, audit: false, otel: false },
   session_policy: { render: true, persist: true, audit: false, otel: false },
   step_retry: { render: true, persist: true, audit: true, otel: true },
   retry_decision: { render: false, persist: false, audit: false, otel: false },

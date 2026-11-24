@@ -129,6 +129,13 @@ export type ProviderTransitionWarning =
       step: StepName;
       provider: string;
       reason: string;
+    }
+  | {
+      /** A SHIP validator continues in its explicitly opted-in fallback mode. */
+      type: 'ship_validator_fallback';
+      step: StepName;
+      provider: string;
+      reason: string;
     };
 
 /**
@@ -140,6 +147,18 @@ export interface ProviderCandidate {
   providerKey: string;
   model: string;
   effort: EffortLevel;
+}
+
+/**
+ * These are the SHIP validators which inspect product code while sharing a
+ * feature worktree. They must enter through the prepared invocation seam:
+ * that seam is where the daemon attaches the verified read-only product/Git
+ * boundary while retaining the validator's owned evidence and scratch paths.
+ */
+export const SHIP_VALIDATOR_STEPS = new Set<StepName>(['manual_test', 'prd_audit', 'architecture_review_as_built']);
+
+function requiresPreparedShipValidatorBoundary(step: StepName): boolean {
+  return SHIP_VALIDATOR_STEPS.has(step);
 }
 
 /** Identity of one actual model ladder rung; step ownership remains unchanged. */
@@ -320,6 +339,13 @@ export interface ExecuteProviderCandidatesInput {
   prepareCandidateSelfHost?: PrepareCandidateSelfHost;
   /** Ends candidate-local preparation ownership when its lifecycle lease expires. */
   onPreparationRevoked?: (callback: () => void) => () => void;
+  /**
+   * SHIP dispatches opt in to the unprotected fallback only after their caller
+   * has arranged its isolated checkout.  Keeping the opt-in at the caller
+   * prevents an ordinary provider invocation from silently weakening Task 1's
+   * prepared-boundary contract.
+   */
+  allowShipValidatorFallback?: boolean;
   /** Candidate setup proving narrow telemetry access under a native read-only review policy. */
   prepareManagedSessionObservation?: (input: {
     readonly provider: string;
@@ -889,6 +915,7 @@ export async function executeProviderCandidates({
   withCandidateSafety,
   prepareCandidateSelfHost,
   onPreparationRevoked,
+  allowShipValidatorFallback = false,
   prepareManagedSessionObservation,
   warn,
   options,
@@ -1075,12 +1102,18 @@ export async function executeProviderCandidates({
           ? {
               ...ownedCandidateOptions,
               ...overrides,
+              ...(selfHost?.cwd === undefined ? {} : { cwd: selfHost.cwd }),
               streamConsumer: candidateObserver,
               onProviderStream: candidateObserver.onProviderStream,
               ...(selfHost ? { selfHost } : {}),
             }
           : selfHost
-            ? { ...ownedCandidateOptions, ...overrides, selfHost }
+            ? {
+                ...ownedCandidateOptions,
+                ...overrides,
+                ...(selfHost.cwd === undefined ? {} : { cwd: selfHost.cwd }),
+                selfHost,
+              }
             : { ...ownedCandidateOptions, ...overrides };
         invocation = await invokeProviderCandidate({
           providerKey,
@@ -1089,8 +1122,10 @@ export async function executeProviderCandidates({
           resolved,
           options: candidateInvocationOptions,
           prepareInvocationOptions: async (rungOptions) => {
+            // A protected validator still needs a per-invocation schema scratch
+            // home. Its provider home protects product/Git paths; it is not an
+            // evidence or runtime-scratch destination shared by siblings.
             if (
-              selfHost === undefined &&
               supportsNativeSchemaCapability &&
               rungOptions.nativeSchema !== undefined &&
               nativeSchemaScratch !== undefined
@@ -1152,6 +1187,25 @@ export async function executeProviderCandidates({
             selfHostCaptureIdentity,
             onPreparationRevoked,
           );
+          const fallbackReason = selfHost?.shipValidatorFallbackReason;
+          if (requiresPreparedShipValidatorBoundary(step) && (selfHost === undefined || fallbackReason !== undefined)) {
+            if (!allowShipValidatorFallback || selfHost === undefined || selfHost.cwd === undefined) {
+              throw new ProviderSetupUnavailableError({
+                provider: providerKey,
+                capability: 'ship-validator-write-protection',
+                reason: `SHIP validator ${step} cannot establish its protected launch boundary.`,
+                recoveryAction:
+                  'Provide a protected validator launch or an isolated fallback checkout before retrying.',
+              });
+            }
+            const reason = fallbackReason ?? 'protected launch boundary unavailable';
+            await warn?.(`SHIP validator ${step}: ${reason}.`, {
+              type: 'ship_validator_fallback',
+              step,
+              provider: providerKey,
+              reason,
+            });
+          }
           // ADR daemon-session-command-contracts D6 (#3022): a read-only
           // review whose real launch argv can reach no observed command can
           // write no observation record, so it is provisioned no destination
@@ -1225,7 +1279,11 @@ export async function executeProviderCandidates({
           for (const teardown of teardownCallbacks.reverse()) await teardown();
         } finally {
           try {
-            await selfHost?.teardown();
+            try {
+              await selfHost?.shipValidatorFallback?.settle();
+            } finally {
+              await selfHost?.teardown();
+            }
           } finally {
             try {
               if (schemaScratchHome !== undefined) {

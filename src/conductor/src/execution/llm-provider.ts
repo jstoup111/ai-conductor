@@ -108,6 +108,16 @@ export interface SelfHostInvocation {
    * snapshot), so scratch confinement checks the home against this owner.
    */
   scratchRoot?: string;
+  /**
+   * A dispatch-owned checkout for an unprotected SHIP validator.  The provider
+   * adapter still receives the invocation as `selfHost`, but executes from
+   * this independent Git worktree rather than the authoritative feature tree.
+   */
+  cwd?: string;
+  /** Non-empty only when `cwd` is an ADR-approved SHIP fallback checkout. */
+  shipValidatorFallbackReason?: string;
+  /** Capture fallback product edits after provider invocation, before teardown. */
+  shipValidatorFallback?: { readonly root: string; settle(): Promise<void> };
   teardown(): Promise<void>;
 }
 
@@ -147,9 +157,7 @@ export interface ProviderSystemPromptCapability {
 }
 
 /** The synchronous authority decision made immediately before process creation. */
-export type SpawnPermitDecision =
-  | { permitted: true }
-  | { permitted: false; reason: 'revoked' | 'superseded' };
+export type SpawnPermitDecision = { permitted: true } | { permitted: false; reason: 'revoked' | 'superseded' };
 
 /**
  * The provider action being authorized by a lifecycle-owned spawn permit.
@@ -393,6 +401,9 @@ export interface LLMProvider {
    * an absent method keeps that proof mandatory.
    */
   readOnlyReviewObservedCommandReach?(
-    options: Pick<InvokeOptions, 'selfHost' | 'systemPrompt' | 'model' | 'nativeSchema' | 'sessionName' | 'interactive'>,
+    options: Pick<
+      InvokeOptions,
+      'selfHost' | 'systemPrompt' | 'model' | 'nativeSchema' | 'sessionName' | 'interactive'
+    >,
   ): 'none' | 'possible';
 }

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
+import { execa } from 'execa';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
@@ -65,6 +66,12 @@ describe('self-host live-boundary events', () => {
       mkdir(join(projectRoot, '.pipeline'), { recursive: true }),
       mkdir(join(liveCheckout, '.claude')),
     ]);
+    await execa('git', ['init'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: projectRoot });
+    await writeFile(join(projectRoot, 'fixture.txt'), 'original\n');
+    await execa('git', ['add', 'fixture.txt'], { cwd: projectRoot });
+    await execa('git', ['commit', '-m', 'fixture'], { cwd: projectRoot });
     await writeFile(join(liveCheckout, 'VERSION'), '0.1.0\n');
     await writeFile(join(liveCheckout, '.claude', 'settings.local.json'), '{}\n');
     await writeFile(
@@ -94,7 +101,13 @@ describe('self-host live-boundary events', () => {
   let lastPrepared: { originalCatalogHome?: string; scratchRoot?: string; env: NodeJS.ProcessEnv } | undefined;
   function harness(
     work: () => Promise<StepRunResult>,
-    options: { selfHost?: boolean; maxRetries?: number; candidateAttempts?: number } = {},
+    options: {
+      selfHost?: boolean;
+      maxRetries?: number;
+      candidateAttempts?: number;
+      containment?: boolean;
+      fromStep?: StepName;
+    } = {},
   ) {
     const runtimes = new ProviderRuntimeSet([
       {
@@ -153,7 +166,7 @@ describe('self-host live-boundary events', () => {
         stepRunner: runner,
         events,
         projectRoot,
-        fromStep: 'build',
+        fromStep: options.fromStep ?? 'build',
         mode: 'auto',
         daemon: true,
         selfHost: options.selfHost ?? true,
@@ -165,11 +178,14 @@ describe('self-host live-boundary events', () => {
         providerExecution,
         fullSuiteVerifier: fullSuiteVerifierStub(),
         sleepFn: vi.fn(async () => {}),
-        config: { harness_self_host: { build_auth: { mode: 'api-key' } } } as never,
+        config: {
+          harness_self_host: { build_auth: { mode: 'api-key' }, live_containment: options.containment ?? true },
+        } as never,
       }),
       eventEmitter: events,
       persister,
       guardrails,
+      providerExecution,
     };
   }
 
@@ -465,5 +481,36 @@ describe('self-host live-boundary events', () => {
     // Scratch confinement checks the home against the worktree that owns it,
     // not the invocation cwd (a review snapshot for build_review rubrics).
     expect(lastPrepared?.scratchRoot).toBe(projectRoot);
+  });
+
+  // Covers: task:2, S1.3
+  it('gives concurrent uncontained SHIP validators independent fallback checkouts', async () => {
+    await writeState(join(projectRoot, 'conduct-state.json'), { ...BUILD_ONLY, manual_test: 'pending' });
+    const { conductor, persister, providerExecution } = harness(
+      async () => {
+        const first = lastPrepared!;
+        const sibling = await providerExecution.prepareCandidateSelfHost!(
+          { step: 'manual_test', providerKey: 'claude', model: 'opus', effort: 'high' } as never,
+          {} as never,
+          { step: 'manual_test', runId: 'live-boundary-events', attempt: 2 },
+        );
+        try {
+          expect(first.cwd).toBeDefined();
+          expect(sibling?.cwd).toBeDefined();
+          expect(sibling?.cwd).not.toBe(first.cwd);
+          await writeFile(join(first.cwd!, 'fixture.txt'), 'first validator\n');
+          await execa('git', ['add', 'fixture.txt'], { cwd: first.cwd });
+          await execa('git', ['commit', '-m', 'validator edit'], { cwd: first.cwd });
+          expect(await readFile(join(projectRoot, 'fixture.txt'), 'utf8')).toBe('original\n');
+          expect(await readFile(join(sibling!.cwd!, 'fixture.txt'), 'utf8')).toBe('original\n');
+          return { success: true, output: 'done' };
+        } finally {
+          await sibling?.teardown();
+        }
+      },
+      { containment: false, fromStep: 'manual_test' },
+    );
+    await conductor.run();
+    persister.stop();
   });
 });

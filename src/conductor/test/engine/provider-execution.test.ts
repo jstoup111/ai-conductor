@@ -755,6 +755,130 @@ describe('executeProviderCandidates', () => {
     expect(claudeInvoke).not.toHaveBeenCalled();
   });
 
+  // Covers: task:1, S1.1, S1.2
+  it.each(['manual_test', 'prd_audit', 'architecture_review_as_built'] as const)(
+    'refuses an unprotected SHIP validator launch before provider invocation: %s',
+    async (step) => {
+      const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'must not run', exitCode: 0 }));
+      const result = await executeProviderCandidates({
+        step,
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn()),
+        options: { prompt: 'validate', cwd: '/workspace' },
+      });
+      expect(result).toMatchObject({
+        success: false,
+        providerSetupExhaustion: { candidates: [{ provider: 'codex', capability: 'ship-validator-write-protection' }] },
+      });
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
+
+  // Covers: task:2, S1.3
+  it.each(['manual_test', 'prd_audit', 'architecture_review_as_built'] as const)(
+    'warns and invokes the opted-in SHIP fallback when no protected boundary is available: %s',
+    async (step) => {
+      const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+        success: true,
+        output: 'validator evidence',
+        exitCode: 0,
+      }));
+      const warn = vi.fn();
+      const result = await executeProviderCandidates({
+        step,
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn()),
+        options: { prompt: 'validate', cwd: '/authoritative-worktree' },
+        allowShipValidatorFallback: true,
+        warn,
+        prepareCandidateSelfHost: async () => ({
+          executable: 'fallback-validator',
+          env: {},
+          args: [],
+          cwd: '/isolated-fallback-checkout',
+          shipValidatorFallbackReason: 'product write protection unavailable',
+          teardown: async () => {},
+        }),
+      });
+      expect(result).toMatchObject({ success: true, output: 'validator evidence' });
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/isolated-fallback-checkout' }));
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`SHIP validator ${step}`),
+        expect.objectContaining({ type: 'ship_validator_fallback', step, provider: 'codex' }),
+      );
+    },
+  );
+
+  // Covers: task:3, S2.2
+  it('settles a fallback handoff after the validator invocation and before its teardown', async () => {
+    const settled: string[] = [];
+    const result = await executeProviderCandidates({
+      step: 'manual_test',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: async () => ({ success: true, output: 'evidence', exitCode: 0 }) }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'validate', cwd: '/authoritative' },
+      allowShipValidatorFallback: true,
+      prepareCandidateSelfHost: async () => ({
+        executable: 'fallback',
+        env: {},
+        args: [],
+        cwd: '/fallback',
+        shipValidatorFallbackReason: 'uncontained',
+        shipValidatorFallback: {
+          root: '/fallback',
+          settle: async () => {
+            settled.push('settled');
+          },
+        },
+        teardown: async () => {
+          settled.push('torn-down');
+        },
+      }),
+    });
+    expect(result.success).toBe(true);
+    expect(settled).toEqual(['settled', 'torn-down']);
+  });
+
+  // Covers: task:1, S1.1, S1.2
+  it('keeps every SHIP validator inside its prepared boundary in serial and grouped launches', async () => {
+    const calls: Array<{ step: StepName; protected: boolean }> = [];
+    const execute = async (step: 'manual_test' | 'prd_audit' | 'architecture_review_as_built') => {
+      const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        calls.push({ step, protected: options.selfHost?.executable === 'protected-validator' });
+        return { success: true, output: `${step} evidence`, exitCode: 0 };
+      });
+      return executeProviderCandidates({
+        step,
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn()),
+        options: { prompt: 'validate', cwd: '/workspace' },
+        prepareCandidateSelfHost: async () => ({
+          executable: 'protected-validator',
+          env: {},
+          args: [],
+          teardown: async () => {},
+        }),
+      });
+    };
+    await expect(execute('manual_test')).resolves.toMatchObject({ success: true });
+    await expect(Promise.all([execute('prd_audit'), execute('architecture_review_as_built')])).resolves.toEqual([
+      expect.objectContaining({ success: true }),
+      expect.objectContaining({ success: true }),
+    ]);
+    expect(calls).toEqual([
+      { step: 'manual_test', protected: true },
+      { step: 'prd_audit', protected: true },
+      { step: 'architecture_review_as_built', protected: true },
+    ]);
+  });
+
   it('falls through a typed setup-unavailable candidate without treating ordinary errors as fallback authority', async () => {
     const codexInvoke = vi.fn();
     const claudeInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 }));
@@ -2805,6 +2929,12 @@ describe('executeProviderCandidates', () => {
         attempt: 1,
         nativeSchemaScratch: { worktreeRoot, repository: 'acme/repo', featureSlug: 'feature' },
         options: { prompt: 'Return the constrained result.', cwd: worktreeRoot, nativeSchema: { type: 'object' } },
+        prepareCandidateSelfHost: async () => ({
+          executable: 'protected-validator',
+          env: {},
+          args: [],
+          teardown: async () => {},
+        }),
       });
     try {
       const first = execute('prd_audit');

@@ -305,6 +305,7 @@ import {
   executeProviderCandidates,
   executeAuxiliaryProviderCandidates,
   prepareNativeManagedGhObservation,
+  SHIP_VALIDATOR_STEPS,
   type ExecuteProviderCandidatesInput,
   type ProviderExecutionResult,
   type ProviderExecutionContext,
@@ -2038,6 +2039,7 @@ export class DefaultStepRunner implements StepRunner {
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
             onPreparationRevoked,
+            allowShipValidatorFallback: SHIP_VALIDATOR_STEPS.has(step),
             prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
             onAttempt: this.providerAttempt,
             onCandidateStart: this.providerCandidateStart,

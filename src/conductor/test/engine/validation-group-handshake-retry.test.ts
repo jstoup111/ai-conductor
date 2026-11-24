@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:rem-prd-audit-rem-prd-audit-S5-2
+// Covers: task:2, task:3, task:4, task:5, task:rem-prd-audit-rem-prd-audit-S5-2
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -47,50 +47,88 @@ async function fixture(): Promise<{ dir: string; statePath: string }> {
     state[step.name] = 'done';
   }
   Object.assign(state, {
-    complexity_tier: 'M', track: 'product', feature_desc: 'validation-group-handshake-retry',
-    build_review: 'done', rebase: 'done', finish: 'done',
+    complexity_tier: 'M',
+    track: 'product',
+    feature_desc: 'validation-group-handshake-retry',
+    build_review: 'done',
+    rebase: 'done',
+    finish: 'done',
   });
   await writeState(statePath, state as ConductState);
   await mkdir(join(dir, '.pipeline'), { recursive: true });
-  await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }));
+  await writeFile(
+    join(dir, '.pipeline/task-status.json'),
+    JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+  );
   return { dir, statePath };
 }
 
 async function writePrdPass(dir: string, options?: StepRunOptions): Promise<void> {
-  await persistPrdAuditVerdict(dir, {
-    complete: true,
-    judgment: {
-      version: 'v1',
-      criterionJudgments: [{
-        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
-        evidence: 'fixture:1', rationale: 'fixture current verdict', requirementAssociations: [], evidenceTaskIds: [],
-      }],
-      noOwnerObservations: [],
+  await persistPrdAuditVerdict(
+    dir,
+    {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [
+          {
+            criterion: { storyId: '1', ordinal: 1 },
+            criterionId: 'S1.1',
+            grade: 'PASS',
+            evidence: 'fixture:1',
+            rationale: 'fixture current verdict',
+            requirementAssociations: [],
+            evidenceTaskIds: [],
+          },
+        ],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
     },
-    diagnostics: [], recordedDispositions: [],
-  }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: 'fixture-head' });
+    { attemptId: options?.runId ?? 'fixture-run', codeStamp: 'fixture-head' },
+  );
 }
 
 async function writePrdFixable(dir: string, options?: StepRunOptions): Promise<void> {
-  await persistPrdAuditVerdict(dir, {
-    complete: true,
-    judgment: {
-      version: 'v1',
-      criterionJudgments: [{
-        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
-        evidence: 'fixture: repair remains required', rationale: 'fixture current fixable verdict',
-        requirementAssociations: [], evidenceTaskIds: ['1'], ownerTaskId: '1',
-      }],
-      noOwnerObservations: [],
+  await persistPrdAuditVerdict(
+    dir,
+    {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [
+          {
+            criterion: { storyId: '1', ordinal: 1 },
+            criterionId: 'S1.1',
+            grade: 'FIXABLE',
+            evidence: 'fixture: repair remains required',
+            rationale: 'fixture current fixable verdict',
+            requirementAssociations: [],
+            evidenceTaskIds: ['1'],
+            ownerTaskId: '1',
+          },
+        ],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
     },
-    diagnostics: [], recordedDispositions: [],
-  }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: 'fixture-head' });
+    { attemptId: options?.runId ?? 'fixture-run', codeStamp: 'fixture-head' },
+  );
 }
 
 async function writeAsBuiltPass(dir: string, options?: StepRunOptions): Promise<void> {
-  await persistAsBuiltVerdict(dir, {
-    version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
-  }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: null, policy: AS_BUILT_POLICY });
+  await persistAsBuiltVerdict(
+    dir,
+    {
+      version: 'v2',
+      verdict: 'APPROVED',
+      reachability: [],
+      driftNotes: [],
+    },
+    { attemptId: options?.runId ?? 'fixture-run', codeStamp: null, policy: AS_BUILT_POLICY },
+  );
 }
 
 async function seedRoutedTasklessFixture(dir: string): Promise<void> {
@@ -101,7 +139,9 @@ async function seedRoutedTasklessFixture(dir: string): Promise<void> {
   await execa('git', ['add', 'README.md'], { cwd: dir });
   await execa('git', ['commit', '-q', '-m', 'fixture: initialize'], { cwd: dir });
   await execa('git', ['branch', leafBranchFor('validation-group-handshake-retry')], { cwd: dir });
-  await execa('git', ['update-ref', closureRefFor('validation-group-handshake-retry', parseChildId(1)!), 'HEAD'], { cwd: dir });
+  await execa('git', ['update-ref', closureRefFor('validation-group-handshake-retry', parseChildId(1)!), 'HEAD'], {
+    cwd: dir,
+  });
   await Promise.all([
     mkdir(join(dir, '.pipeline', 'children', '1'), { recursive: true }),
     mkdir(join(dir, '.ai-conductor'), { recursive: true }),
@@ -115,14 +155,16 @@ async function seedRoutedTasklessFixture(dir: string): Promise<void> {
 }
 
 describe('validation-group dispatch handshake retries', () => {
-  it('persists a taskless manual-test receipt and its FAIL rows on the routed host when the join is otherwise green', async () => {
+  it('persists a current taskless manual-test product defect and restages BUILD, test_suite, and build_review on the routed repair host', async () => {
     const { dir, statePath } = await fixture();
     await seedRoutedTasklessFixture(dir);
     const roundId = parseRoundId('r1');
     if (roundId === undefined) throw new Error('invalid fixture round');
     const routedHost = parseChildId(2);
     if (routedHost === undefined) throw new Error('invalid fixture child');
-    await expect(readRouteRecord(dir, 'validation-group-handshake-retry', roundId)).resolves.toEqual({ kind: 'absent' });
+    await expect(readRouteRecord(dir, 'validation-group-handshake-retry', roundId)).resolves.toEqual({
+      kind: 'absent',
+    });
 
     const failRows = '| Story | Result |\n|--|--|\n| s1 | FAIL |\n| s2 | FAIL |';
     const runner: StepRunner = {
@@ -165,9 +207,14 @@ describe('validation-group dispatch handshake retries', () => {
         stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true },
       },
       childRegionLifecycle: {
-        resolveActiveChild: async () => ({
-          kind: 'active', child: 1, position: 1, isLeaf: true, branch: 'feat/validation-group-handshake-retry',
-        }) as never,
+        resolveActiveChild: async () =>
+          ({
+            kind: 'active',
+            child: 1,
+            position: 1,
+            isLeaf: true,
+            branch: 'feat/validation-group-handshake-retry',
+          }) as never,
       },
     });
 
@@ -184,20 +231,32 @@ describe('validation-group dispatch handshake retries', () => {
     });
     expect(runner.run).toHaveBeenCalledWith('prd_audit', expect.anything(), expect.anything());
     expect(runner.run).toHaveBeenCalledWith('architecture_review_as_built', expect.anything(), expect.anything());
+    const state = await readState(statePath);
+    expect(state.ok && state.value).toMatchObject({
+      build: 'pending',
+      test_suite: 'stale',
+      build_review: 'stale',
+    });
   });
 
-  it('retries only a stale prd_audit dispatch and completes the validation group after its fresh verdict', async () => {
+  it('retains valid parallel siblings while automatically rerunning a stale audit to a current verdict', async () => {
     const { dir, statePath } = await fixture();
     const calls: StepName[] = [];
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    for (const type of ['step_retry', 'loop_halt', 'kickback'] as const) emitter.on(type, (event) => { events.push(event); });
+    for (const type of ['step_retry', 'loop_halt', 'kickback'] as const)
+      emitter.on(type, (event) => {
+        events.push(event);
+      });
     let prdAttempts = 0;
     const runner: StepRunner = {
       run: vi.fn(async (step, _state, options) => {
         calls.push(step);
         if (step === 'manual_test') {
-          await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+          await writeFile(
+            join(dir, '.pipeline/manual-test-results.md'),
+            '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+          );
         } else if (step === 'prd_audit') {
           prdAttempts += 1;
           if (prdAttempts === 2) await writePrdPass(dir, options);
@@ -209,8 +268,14 @@ describe('validation-group dispatch handshake retries', () => {
     };
 
     await new Conductor({
-      projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events: emitter,
-      fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true,
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: emitter,
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
       config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 2 } },
     }).run();
 
@@ -219,53 +284,116 @@ describe('validation-group dispatch handshake retries', () => {
     expect(calls.filter((step) => step === 'architecture_review_as_built')).toHaveLength(1);
     const result = await readState(statePath);
     expect(result.ok && result.value).toMatchObject({
-      manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
-      validation__manual_test: 'done', validation__prd_audit: 'done', validation__architecture_review_as_built: 'done',
+      manual_test: 'done',
+      prd_audit: 'done',
+      architecture_review_as_built: 'done',
+      validation__manual_test: 'done',
+      validation__prd_audit: 'done',
+      validation__architecture_review_as_built: 'done',
     });
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
     expect(events.filter((event) => event.type === 'kickback')).toHaveLength(0);
     expect(events.filter((event) => event.type === 'loop_halt')).toHaveLength(0);
-    expect(events).toContainEqual(expect.objectContaining({
-      type: 'step_retry', step: 'prd_audit', reason: expect.stringContaining('produced no verdict'),
-    }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'step_retry',
+        step: 'prd_audit',
+        reason: expect.stringContaining('produced no verdict'),
+      }),
+    );
   });
 
   it.each(['manual_test', 'prd_audit', 'architecture_review_as_built'] as const)(
-    'retries the stale %s dispatch exactly once and includes its handshake reason in the retry event',
+    'does not consume obsolete %s evidence and retries it exactly once with its handshake reason',
     async (member) => {
       const { dir, statePath } = await fixture();
       const retries: ConductorEvent[] = [];
       const calls: StepName[] = [];
       const emitter = new ConductorEventEmitter();
-      emitter.on('step_retry', (event) => { retries.push(event); });
-      const runner: StepRunner = { run: vi.fn(async (step) => {
-        calls.push(step);
-        return { success: true };
-      }) };
+      emitter.on('step_retry', (event) => {
+        retries.push(event);
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          calls.push(step);
+          return { success: true };
+        }),
+      };
       const conductor = new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events: emitter,
-        fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events: emitter,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
         config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 2 } },
       });
       let memberHandshakeAttempts = 0;
-      (conductor as unknown as { verdictDispatchHandshake(step: StepName): Promise<{ done: false; routeClass: 'absent'; reason: string } | undefined> }).verdictDispatchHandshake =
-        async (step) => {
-          if (step !== member || ++memberHandshakeAttempts > 1) return undefined;
-          return { done: false, routeClass: 'absent', reason: `${member} handshake absent` };
-        };
+      (
+        conductor as unknown as {
+          verdictDispatchHandshake(
+            step: StepName,
+          ): Promise<{ done: false; routeClass: 'absent'; reason: string } | undefined>;
+        }
+      ).verdictDispatchHandshake = async (step) => {
+        if (step !== member || ++memberHandshakeAttempts > 1) return undefined;
+        return { done: false, routeClass: 'absent', reason: `${member} handshake absent` };
+      };
 
       await conductor.run();
 
       for (const validationMember of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
-        expect(calls.filter((step) => step === validationMember)).toHaveLength(
-          validationMember === member ? 2 : 1,
-        );
+        expect(calls.filter((step) => step === validationMember)).toHaveLength(validationMember === member ? 2 : 1);
       }
-      expect(retries).toContainEqual(expect.objectContaining({
-        type: 'step_retry', step: member, reason: expect.stringContaining(`${member} handshake absent`),
-      }));
+      expect(retries).toContainEqual(
+        expect.objectContaining({
+          type: 'step_retry',
+          step: member,
+          reason: expect.stringContaining(`${member} handshake absent`),
+        }),
+      );
     },
   );
+
+  it('takes the existing evidence-failure path for a wrong PRD-audit run identity without established code drift', async () => {
+    const { dir, statePath } = await fixture();
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        calls.push(step);
+        if (step === 'manual_test') {
+          await writeFile(
+            join(dir, '.pipeline/manual-test-results.md'),
+            '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+          );
+        } else if (step === 'prd_audit') {
+          await writePrdPass(dir, { ...options, runId: 'wrong-run-identity' });
+        } else if (step === 'architecture_review_as_built') {
+          await writeAsBuiltPass(dir, options);
+        }
+        return { success: true };
+      }),
+    };
+
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 1 } },
+    }).run();
+
+    expect(calls.filter((step) => step === 'prd_audit')).toHaveLength(1);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain('produced no-verdict');
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    expect(calls).not.toContain('remediate');
+  });
 
   it('dispatches a current complete but FIXABLE prd_audit verdict once before one remediation dispatch', async () => {
     const { dir, statePath } = await fixture();
@@ -279,25 +407,38 @@ describe('validation-group dispatch handshake retries', () => {
       run: vi.fn(async (step, _state, options) => {
         calls.push(step);
         if (step === 'manual_test') {
-          await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+          await writeFile(
+            join(dir, '.pipeline/manual-test-results.md'),
+            '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+          );
         } else if (step === 'prd_audit') {
           await writePrdFixable(dir, options);
         } else if (step === 'architecture_review_as_built') {
           await writeAsBuiltPass(dir, options);
         } else if (step === 'remediate') {
-          await persistFixtureProjectedRemediationPlan(dir, options, [{
-            id: 'S1.1', disposition: 'build', category: null,
-            rationale: 'Repair the current PRD-audit gap.',
-            tasks: [{ id: 'rem-s1-1', title: 'Repair the fixture gap' }],
-          }]);
+          await persistFixtureProjectedRemediationPlan(dir, options, [
+            {
+              id: 'S1.1',
+              disposition: 'build',
+              category: null,
+              rationale: 'Repair the current PRD-audit gap.',
+              tasks: [{ id: 'rem-s1-1', title: 'Repair the fixture gap' }],
+            },
+          ]);
         }
         return { success: true };
       }),
     };
 
     await new Conductor({
-      projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
-      fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true,
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
       config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 1 } },
     }).run();
 
@@ -307,24 +448,38 @@ describe('validation-group dispatch handshake retries', () => {
     expect(calls.filter((step) => step === 'remediate')).toHaveLength(1);
   });
 
-  it('keeps a no-verdict PRD audit verification-off group dispatch-success-only and completes it', async () => {
+  it('settles harness-only validation evidence without scheduling BUILD and retains the prior build proof', async () => {
     const { dir, statePath } = await fixture();
     const calls: StepName[] = [];
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('parallel_completed', (event) => { events.push(event); });
-    const conductor = new Conductor({
-      projectRoot: dir, stateFilePath: statePath,
-      stepRunner: { run: vi.fn(async (step) => {
-        calls.push(step);
-        return { success: true };
-      }) },
-      events: emitter, fromStep: 'manual_test', mode: 'auto', daemon: true,
-      verifyArtifacts: false, config: { defaults: { max_retries: 2 } },
+    emitter.on('parallel_completed', (event) => {
+      events.push(event);
     });
-    const handshake = vi.spyOn(conductor as unknown as {
-      verdictDispatchHandshake: (step: StepName) => Promise<{ done: false; routeClass: 'absent'; reason: string }>;
-    }, 'verdictDispatchHandshake').mockResolvedValue({ done: false, routeClass: 'absent', reason: 'missing verdict' });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: {
+        run: vi.fn(async (step) => {
+          calls.push(step);
+          return { success: true };
+        }),
+      },
+      events: emitter,
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      config: { defaults: { max_retries: 2 } },
+    });
+    const handshake = vi
+      .spyOn(
+        conductor as unknown as {
+          verdictDispatchHandshake: (step: StepName) => Promise<{ done: false; routeClass: 'absent'; reason: string }>;
+        },
+        'verdictDispatchHandshake',
+      )
+      .mockResolvedValue({ done: false, routeClass: 'absent', reason: 'missing verdict' });
 
     await conductor.run();
 
@@ -333,28 +488,52 @@ describe('validation-group dispatch handshake retries', () => {
     }
     expect(calls.filter((step) => step === 'prd_audit')).toHaveLength(1);
     expect(handshake.mock.calls.map(([step]) => step).sort()).toEqual([
-      'architecture_review_as_built', 'manual_test', 'prd_audit',
+      'architecture_review_as_built',
+      'manual_test',
+      'prd_audit',
     ]);
-    expect(events).toContainEqual(expect.objectContaining({
-      type: 'parallel_completed', step: 'manual_test',
-      branches: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
-    }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'parallel_completed',
+        step: 'manual_test',
+        branches: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
+      }),
+    );
     const result = await readState(statePath);
     expect(result.ok && result.value).toMatchObject({
-      manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
+      manual_test: 'done',
+      prd_audit: 'done',
+      architecture_review_as_built: 'done',
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'done',
     });
+    expect(calls).not.toContain('build');
   });
 
   it('observes a failed prd_audit dispatch at terminal settlement', async () => {
     const { dir, statePath } = await fixture();
     const emitter = new ConductorEventEmitter();
     const conductor = new Conductor({
-      projectRoot: dir, stateFilePath: statePath,
-      stepRunner: { run: vi.fn(async (step) => step === 'prd_audit' ? { success: false, output: 'audit failed' } : { success: true }) },
-      events: emitter, fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true,
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: {
+        run: vi.fn(async (step) =>
+          step === 'prd_audit' ? { success: false, output: 'audit failed' } : { success: true },
+        ),
+      },
+      events: emitter,
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
       config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 1 } },
     });
-    const handshake = vi.spyOn(conductor as unknown as { verdictDispatchHandshake: (step: StepName) => Promise<undefined> }, 'verdictDispatchHandshake')
+    const handshake = vi
+      .spyOn(
+        conductor as unknown as { verdictDispatchHandshake: (step: StepName) => Promise<undefined> },
+        'verdictDispatchHandshake',
+      )
       .mockResolvedValue(undefined);
 
     await conductor.run();
@@ -365,23 +544,38 @@ describe('validation-group dispatch handshake retries', () => {
   it('handshakes a successful fresh verifier pass once', async () => {
     const { dir, statePath } = await fixture();
     const conductor = new Conductor({
-      projectRoot: dir, stateFilePath: statePath,
-      stepRunner: { run: vi.fn(async (step, _state, options) => {
-        if (step === 'manual_test') {
-          await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
-        } else if (step === 'prd_audit') {
-          await writePrdPass(dir, options);
-        } else if (step === 'architecture_review_as_built') {
-          await writeAsBuiltPass(dir, options);
-        }
-        return { success: true };
-      }) },
-      events: new ConductorEventEmitter(), fromStep: 'manual_test', mode: 'auto', daemon: true,
-      verifyArtifacts: true, config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 1 } },
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: {
+        run: vi.fn(async (step, _state, options) => {
+          if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+            );
+          } else if (step === 'prd_audit') {
+            await writePrdPass(dir, options);
+          } else if (step === 'architecture_review_as_built') {
+            await writeAsBuiltPass(dir, options);
+          }
+          return { success: true };
+        }),
+      },
+      events: new ConductorEventEmitter(),
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 1 } },
     });
-    const handshake = vi.spyOn(conductor as unknown as {
-      verdictDispatchHandshake: (step: StepName) => Promise<undefined>;
-    }, 'verdictDispatchHandshake').mockResolvedValue(undefined);
+    const handshake = vi
+      .spyOn(
+        conductor as unknown as {
+          verdictDispatchHandshake: (step: StepName) => Promise<undefined>;
+        },
+        'verdictDispatchHandshake',
+      )
+      .mockResolvedValue(undefined);
 
     await conductor.run();
 
@@ -395,12 +589,18 @@ describe('validation-group dispatch handshake retries', () => {
       const calls: StepName[] = [];
       const events: ConductorEvent[] = [];
       const emitter = new ConductorEventEmitter();
-      for (const type of ['kickback', 'loop_halt'] as const) emitter.on(type, (event) => { events.push(event); });
+      for (const type of ['kickback', 'loop_halt'] as const)
+        emitter.on(type, (event) => {
+          events.push(event);
+        });
       const runner: StepRunner = {
         run: vi.fn(async (step, _state, options) => {
           calls.push(step);
           if (step === 'manual_test') {
-            await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+            );
           } else if (step === 'prd_audit') {
             await writePrdPass(dir, options);
           } else if (step === 'architecture_review_as_built') {
@@ -410,24 +610,35 @@ describe('validation-group dispatch handshake retries', () => {
         }),
       };
       const conductor = new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events: emitter,
-        fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events: emitter,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
         config: { gate_code_validity: { enabled: false }, defaults: { max_retries: maxRetries } },
       });
-      const commitStateChanges = vi.spyOn(conductor as unknown as {
-        commitStateChanges: (
-          state: ConductState,
-          name: string,
-          changes: Record<string, unknown>,
-        ) => Promise<void>;
-      }, 'commitStateChanges');
-      vi.spyOn(conductor as unknown as {
-        verdictDispatchHandshake: (step: StepName) => Promise<{
-          done: false;
-          routeClass: 'absent';
-          reason: string;
-        } | undefined>;
-      }, 'verdictDispatchHandshake').mockImplementation(async (step) =>
+      const commitStateChanges = vi.spyOn(
+        conductor as unknown as {
+          commitStateChanges: (state: ConductState, name: string, changes: Record<string, unknown>) => Promise<void>;
+        },
+        'commitStateChanges',
+      );
+      vi.spyOn(
+        conductor as unknown as {
+          verdictDispatchHandshake: (step: StepName) => Promise<
+            | {
+                done: false;
+                routeClass: 'absent';
+                reason: string;
+              }
+            | undefined
+          >;
+        },
+        'verdictDispatchHandshake',
+      ).mockImplementation(async (step) =>
         step === 'prd_audit'
           ? {
               done: false,
@@ -452,9 +663,12 @@ describe('validation-group dispatch handshake retries', () => {
         expect.anything(),
         'fail manual_test validation group',
         expect.objectContaining({
-          manual_test: 'done', validation__manual_test: 'done',
-          architecture_review_as_built: 'done', validation__architecture_review_as_built: 'done',
-          prd_audit: 'failed', last_step: 'manual_test',
+          manual_test: 'done',
+          validation__manual_test: 'done',
+          architecture_review_as_built: 'done',
+          validation__architecture_review_as_built: 'done',
+          prd_audit: 'failed',
+          last_step: 'manual_test',
         }),
       );
       expect(events.filter((event) => event.type === 'kickback')).toHaveLength(0);
