@@ -199,9 +199,10 @@ import {
   originDefaultBranch,
   type RebaseResolver,
 } from './engine/rebase.js';
-import { applyRebaseTransition } from './engine/rebase-transition.js';
+import { applyRebaseTransition, completeInterruptedRebaseOperation } from './engine/rebase-transition.js';
 import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
 import { readRebaseRecoveryAttempt } from './engine/rebase-recovery-attempt.js';
+import { readVerdict } from './engine/gate-verdicts.js';
 import type { GitRunner } from './engine/setup-triage.js';
 import { readBaseSha, readPersistedBaseSha, writePersistedBaseSha } from './engine/daemon-sha.js';
 import {
@@ -2644,34 +2645,67 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               throw new Error('verified replay proof changed before admission');
             const state = await readState(join(worktreePath, '.pipeline', 'conduct-state.json'));
             if (!state.ok) throw new Error('cannot read conduct state for verified rebase recovery');
-            const verdict = await applyRebaseVerdicts(
-              worktreePath,
-              await deriveRecoveredRebaseOutcome(git, worktreePath, result.replay),
-              state.value.manual_test === 'done',
-              makeRekickBuildPreVerify(worktreePath, slug),
-              git,
-            );
-            if (!verdict.replay) throw new Error('verified replay produced no transition identity');
-            const transition = await applyRebaseTransition({
-              projectRoot: worktreePath,
-              stateStore: createFilesystemConductStateStore(join(worktreePath, '.pipeline', 'conduct-state.json')),
-              replay: verdict.replay,
-              invalidated: verdict.kickedBack,
-              preserved: verdict.preservedGates ?? [],
-              preservedCandidates: verdict.preservedCandidates ?? [],
-              reverified: verdict.reverified,
-              operationId: `verified-rebase-${proof.completedHead}`,
-              ...(child === undefined ? {} : { child }),
-            });
+            const stateStore = createFilesystemConductStateStore(join(worktreePath, '.pipeline', 'conduct-state.json'));
+            const operationId = `verified-rebase-${proof.completedHead}`;
+            // Transition recording is a durable two-phase operation.  A retry
+            // must continue the matching record rather than let verdict
+            // application overwrite it with a fresh provisional descriptor.
+            const recorded = (await readVerdict(worktreePath, 'rebase'))?.rebaseOperation;
+            const transition =
+              recorded?.id === operationId && recorded.status === 'applying'
+                ? await completeInterruptedRebaseOperation({
+                    projectRoot: worktreePath,
+                    stateStore,
+                    operation: recorded,
+                    downstreamSteps: ALL_STEPS.map((step) => step.name),
+                    preVerify: makeRekickBuildPreVerify(worktreePath, slug),
+                    ...(child === undefined ? {} : { child }),
+                  })
+                : recorded?.id === operationId && recorded.status === 'applied'
+                  ? { stateResult: 'already-applied' as const }
+                  : await (async () => {
+                      const verdict = await applyRebaseVerdicts(
+                        worktreePath,
+                        await deriveRecoveredRebaseOutcome(git, worktreePath, result.replay),
+                        state.value.manual_test === 'done',
+                        makeRekickBuildPreVerify(worktreePath, slug),
+                        git,
+                        undefined,
+                        child,
+                      );
+                      if (!verdict.replay) throw new Error('verified replay produced no transition identity');
+                      return applyRebaseTransition({
+                        projectRoot: worktreePath,
+                        stateStore,
+                        replay: verdict.replay,
+                        invalidated: verdict.kickedBack,
+                        preserved: verdict.preservedGates ?? [],
+                        preservedCandidates: verdict.preservedCandidates ?? [],
+                        reverified: verdict.reverified,
+                        operationId,
+                        ...(child === undefined ? {} : { child }),
+                      });
+                    })();
             if (transition.stateResult === 'refused') throw new Error('verified rebase transition was refused');
+            // Persist the occurrence before removing the only recovery signal.
+            // The feature persister deduplicates the stable id if a process
+            // dies after delivery but before the marker rename.
+            await withFeatureEventPersistence({
+              worktreePath,
+              globalEvents: events,
+              featureSlug: slug,
+              run: async (featureEvents) => {
+                await featureEvents.emit({
+                  type: 'halt_cleared',
+                  cause: 'verified-rebase',
+                  eventId: `verified-rebase-halt-cleared:${slug}:${proof.completedHead}`,
+                });
+              },
+            });
             // This is intentionally not `clearMarker`: recovered work is already
             // rebased, so writing REKICK would replay it a second time.
             await rename(join(worktreePath, HALT_MARKER), join(worktreePath, '.pipeline', 'HALT.cleared'));
             await rm(join(worktreePath, '.pipeline', 'HALT.class'), { force: true });
-            const featureEvents = new ConductorEventEmitter();
-            new AuditTrailWriter(worktreePath).subscribe(featureEvents);
-            await featureEvents.emit({ type: 'halt_cleared', cause: 'verified-rebase' });
-            await events.emit({ type: 'halt_cleared', cause: 'verified-rebase' });
           },
           log,
         });
