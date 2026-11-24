@@ -47,13 +47,73 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 describe('T14 — daemon-cli wires the real progress-gated re-kick predicate into runDaemon deps', () => {
+  // Covers: task:4, task:rem-prd-audit-5
+  it('reports a missing recovery attempt, retains the halt, and spends no build attempts across repeated evaluation', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'verified-rebase-recovery-wiring-'));
+    const worktreeBase = join(projectRoot, '.worktrees');
+    const slug = 'recovery';
+    const pipeline = join(worktreeBase, slug, '.pipeline');
+    const logs: string[] = [];
+    const originalConsoleLog = console.log;
+    let buildAttempts = 0;
+    try {
+      console.log = ((...args: unknown[]) => logs.push(args.map(String).join(' '))) as typeof console.log;
+      await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+      await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), '');
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT'), 'completed rebase requires verification\n');
+      await writeFile(join(pipeline, 'HALT.class'), 'rebase-recovery\n');
+      let captured: DaemonDeps | undefined;
+      await runDaemonMode({
+        projectRoot,
+        concurrency: 1,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+        runHaltClassMigration: async () => worktreeBase,
+        workSource: {
+          discover: async () => {
+            buildAttempts += 1;
+            return [];
+          },
+        },
+        watch: false,
+        runDaemon: async (deps) => {
+          captured = deps;
+          return { processed: [], stoppedReason: 'backlog_drained' };
+        },
+      });
+
+      await captured!.reconcileVerifiedRebaseRecoveries!();
+      await captured!.reconcileVerifiedRebaseRecoveries!();
+      expect(logs.filter((line) => line.includes('verified-rebase recovery: retained'))).toEqual([
+        expect.stringContaining('rebase recovery attempt evidence is missing or invalid'),
+        expect.stringContaining('rebase recovery attempt evidence is missing or invalid'),
+      ]);
+      // The recovery hook is only allowed to make a verified feature eligible;
+      // absent evidence must retain it rather than run the scheduler again.
+      expect(buildAttempts).toBe(0);
+      await expect(readFile(join(pipeline, 'HALT'), 'utf8')).resolves.toContain(
+        'completed rebase requires verification',
+      );
+      await expect(readFile(join(pipeline, 'HALT.class'), 'utf8')).resolves.toBe('rebase-recovery\n');
+    } finally {
+      console.log = originalConsoleLog;
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('runDaemon deps use the production halt classifier, even when progress re-kicks are disabled', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'retryable-halt-class-wiring-'));
     const worktreeBase = join(projectRoot, '.worktrees');
     try {
       await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
       await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'build_progress_halt:\n  enabled: false\n');
-      for (const [slug, haltClass] of [['mechanical-halt', 'mechanical'], ['human-halt', 'needs-human']] as const) {
+      for (const [slug, haltClass] of [
+        ['mechanical-halt', 'mechanical'],
+        ['human-halt', 'needs-human'],
+      ] as const) {
         const pipeline = join(worktreeBase, slug, '.pipeline');
         await mkdir(pipeline, { recursive: true });
         await writeFile(join(pipeline, 'HALT.class'), `${haltClass}\n`);
@@ -340,10 +400,7 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
       await rm(join(pipeline, 'HALT'));
       expect(await deps.isFreshRetryableHalt(slug)).toBe(false);
 
-      const progress = buildProgressReKickDeps(
-        { build_progress_halt: { enabled: false } } as any,
-        worktreeBase,
-      );
+      const progress = buildProgressReKickDeps({ build_progress_halt: { enabled: false } } as any, worktreeBase);
       expect(progress.isProgressReKickEligible).toBeUndefined();
       expect(deps.clearRetryableHalt).toBeTypeOf('function');
       expect(deps.stampDispatchBaseline).toBeTypeOf('function');

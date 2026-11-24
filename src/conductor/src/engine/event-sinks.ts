@@ -262,7 +262,10 @@ export const EVENT_SINKS = {
   unattributed_dispatch: { render: false, persist: false, audit: false, otel: false },
   unattributed_progress: { render: true, persist: true, audit: false, otel: false },
   build_uncommitted_work: { render: true, persist: true, audit: false, otel: false },
-  halt_cleared: { render: false, persist: false, audit: true, otel: false },
+  // Halt closure is a durable feature occurrence.  In particular, verified
+  // rebase recovery must be reconstructable after a process dies between the
+  // clear and the next maintenance sweep.
+  halt_cleared: { render: false, persist: true, audit: true, otel: false },
   halt_clear_authorized: { render: false, persist: true, audit: true, otel: false },
   kickback_budget_adjustment_authorized: { render: false, persist: true, audit: true, otel: false },
   ci_failed: { render: true, persist: true, audit: false, otel: false },

@@ -10,10 +10,7 @@ vi.mock('../../src/engine/daemon-maintenance.js', async (importOriginal) => {
   return {
     ...actual,
     DaemonMaintenance: class extends actual.DaemonMaintenance {
-      override async run<T>(
-        operation: DaemonMaintenanceOperation,
-        work: () => Promise<T>,
-      ): Promise<T | undefined> {
+      override async run<T>(operation: DaemonMaintenanceOperation, work: () => Promise<T>): Promise<T | undefined> {
         serialTrace.entries.push(`maintenance:${operation}:begin`);
         const result = await super.run(operation, work);
         serialTrace.entries.push(`maintenance:${operation}:end`);
@@ -83,14 +80,14 @@ const RECORDED_N1_TRACE = {
     'maintenance:stale-engine:begin',
     'stale',
     'maintenance:stale-engine:end',
-    'sweep',
     'sleep',
+    'sweep',
     'maintenance:sweep:begin',
     'maintenance:sweep:end',
-    'gate:pause',
     'gate:episode',
-    'base:local',
     'gate:pause',
+    'gate:pause',
+    'base:local',
     'gate:build-auth',
     'gate:episode',
     'discover:local',
@@ -100,17 +97,19 @@ const RECORDED_N1_TRACE = {
     'maintenance:restart-pending:end',
     'maintenance:stale-engine:begin',
     'stale',
-    'sweep',
     'maintenance:stale-engine:end',
+    'sweep',
   ],
 } as const;
 
 describe('daemon serial equivalence (Task 25)', () => {
   it('keeps both resolved-concurrency-one startup lines byte-for-byte serial', () => {
-    expect(formatDaemonStartupLog({ concurrency: 1, source: 'default' }, false))
-      .toBe('scanning backlog (concurrency 1)…');
-    expect(formatDaemonStartupLog({ concurrency: 1, source: 'flag' }, true))
-      .toBe('scanning backlog (concurrency 1, continuous)…');
+    expect(formatDaemonStartupLog({ concurrency: 1, source: 'default' }, false)).toBe(
+      'scanning backlog (concurrency 1)…',
+    );
+    expect(formatDaemonStartupLog({ concurrency: 1, source: 'flag' }, true)).toBe(
+      'scanning backlog (concurrency 1, continuous)…',
+    );
   });
 
   // Covers: task:rem-prd-audit-R6.

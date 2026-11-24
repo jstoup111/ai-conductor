@@ -30,7 +30,7 @@ import { computeTimingRollup } from './timing-rollup.js';
 import { readState } from './state.js';
 import type { GithubOperationRunner } from './github-operations.js';
 import { hasDurableChildState } from './child-cursor.js';
-import { acquireFeatureDispatchLease, type FeatureDispatchLease } from './feature-dispatch-lease.js';
+import { acquireFeatureDispatchLease, registerFeatureDispatchLease, type FeatureDispatchLease } from './feature-dispatch-lease.js';
 import { isOperatorParked } from './park-marker.js';
 
 function timingReasonClass(reason: string | undefined): import('../types/events.js').TimingReasonClass {
@@ -448,7 +448,7 @@ export function makeRunFeature(deps: FeatureRunnerDeps): (item: BacklogItem) => 
           }
           return { slug: item.slug, status: 'parked', reason: 'feature-lease-held' };
         }
-        dispatchLease = leaseResult.lease;
+        dispatchLease = registerFeatureDispatchLease(deps.projectRoot, item.slug, leaseResult.lease);
         if (await isOperatorParked(deps.projectRoot, item.slug)) {
           featureLog(`[daemon-runner] dispatch skipped ${item.slug} — parked-after-lease`);
           return { slug: item.slug, status: 'parked', reason: 'parked-after-lease' };

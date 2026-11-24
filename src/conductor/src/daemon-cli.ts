@@ -9,7 +9,7 @@ import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { existsSync, realpathSync, readFileSync } from 'node:fs';
-import { access, mkdir, readFile, readlink } from 'node:fs/promises';
+import { access, mkdir, readFile, readlink, rename, rm } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
@@ -56,6 +56,7 @@ import { formatProviderStartLine } from './ui/provider-start-line.js';
 import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
 import type { UIRenderer } from './ui/types.js';
 import { ALL_STEPS } from './engine/steps.js';
+import { pipelinePathFor } from './engine/child-context.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
@@ -89,6 +90,7 @@ import {
   isForwardedFromFeature,
   startDaemonEventPersistence,
   startFeatureEventPersistence,
+  persistFeatureEventDurably,
   withFeatureEventPersistence,
   withSessionEventTail,
 } from './engine/event-persister.js';
@@ -156,8 +158,9 @@ import {
   formatDaemonConcurrencyWarning,
   resolveDaemonCommandConcurrency,
 } from './engine/daemon-command.js';
-import { hasDurableChildState } from './engine/child-cursor.js';
-import { acquireFeatureDispatchLease } from './engine/feature-dispatch-lease.js';
+import { hasDurableChildState, resolveActiveChild } from './engine/child-cursor.js';
+import { resolveExecutionChild } from './engine/routing/execution-child.js';
+import { acquireFeatureDispatchLease, withFeatureDispatchSerialization } from './engine/feature-dispatch-lease.js';
 import { createChildProcessFeatureExecutor, type ChildFeatureExecutorDeps } from './engine/child-feature-executor.js';
 import { createExecutorBroker } from './engine/executor-broker.js';
 import { sweepExecutorRecordsOnBoot } from './engine/executor-records.js';
@@ -191,7 +194,17 @@ import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js'
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { readState } from './engine/state.js';
 import { supersedeHaltRecord } from './engine/halt-record.js';
-import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
+import {
+  applyRebaseVerdicts,
+  deriveRecoveredRebaseOutcome,
+  makeGitRunner,
+  originDefaultBranch,
+  type RebaseResolver,
+} from './engine/rebase.js';
+import { applyRebaseTransition, completeInterruptedRebaseOperation } from './engine/rebase-transition.js';
+import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
+import { readRebaseRecoveryAttempt } from './engine/rebase-recovery-attempt.js';
+import { readVerdict } from './engine/gate-verdicts.js';
 import type { GitRunner } from './engine/setup-triage.js';
 import { readBaseSha, readPersistedBaseSha, writePersistedBaseSha } from './engine/daemon-sha.js';
 import {
@@ -226,9 +239,17 @@ import {
   readKickbackHaltGeneration,
   recoverEpisodeHalts,
   resolveHaltRetention,
+  admitVerifiedRebaseRecoveries,
+  evaluateRebaseRecoveryHalt,
+  makeRekickBuildPreVerify,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
-import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
+import {
+  HALT_MARKER,
+  isOperatorActionHalt,
+  readHaltClass,
+  readRebaseRecoveryHaltGeneration,
+} from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import {
   applyPooledRepairOutcome,
@@ -1309,6 +1330,33 @@ export function attachFeatureEventRenderer(
   return () => {
     for (const type of renderableEvents) featureEvents.off(type, renderEvent);
   };
+}
+
+/**
+ * Publish the durable feature occurrence that precedes a verified-rebase
+ * recovery clear.  Keeping this at the daemon composition boundary ensures a
+ * maintenance-only recovery has the same feature-owned event ledger and
+ * forwarding attribution as a dispatched feature run.
+ */
+export async function publishVerifiedRebaseHaltCleared(input: {
+  worktreePath: string;
+  globalEvents: ConductorEventEmitter;
+  featureSlug: string;
+  completedHead: string;
+}): Promise<void> {
+  const scope = startFeatureEventPersistence(input.worktreePath, input.globalEvents, input.featureSlug);
+  try {
+    const event = {
+      type: 'halt_cleared' as const,
+      cause: 'verified-rebase' as const,
+      eventId: `verified-rebase-halt-cleared:${input.featureSlug}:${input.completedHead}`,
+    };
+    // EventPersister's ordinary listener is deliberately best-effort.  This
+    // recovery cannot clear its durable HALT until this occurrence is durable.
+    if (await persistFeatureEventDurably(scope.events, event) === 'persisted') await scope.events.emit(event);
+  } finally {
+    await scope.drain();
+  }
 }
 
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
@@ -2571,6 +2619,152 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             new AuditTrailWriter(join(worktreeBase, slug)).subscribe(featureEvents);
             await featureEvents.emit(event);
             await events.emit(event);
+          },
+          log,
+        });
+      },
+      reconcileVerifiedRebaseRecoveries: async () => {
+        await admitVerifiedRebaseRecoveries({
+          listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
+          worktreePath: (slug) => join(worktreeBase, slug),
+          readAttempt: (slug) => readRebaseRecoveryAttempt(join(worktreeBase, slug), { readFile }),
+          verify: async (slug, _attempt, child) => {
+            const result = await evaluateRebaseRecoveryHalt({
+              worktreePath: join(worktreeBase, slug),
+              feature: slug,
+              ...(child === undefined ? {} : { child }),
+              git: makeGitRunner(join(worktreeBase, slug)),
+            });
+            return result;
+          },
+          readHead: async (slug) => {
+            const result = await makeGitRunner(join(worktreeBase, slug))(['rev-parse', 'HEAD']);
+            return result.exitCode === 0 ? result.stdout.trim() : '';
+          },
+          // Resolve the live execution owner independently of the persisted
+          // replay record. A routed/revalidating child owns its own gate state.
+          readExecutionChild: async (slug) => {
+            const cursor = await resolveActiveChild(join(worktreeBase, slug), slug);
+            const execution = resolveExecutionChild(cursor, slug);
+            return 'target' in execution ? execution.target.child : undefined;
+          },
+          isOperatorParked: (slug) => isOperatorParked(projectRoot, slug),
+          readHaltClass: (slug) => readRawHaltClass(join(worktreeBase, slug)),
+          readHaltGeneration: (slug) => readRebaseRecoveryHaltGeneration(join(worktreeBase, slug)),
+          acquireFeatureDispatchLease: (slug) =>
+            acquireFeatureDispatchLease(projectRoot, slug, 'verified rebase recovery'),
+          serializeFeatureMutation: (slug, run) =>
+            withFeatureDispatchSerialization(projectRoot, slug, run),
+          recheckScheduler: async (slug) => !(await isOperatorParked(projectRoot, slug)),
+          admit: async (slug, proof) => {
+            const worktreePath = join(worktreeBase, slug);
+            const git = makeGitRunner(worktreePath);
+            const cursor = await resolveActiveChild(worktreePath, slug);
+            const execution = resolveExecutionChild(cursor, slug);
+            const child = 'target' in execution ? execution.target.child : undefined;
+            const result = await evaluateRebaseRecoveryHalt({
+              worktreePath,
+              feature: slug,
+              ...(child === undefined ? {} : { child }),
+              git,
+            });
+            if (
+              result.kind !== 'verified' ||
+              result.proof.attemptGeneration !== proof.attemptGeneration ||
+              result.proof.completedHead !== proof.completedHead
+            )
+              throw new Error('verified replay proof changed before admission');
+            // Region gates belong to the routed child state.  Reading and
+            // transitioning the flat state here would leave the child verdicts
+            // and state split across two execution identities.
+            const statePath = pipelinePathFor(worktreePath, 'conduct-state.json', child);
+            const state = await readState(statePath);
+            if (!state.ok) throw new Error('cannot read conduct state for verified rebase recovery');
+            const stateStore = createFilesystemConductStateStore(statePath);
+            const operationId = `verified-rebase-${proof.completedHead}`;
+            // Transition recording is a durable two-phase operation.  A retry
+            // must continue the matching record rather than let verdict
+            // application overwrite it with a fresh provisional descriptor.
+            const recorded = (await readVerdict(worktreePath, 'rebase'))?.rebaseOperation;
+            const transition =
+              recorded?.id === operationId && recorded.status === 'applying'
+                ? await completeInterruptedRebaseOperation({
+                    projectRoot: worktreePath,
+                    stateFilePath: statePath,
+                    stateStore,
+                    operation: recorded,
+                    downstreamSteps: ALL_STEPS.map((step) => step.name),
+                    preVerify: makeRekickBuildPreVerify(worktreePath, slug),
+                    ...(child === undefined ? {} : { child }),
+                  })
+                : recorded?.id === operationId && recorded.status === 'applied'
+                  ? { stateResult: 'already-applied' as const }
+                  : await (async () => {
+                      const verdict = await applyRebaseVerdicts(
+                        worktreePath,
+                        await deriveRecoveredRebaseOutcome(git, worktreePath, result.replay),
+                        state.value.manual_test === 'done',
+                        makeRekickBuildPreVerify(worktreePath, slug),
+                        git,
+                        undefined,
+                        child,
+                        undefined,
+                        operationId,
+                      );
+                      if (!verdict.replay) throw new Error('verified replay produced no transition identity');
+                      return applyRebaseTransition({
+                        projectRoot: worktreePath,
+                        stateFilePath: statePath,
+                        stateStore,
+                        replay: verdict.replay,
+                        invalidated: verdict.kickedBack,
+                        preserved: verdict.preservedGates ?? [],
+                        preservedCandidates: verdict.preservedCandidates ?? [],
+                        reverified: verdict.reverified,
+                        operationId,
+                        ...(child === undefined ? {} : { child }),
+                      });
+                    })();
+            if (transition.stateResult === 'refused') throw new Error('verified rebase transition was refused');
+            // The transition can perform filesystem work.  Do not let an
+            // operator park or replacement recovery halt that arrived during
+            // it get erased by the originally verified proof.
+            const liveCursor = await resolveActiveChild(worktreePath, slug);
+            const liveExecution = resolveExecutionChild(liveCursor, slug);
+            const liveChild = 'target' in liveExecution ? liveExecution.target.child : undefined;
+            const liveHeadResult = await git(['rev-parse', 'HEAD']);
+            const liveProof = await evaluateRebaseRecoveryHalt({
+              worktreePath,
+              feature: slug,
+              ...(liveChild === undefined ? {} : { child: liveChild }),
+              git,
+            });
+            const stillVerified =
+              !(await isOperatorParked(projectRoot, slug)) &&
+              (await readRawHaltClass(worktreePath)).trim() === 'rebase-recovery' &&
+              (await readRebaseRecoveryHaltGeneration(worktreePath)).trim() === proof.attemptGeneration &&
+              liveChild === child &&
+              liveHeadResult.exitCode === 0 && liveHeadResult.stdout.trim() === proof.completedHead &&
+              liveProof.kind === 'verified' &&
+              liveProof.proof.attemptGeneration === proof.attemptGeneration &&
+              liveProof.proof.completedHead === proof.completedHead;
+            if (!stillVerified) {
+              log(`verified-rebase ${slug}: retained — recovery ownership changed before clear`);
+              return;
+            }
+            // Persist the occurrence before removing the only recovery signal.
+            // The feature persister deduplicates the stable id if a process
+            // dies after delivery but before the marker rename.
+            await publishVerifiedRebaseHaltCleared({
+              worktreePath,
+              featureSlug: slug,
+              globalEvents: events,
+              completedHead: proof.completedHead,
+            });
+            // This is intentionally not `clearMarker`: recovered work is already
+            // rebased, so writing REKICK would replay it a second time.
+            await rename(join(worktreePath, HALT_MARKER), join(worktreePath, '.pipeline', 'HALT.cleared'));
+            await rm(join(worktreePath, '.pipeline', 'HALT.class'), { force: true });
           },
           log,
         });

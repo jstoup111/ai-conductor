@@ -16,7 +16,7 @@ import {
   warnSpoolUnavailable,
 } from '../../../src/engine/otel/spool-wiring.js';
 import { buildExporters } from '../../../src/engine/otel/transport.js';
-import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
+import { resolveOtelConfig, type ResolvedOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import type { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
@@ -244,49 +244,36 @@ describe('resolveSpoolDir', () => {
       response.writeHead(200).end();
       if (received.length === 2) arrive();
     });
-    // Config validation reads the ambient environment once, while the runtime
-    // gets its own live environment object. Keep the validation-only key
-    // fixture-local so concurrently running tests cannot unset OTLP_TOKEN.
     const credentialVariable = 'OTEL_SPOOL_WIRING_ROTATED_TOKEN';
-    const previous = process.env[credentialVariable];
-    process.env[credentialVariable] = 'first';
+    const config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }> = {
+      enabled: true,
+      exporter: 'otlp',
+      endpoint: await endpoint(collector),
+      spool: { enabled: true, maxBytes: 1024 },
+      headers: { authorization: 'first' },
+      headerReferences: { authorization: { kind: 'env', variable: credentialVariable } },
+      provenance: DEFAULT_PROVENANCE,
+    };
+    const environment: NodeJS.ProcessEnv = { [credentialVariable]: 'first' };
+    const runtime = createSpoolRuntime(directory, config, undefined, { environment });
+    await runtime.store.write('traces', Buffer.from('first'));
+    const draining = runtime.drainer.drainUntilStopped();
     try {
-      const config = resolveOtelConfig(
-        {
-          otel: {
-            exporter: 'otlp',
-            endpoint: await endpoint(collector),
-            headers: { authorization: { env: credentialVariable } },
-            spool: { enabled: true },
-          },
-        },
-        join(directory, '.pipeline'),
-      );
-      if (!config.enabled || config.exporter !== 'otlp') throw new Error('expected OTLP configuration');
-      const environment: NodeJS.ProcessEnv = { [credentialVariable]: 'first' };
-      const runtime = createSpoolRuntime(directory, config, undefined, { environment });
-      await runtime.store.write('traces', Buffer.from('first'));
-      const draining = runtime.drainer.drainUntilStopped();
-      try {
-        // A response flush only proves that the collector wrote the response;
-        // it can precede the drainer reading it and deleting the first batch.
-        // Rotate only after that first delivery has reached its terminal state.
-        await waitFor(async () => (await runtime.store.list('traces')).length === 0, 'first delivery did not complete');
-        environment[credentialVariable] = 'rotated';
-        await runtime.store.write('traces', Buffer.from('second'));
-        await Promise.race([
-          secondRequest,
-          new Promise<never>((_resolve, reject) =>
-            setTimeout(() => reject(new Error('second delivery did not arrive')), 5_000),
-          ),
-        ]);
-      } finally {
-        await runtime.drainer.stop();
-        await draining;
-      }
+      // A response flush only proves that the collector wrote the response;
+      // it can precede the drainer reading it and deleting the first batch.
+      // Rotate only after that first delivery has reached its terminal state.
+      await waitFor(async () => (await runtime.store.list('traces')).length === 0, 'first delivery did not complete');
+      environment[credentialVariable] = 'rotated';
+      await runtime.store.write('traces', Buffer.from('second'));
+      await Promise.race([
+        secondRequest,
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error('second delivery did not arrive')), 5_000),
+        ),
+      ]);
     } finally {
-      if (previous === undefined) delete process.env[credentialVariable];
-      else process.env[credentialVariable] = previous;
+      await runtime.drainer.stop();
+      await draining;
     }
 
     expect(received).toEqual(['first', 'rotated']);

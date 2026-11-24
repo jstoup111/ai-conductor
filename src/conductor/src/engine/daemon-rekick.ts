@@ -1,4 +1,4 @@
-import { readdir, readFile, rename, rm, writeFile, stat } from 'node:fs/promises';
+import { access, readdir, readFile, rename, rm, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   HALT_MARKER,
@@ -44,6 +44,8 @@ import { emitRestackRefused } from './restack/restack-events.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
+import { readRebaseRecoveryAttempt, type RebaseRecoveryAttempt } from './rebase-recovery-attempt.js';
+import { verifyCompletedReplay } from './rebase-replay.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { ALL_STEPS } from './steps.js';
@@ -72,11 +74,197 @@ export interface HaltRetentionDecision {
  */
 export const RETAINED_HALT_CLASSES: ReadonlySet<string> = new Set([
   'needs-human',
+  'rebase-recovery',
   PLAN_GAP_HALT_CLASS,
   STACK_TIP_DIVERGED_HALT_CLASS,
   OVER_SCOPE_HALT_CLASS,
   KICKBACK_CAP_HALT_CLASS,
 ]);
+
+/**
+ * Read-only daemon-side evaluation of an evidenced rebase halt.  This helper
+ * deliberately never clears a marker or dispatches work: its caller owns the
+ * later conditional admission transaction.  Consequently a repeated blocked
+ * evaluation consumes no build attempts.
+ */
+export async function evaluateRebaseRecoveryHalt(opts: {
+  worktreePath: string;
+  feature: string;
+  child?: number;
+  git?: GitRunner;
+}): Promise<
+  | {
+      kind: 'verified';
+      replay: import('./rebase-replay.js').ReplayIdentity;
+      expectedTree: string;
+      proof: { attemptGeneration: string; completedHead: string };
+    }
+  | { kind: 'retained'; reason: string }
+> {
+  const attempt = await readRebaseRecoveryAttempt(opts.worktreePath, { readFile });
+  if (!attempt) return { kind: 'retained', reason: 'rebase recovery attempt evidence is missing or invalid' };
+  if (attempt.feature !== opts.feature)
+    return { kind: 'retained', reason: 'rebase recovery attempt feature does not match the halted feature' };
+  if (attempt.child !== opts.child)
+    return { kind: 'retained', reason: 'rebase recovery attempt execution child does not match the halted feature' };
+
+  const verified = await verifyCompletedReplay(
+    opts.git ?? makeGitRunner(opts.worktreePath),
+    opts.worktreePath,
+    attempt,
+    { access },
+  );
+  return verified.kind === 'accepted'
+    ? {
+        kind: 'verified',
+        replay: verified.identity,
+        expectedTree: verified.comparison.expectedTree,
+        proof: { attemptGeneration: attempt.generation, completedHead: verified.identity.completedHead },
+      }
+    : { kind: 'retained', reason: verified.reason };
+}
+
+/**
+ * Compare the live state immediately before recovery admission with the
+ * verified snapshot.  The recovery owner calls this while holding the
+ * feature's existing dispatch lease; it deliberately performs no mutation so
+ * a park or replacement halt always wins the race.
+ */
+export function validateRebaseRecoveryAdmission(input: {
+  expectedGeneration: string;
+  liveAttempt: RebaseRecoveryAttempt | undefined;
+  expectedHead: string;
+  liveHead: string;
+  expectedChild?: number;
+  liveChild?: number;
+  operatorParked: boolean;
+  independentBlocker: boolean;
+  liveHaltClass: string;
+  liveHaltGeneration: string;
+}): { kind: 'admitted' } | { kind: 'retained'; reason: string } {
+  if (input.operatorParked) return { kind: 'retained', reason: 'feature is operator-parked' };
+  if (input.independentBlocker) return { kind: 'retained', reason: 'an independent halt blocker is present' };
+  if (input.liveHaltClass !== 'rebase-recovery')
+    return { kind: 'retained', reason: 'rebase recovery halt was replaced' };
+  if (input.liveHaltGeneration !== input.expectedGeneration) {
+    return { kind: 'retained', reason: 'rebase recovery halt generation changed before admission' };
+  }
+  if (input.liveAttempt?.generation !== input.expectedGeneration) {
+    return { kind: 'retained', reason: 'rebase recovery attempt changed before admission' };
+  }
+  if (input.liveHead !== input.expectedHead)
+    return { kind: 'retained', reason: 'completed revision changed before admission' };
+  if (input.liveChild !== input.expectedChild)
+    return { kind: 'retained', reason: 'execution child changed before admission' };
+  return { kind: 'admitted' };
+}
+
+/**
+ * Serialize verified-rebase admission with every writer that can change a
+ * feature's dispatch eligibility. Verification intentionally happens before
+ * the lease; the complete identity is then re-read while the lease is held,
+ * so an operator park, replacement halt, revision, or execution-child change
+ * wins without being overwritten by a stale verifier.
+ *
+ * `admit` is deliberately the only mutator. The transition/clear owner wires
+ * it later; this boundary owns the conditional admission, not dispatch.
+ */
+export interface VerifiedRebaseRecoveryAdmissionDeps {
+  listHaltedWorktrees: () => Promise<string[]>;
+  worktreePath: (slug: string) => string;
+  readAttempt: (slug: string) => Promise<RebaseRecoveryAttempt | undefined>;
+  verify: (
+    slug: string,
+    attempt: RebaseRecoveryAttempt,
+    child: number | undefined,
+  ) => Promise<
+    | { kind: 'verified'; proof: { attemptGeneration: string; completedHead: string } }
+    | { kind: 'retained'; reason: string }
+  >;
+  readHead: (slug: string) => Promise<string>;
+  readExecutionChild: (slug: string) => Promise<number | undefined>;
+  isOperatorParked: (slug: string) => Promise<boolean>;
+  readHaltClass: (slug: string) => Promise<string>;
+  readHaltGeneration: (slug: string) => Promise<string>;
+  acquireFeatureDispatchLease: (slug: string) => Promise<FeatureDispatchLeaseAcquireResult>;
+  /** Shares the in-process half of the feature lease with marker writers. */
+  serializeFeatureMutation?: <T>(slug: string, run: () => Promise<T>) => Promise<T>;
+  /** Test and integration seam for a race between verification and admission. */
+  beforeAdmission?: (slug: string) => Promise<void>;
+  /** Scheduler's final eligibility check; false leaves the verified halt intact. */
+  recheckScheduler: (slug: string) => Promise<boolean>;
+  /** Runs while the feature lease is held after every identity check passed. */
+  admit: (slug: string, proof: { attemptGeneration: string; completedHead: string }) => Promise<void>;
+  log?: (message: string) => void;
+}
+
+export async function admitVerifiedRebaseRecoveries(deps: VerifiedRebaseRecoveryAdmissionDeps): Promise<string[]> {
+  const admitted: string[] = [];
+  for (const slug of await deps.listHaltedWorktrees()) {
+    try {
+      if (await deps.isOperatorParked(slug)) continue;
+      if ((await deps.readHaltClass(slug)).trim() !== 'rebase-recovery') continue;
+
+      const expected = await deps.readAttempt(slug);
+      if (!expected) {
+        deps.log?.(`verified-rebase ${slug}: retained — rebase recovery attempt evidence is missing or invalid`);
+        continue;
+      }
+      const expectedHead = await deps.readHead(slug);
+      const expectedChild = await deps.readExecutionChild(slug);
+      const verification = await deps.verify(slug, expected, expectedChild);
+      if (verification.kind !== 'verified') {
+        deps.log?.(`verified-rebase ${slug}: retained — ${verification.reason}`);
+        continue;
+      }
+
+      await deps.beforeAdmission?.(slug);
+      const admitUnderLease = async (): Promise<boolean> => {
+      const acquired = await deps.acquireFeatureDispatchLease(slug);
+      if (acquired.kind !== 'acquired') {
+        deps.log?.(`verified-rebase ${slug}: retained — feature dispatch lease unavailable`);
+        return false;
+      }
+      try {
+        const liveHaltClass = (await deps.readHaltClass(slug)).trim();
+        const decision = validateRebaseRecoveryAdmission({
+          expectedGeneration: verification.proof.attemptGeneration,
+          liveAttempt: await deps.readAttempt(slug),
+          expectedHead,
+          liveHead: await deps.readHead(slug),
+          expectedChild,
+          liveChild: await deps.readExecutionChild(slug),
+          operatorParked: await deps.isOperatorParked(slug),
+          independentBlocker: liveHaltClass !== 'rebase-recovery',
+          liveHaltClass,
+          liveHaltGeneration: (await deps.readHaltGeneration(slug)).trim(),
+        });
+        if (decision.kind !== 'admitted') {
+          deps.log?.(`verified-rebase ${slug}: retained — ${decision.reason}`);
+          return false;
+        }
+        if (!(await deps.recheckScheduler(slug))) {
+          deps.log?.(`verified-rebase ${slug}: retained — scheduler ownership changed before admission`);
+          return false;
+        }
+        await deps.admit(slug, verification.proof);
+        return true;
+      } finally {
+        const released = await acquired.lease.release();
+        if (!released.ok)
+          deps.log?.(`verified-rebase ${slug}: feature dispatch lease release failed (${released.message})`);
+      }
+      };
+      const admittedNow = await (deps.serializeFeatureMutation
+        ? deps.serializeFeatureMutation(slug, admitUnderLease)
+        : admitUnderLease());
+      if (admittedNow) admitted.push(slug);
+    } catch (error) {
+      deps.log?.(`verified-rebase ${slug}: retained (${errMsg(error)})`);
+    }
+  }
+  return admitted;
+}
 
 /**
  * The single retention decision every automatic path shares (sealed Story 3).
@@ -189,9 +377,7 @@ export interface ClearHaltForResumeDeps {
  * authorization unconsumed; repairing first is the only ordering under which
  * "stays halted" is literally true rather than a marker already deleted.
  */
-export async function clearHaltForResume(
-  deps: ClearHaltForResumeDeps,
-): Promise<ResumeHaltClearResult> {
+export async function clearHaltForResume(deps: ClearHaltForResumeDeps): Promise<ResumeHaltClearResult> {
   const prUrl = await deps.resolvePrUrl?.(deps.slug);
   if (prUrl && deps.cleanupPresentation) {
     const presentation = await deps.cleanupPresentation(prUrl);
@@ -247,9 +433,7 @@ export interface ConsumeResumeAuthorizationsDeps {
  * halt must still be the cap halt the authorization was bound to, then the
  * atomic clear, and only a CONFIRMED clear consumes the authorization.
  */
-export async function consumeResumeAuthorizations(
-  deps: ConsumeResumeAuthorizationsDeps,
-): Promise<string[]> {
+export async function consumeResumeAuthorizations(deps: ConsumeResumeAuthorizationsDeps): Promise<string[]> {
   const cleared: string[] = [];
   for (const slug of await deps.listHaltedWorktrees()) {
     try {
@@ -268,44 +452,57 @@ export async function consumeResumeAuthorizations(
       }
       const path = deps.worktreePath(slug);
       const children = await listExistingChildren(path);
-      const activeChild = children.length === 0 ? undefined : await (async () => {
-        const activeChild = await (deps.resolveActiveChild ?? resolveActiveChild)(path, slug);
-        if (activeChild.kind !== 'active' && activeChild.kind !== 'repair-pending') {
-          throw new Error(`active child cursor is ${activeChild.kind}`);
-        }
-        return activeChild;
-      })();
+      const activeChild =
+        children.length === 0
+          ? undefined
+          : await (async () => {
+              const activeChild = await (deps.resolveActiveChild ?? resolveActiveChild)(path, slug);
+              if (activeChild.kind !== 'active' && activeChild.kind !== 'repair-pending') {
+                throw new Error(`active child cursor is ${activeChild.kind}`);
+              }
+              return activeChild;
+            })();
       const flatLedger = await readKickbackLedger(path);
       const execution = activeChild === undefined ? undefined : resolveExecutionChild(activeChild, slug);
       const executionChild = execution !== undefined && 'target' in execution ? execution.target.child : undefined;
       // A restack cap belongs to the cursor range (normally the leaf), even
       // while a routed host temporarily owns the BUILD region.
       const cursorChild = activeChild === undefined ? undefined : activeChild.child;
-      const executionLedger = executionChild === undefined ? flatLedger : await readKickbackLedger(path, executionChild);
-      const cursorLedger = cursorChild === undefined || cursorChild === executionChild
-        ? executionLedger
-        : await readKickbackLedger(path, cursorChild);
-      const haltGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
-      const liveGate = [flatLedger, executionLedger, cursorLedger].flatMap((ledger) => Object.entries(ledger.gates))
-        .find(([, entry]) => entry.capEvidence?.haltGeneration === haltGeneration)?.[0];
-      const ledger = liveGate === 'restack'
-        ? cursorLedger
-        : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
+      const executionLedger =
+        executionChild === undefined ? flatLedger : await readKickbackLedger(path, executionChild);
+      const cursorLedger =
+        cursorChild === undefined || cursorChild === executionChild
           ? executionLedger
-          : flatLedger;
-      const ledgerChild = liveGate === 'restack' ? cursorChild
-        : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate) ? executionChild
-          : undefined;
+          : await readKickbackLedger(path, cursorChild);
+      const haltGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
+      const liveGate = [flatLedger, executionLedger, cursorLedger]
+        .flatMap((ledger) => Object.entries(ledger.gates))
+        .find(([, entry]) => entry.capEvidence?.haltGeneration === haltGeneration)?.[0];
+      const ledger =
+        liveGate === 'restack'
+          ? cursorLedger
+          : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
+            ? executionLedger
+            : flatLedger;
+      const ledgerChild =
+        liveGate === 'restack'
+          ? cursorChild
+          : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
+            ? executionChild
+            : undefined;
       if (isUnreadableKickbackLedger(ledger)) {
         throw new Error('kickback ledger is unreadable');
       }
       // adr-2026-08-31 decision 3: a malformed sibling gate never invalidates a
       // healthy gate's authorization, but its own gate is never honored.
-      const candidates = Object.entries(ledger.gates).filter(([gate, entry]) =>
-        !isUnreadableKickbackGate(ledger, gate) &&
-        entry.capEvidence && entry.resumeAuthorization && !entry.resumeAuthorization.consumed &&
-        entry.capEvidence.gate === gate &&
-        entry.capEvidence.haltGeneration === entry.resumeAuthorization.haltGeneration,
+      const candidates = Object.entries(ledger.gates).filter(
+        ([gate, entry]) =>
+          !isUnreadableKickbackGate(ledger, gate) &&
+          entry.capEvidence &&
+          entry.resumeAuthorization &&
+          !entry.resumeAuthorization.consumed &&
+          entry.capEvidence.gate === gate &&
+          entry.capEvidence.haltGeneration === entry.resumeAuthorization.haltGeneration,
       );
       if (candidates.length === 0) continue;
       // The live halt must still be THIS gate's cap halt. Without this an
@@ -341,7 +538,9 @@ export async function consumeResumeAuthorizations(
         await deps.emit?.(slug, { type: 'halt_cleared', cause: 'kickback-budget' });
         cleared.push(slug);
       }
-    } catch (error) { deps.log?.(`kickback-budget ${slug}: retained (${errMsg(error)})`); }
+    } catch (error) {
+      deps.log?.(`kickback-budget ${slug}: retained (${errMsg(error)})`);
+    }
   }
   return cleared;
 }
@@ -449,10 +648,7 @@ const warnedShippedByDeps = new WeakMap<RekickSweepDeps, Set<string>>();
  * Never throws: a per-worktree failure is logged and isolated; the sweep
  * continues with the rest (FR-7 / FR-10).
  */
-export async function rekickSweep(
-  deps: RekickSweepDeps,
-  sha: string,
-): Promise<RekickSweepResult> {
+export async function rekickSweep(deps: RekickSweepDeps, sha: string): Promise<RekickSweepResult> {
   const log = deps.log ?? (() => {});
   const cleared: string[] = [];
   const skipped: string[] = [];
@@ -551,16 +747,14 @@ export async function rekickSweep(
     // durable root lease before touching either a paused rebase or its HALT
     // marker, then re-check the operator's intent in the acquisition window.
     let dispatchLease: Extract<FeatureDispatchLeaseAcquireResult, { kind: 'acquired' }>['lease'] | undefined;
-    if (deps.hasDurableChildState && await deps.hasDurableChildState(slug) === true) {
-      const leaseResult = deps.acquireFeatureDispatchLease
-        ? await deps.acquireFeatureDispatchLease(slug)
-        : undefined;
+    if (deps.hasDurableChildState && (await deps.hasDurableChildState(slug)) === true) {
+      const leaseResult = deps.acquireFeatureDispatchLease ? await deps.acquireFeatureDispatchLease(slug) : undefined;
       if (!leaseResult || leaseResult.kind !== 'acquired') {
         skipped.push(slug);
         if (leaseResult?.kind === 'live-owner') {
           log(
             `re-kick ${slug}: skipped — feature-lease-held ` +
-            `(${leaseResult.owner.purpose}, pid ${leaseResult.owner.pid})`,
+              `(${leaseResult.owner.purpose}, pid ${leaseResult.owner.pid})`,
           );
         } else {
           log(`re-kick ${slug}: skipped — feature-lease-held`);
@@ -906,6 +1100,8 @@ export async function resumeRebaseFirst(opts: {
   verifyMergedShipment?: () => Promise<VerifiedMergedPrResult>;
   /** Test seam for the engine-owned rebase adapter. */
   performRebase?: typeof performRebase;
+  /** Test seam; production resolves the current stacked child before replay. */
+  resolveActiveChild?: typeof resolveActiveChild;
   /**
    * Post-rebase mechanical pre-verify capability for the `build` gate
    * (adr-2026-07-08-post-rebase-gate-first-mechanical-reverify). Optional
@@ -925,7 +1121,7 @@ export async function resumeRebaseFirst(opts: {
 
   // An open routed round owns the stack.  Keep the sentinel so its eventual
   // close can perform the deferred refresh instead of silently losing it.
-  if (opts.slug && await routedRoundOpen(opts.worktreePath, opts.slug)) {
+  if (opts.slug && (await routedRoundOpen(opts.worktreePath, opts.slug))) {
     await opts.events.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
     return 'skipped';
   }
@@ -937,7 +1133,12 @@ export async function resumeRebaseFirst(opts: {
   // completion evidence: every refusal and unavailable dependency parks the
   // worktree without writing synthetic success markers.
   if (opts.prUrl && !opts.slug) {
-    await writeHalt(opts.worktreePath, [], 'durable shipment evidence: shipment-evidence-inputs-incomplete', opts.events);
+    await writeHalt(
+      opts.worktreePath,
+      [],
+      'durable shipment evidence: shipment-evidence-inputs-incomplete',
+      opts.events,
+    );
     return 'halted';
   }
   if (opts.runGh && opts.prUrl && opts.slug) {
@@ -1016,13 +1217,21 @@ export async function resumeRebaseFirst(opts: {
         await writeHalt(opts.worktreePath, [], 'cannot inspect completed stacked re-kick', opts.events);
         return 'halted';
       }
-      const allChangedPaths = delta.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+      const allChangedPaths = delta.stdout
+        .split('\n')
+        .map((path) => path.trim())
+        .filter(Boolean);
       stackedOutcome = {
         kind: 'changed',
         baseSha: targetSha,
-        changedCodePaths: allChangedPaths.filter((path) => /(?:^|\/)(?:src|test)\//.test(path) || /\.(?:[cm]?[jt]sx?)$/.test(path)),
+        changedCodePaths: allChangedPaths.filter(
+          (path) => /(?:^|\/)(?:src|test)\//.test(path) || /\.(?:[cm]?[jt]sx?)$/.test(path),
+        ),
         allChangedPaths,
-        featureSurface: featureSurface.stdout.split('\n').map((path) => path.trim()).filter(Boolean),
+        featureSurface: featureSurface.stdout
+          .split('\n')
+          .map((path) => path.trim())
+          .filter(Boolean),
         documentInputs: [],
         replay: {
           preRebaseHead: previousSha,
@@ -1047,14 +1256,22 @@ export async function resumeRebaseFirst(opts: {
       origHead: string,
       head: string,
       flatten?: import('./rebase.js').FlattenedReplayPlan,
-    ): Promise<void> => defaultTranslateAfterRebase(
-      g, projectRoot, onto, origHead, head, opts.events, undefined, flatten,
-    ));
+    ): Promise<void> =>
+      defaultTranslateAfterRebase(g, projectRoot, onto, origHead, head, opts.events, undefined, flatten));
   let outcome: RebaseOutcome;
   try {
-    outcome = await (opts.performRebase ?? performRebase)(
-      git, opts.worktreePath, opts.localBase, { translateAfterRebase },
-    );
+    const activeChild =
+      opts.slug === undefined
+        ? undefined
+        : await (opts.resolveActiveChild ?? resolveActiveChild)(opts.worktreePath, opts.slug).catch(() => undefined);
+    const executionChild =
+      activeChild && (activeChild.kind === 'active' || activeChild.kind === 'repair-pending')
+        ? activeChild.child
+        : undefined;
+    outcome = await (opts.performRebase ?? performRebase)(git, opts.worktreePath, opts.localBase, {
+      translateAfterRebase,
+      ...(executionChild === undefined ? {} : { executionChild }),
+    });
   } catch (err) {
     if (err instanceof ProtectedArtifactSealRejection) {
       await writeSealHalt(opts.worktreePath, err.message, opts.events);
@@ -1082,13 +1299,10 @@ export async function resumeRebaseFirst(opts: {
       cap: opts.resolveAttempts ?? 0,
       resolve: opts.resolveConflict,
       translateAfterRebase,
-      onAttempt: (index, cap) =>
-        opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
+      onAttempt: (index, cap) => opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
       onSettled: (kind) =>
         opts.events.emit(
-          kind === 'exhausted'
-            ? { type: 'rebase_resolution_exhausted' }
-            : { type: 'rebase_resolution_succeeded' },
+          kind === 'exhausted' ? { type: 'rebase_resolution_exhausted' } : { type: 'rebase_resolution_succeeded' },
         ),
     });
   }
@@ -1116,7 +1330,10 @@ export async function resumeRebaseFirst(opts: {
   // the ordinary repair route below.
   let rawState: Record<string, unknown> | undefined;
   try {
-    rawState = JSON.parse(await readFile(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, unknown>;
+    rawState = JSON.parse(await readFile(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
   } catch {
     // Older re-kick entries may not yet have conduct state. They do not assert
     // a completed BUILD, so retain their established entry behavior.
@@ -1156,13 +1373,7 @@ export async function resumeRebaseFirst(opts: {
       }
     }
   }
-  const rebaseVerdict = await applyRebaseVerdicts(
-    opts.worktreePath,
-    outcome,
-    opts.ranManualTest,
-    preVerify,
-    git,
-  );
+  const rebaseVerdict = await applyRebaseVerdicts(opts.worktreePath, outcome, opts.ranManualTest, preVerify, git);
   const transitionReplay = rebaseVerdict.replay;
   let appliedGateDecision = rebaseVerdict;
   if (transitionReplay) {
@@ -1177,7 +1388,12 @@ export async function resumeRebaseFirst(opts: {
       reverified: rebaseVerdict.reverified,
     });
     if (transition.stateResult === 'refused') {
-      await writeHalt(opts.worktreePath, [], 'rebase continuation state transition was refused; inspect concurrent state updates before resuming', opts.events);
+      await writeHalt(
+        opts.worktreePath,
+        [],
+        'rebase continuation state transition was refused; inspect concurrent state updates before resuming',
+        opts.events,
+      );
       return 'halted';
     }
     // Keep spine reporting bound to the exact operation persisted by the
@@ -1201,12 +1417,7 @@ export async function resumeRebaseFirst(opts: {
       `re-kick ${basename(opts.worktreePath)}: ${step} gate re-verified mechanically after rebase — dispatch skipped`,
     );
   }
-  await emitGateInvalidationEvents(
-    opts.events,
-    outcome,
-    opts.ranManualTest,
-    appliedGateDecision,
-  );
+  await emitGateInvalidationEvents(opts.events, outcome, opts.ranManualTest, appliedGateDecision);
   // #436: stamp state.rebase = 'done' for clean/noop/changelog-resolved
   // outcomes via the shared helper (no-ops on conflict_halt) — same call
   // the in-loop runRebaseStep makes, so the pre-loop re-kick path leaves
@@ -1242,7 +1453,9 @@ export async function resumeRebaseFirst(opts: {
         kind: 'needs-human',
         reason: `rebase resolution paused — provider setup unavailable: ${outcome.reason}`,
       });
-      opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`);
+      opts.log?.(
+        `re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`,
+      );
       return 'halted';
     case 'changed':
     case 'noop':

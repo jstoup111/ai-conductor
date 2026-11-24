@@ -1961,7 +1961,8 @@ type ConductorEventBody =
       type: 'halt_record_written';
       path: string;
       slug: string;
-      haltClass: 'needs-human' | 'mechanical' | 'protected-artifact' | 'plan-gap' | 'stack-tip-diverged';
+      haltClass:
+        'needs-human' | 'mechanical' | 'rebase-recovery' | 'protected-artifact' | 'plan-gap' | 'stack-tip-diverged';
     }
   | {
       /** Writing or committing a durable halt record failed. */
@@ -2249,7 +2250,9 @@ type ConductorEventBody =
       /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */
       type: 'halt_cleared';
       step?: StepName;
-      cause: 'operator' | 'rekick' | 'kickback-budget' | 'stall-remediation';
+      cause: 'operator' | 'rekick' | 'kickback-budget' | 'verified-rebase' | 'stall-remediation';
+      /** Stable recovery occurrence identity; makes retry delivery idempotent. */
+      eventId?: string;
     }
   | {
       /** An interactive operator authorized clearing a halted feature. */

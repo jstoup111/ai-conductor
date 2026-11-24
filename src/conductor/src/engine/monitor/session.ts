@@ -23,9 +23,7 @@ export interface GuidedSessionRequest {
   readonly halt: GuidedSessionHalt;
 }
 
-export type GuidedSessionLauncher = (
-  request: InteractiveLaunchRequest,
-) => Promise<InteractiveLaunchOutcome>;
+export type GuidedSessionLauncher = (request: InteractiveLaunchRequest) => Promise<InteractiveLaunchOutcome>;
 
 export interface GuidedSessionOptions {
   readonly launch?: GuidedSessionLauncher;
@@ -41,9 +39,8 @@ function triageInvocation(provider: string, skillName: string): string {
 
 function monitorHostingBlock(provider: string): string[] {
   const descriptor = findBuiltInProviderDescriptor(provider);
-  const quitInstruction = descriptor && 'interactiveLaunch' in descriptor
-    ? descriptor.interactiveLaunch?.quitInstruction
-    : undefined;
+  const quitInstruction =
+    descriptor && 'interactiveLaunch' in descriptor ? descriptor.interactiveLaunch?.quitInstruction : undefined;
   return [
     MONITOR_HOSTED_MARKER,
     'Quitting this session returns the operator to the monitor queue.',
@@ -55,6 +52,7 @@ function monitorHostingBlock(provider: string): string[] {
 const HALT_DISPOSITIONS: Readonly<Record<HaltDisposition, true>> = {
   'needs-human': true,
   mechanical: true,
+  'rebase-recovery': true,
   'protected-artifact': true,
   'plan-gap': true,
   'stack-tip-diverged': true,
@@ -66,7 +64,7 @@ const HALT_DISPOSITIONS: Readonly<Record<HaltDisposition, true>> = {
 
 function recognizedHaltDisposition(value: unknown): HaltDisposition | undefined {
   if (typeof value !== 'string') return undefined;
-  return Object.hasOwn(HALT_DISPOSITIONS, value) ? value as HaltDisposition : undefined;
+  return Object.hasOwn(HALT_DISPOSITIONS, value) ? (value as HaltDisposition) : undefined;
 }
 
 /** The queue and session use one presentation for a missing or invalid sidecar. */
@@ -82,6 +80,8 @@ export function recoveryProcedure(haltClass: HaltDisposition): string {
       return 'Follow the needs-human halt recovery in docs/runbooks/stalled-or-stuck-feature.md.';
     case 'mechanical':
       return 'Follow the mechanical halt recovery in docs/runbooks/stalled-or-stuck-feature.md.';
+    case 'rebase-recovery':
+      return 'The daemon may resume this rebase only after it verifies the bound replay attempt.';
     case 'protected-artifact':
       return 'Follow the protected-artifact halt recovery in docs/runbooks/stalled-or-stuck-feature.md.';
     case 'plan-gap':
@@ -124,9 +124,7 @@ export async function openGuidedSession(
   options: GuidedSessionOptions = {},
 ): Promise<InteractiveLaunchOutcome> {
   const launch = options.launch ?? launchInteractiveSession;
-  const skillNameRoot = options.skillNameRoot === undefined
-    ? await resolveHarnessRoot()
-    : options.skillNameRoot;
+  const skillNameRoot = options.skillNameRoot === undefined ? await resolveHarnessRoot() : options.skillNameRoot;
   const triageName = await resolveSkillName(skillNameRoot, 'daemon-triage');
   return launch({
     provider: request.provider,

@@ -1,11 +1,11 @@
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { writeFile, readFile, access, lstat, mkdir, rename } from 'node:fs/promises';
+import { writeFile, readFile, access, lstat, mkdir, rename, unlink } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
 import { isRegionStep, type ChildId } from './child-context.js';
 import { isSkipVerdict, readVerdict, writeVerdict, type GateVerdict } from './gate-verdicts.js';
-import { writeHaltMarker } from './halt-marker.js';
+import { REBASE_RECOVERY_GENERATION_PREFIX, writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
@@ -34,6 +34,12 @@ import {
   type ReplayIdentity,
   type ReplayIdentitySeed,
 } from './rebase-replay.js';
+import {
+  matchesRebaseRecoveryAttempt,
+  persistRebaseRecoveryAttempt,
+  readRebaseRecoveryAttempt,
+  type RebaseRecoveryAttempt,
+} from './rebase-recovery-attempt.js';
 import type { ReplayEvidence } from './gate-verdicts.js';
 import {
   currentPreservedJudgeIdentity,
@@ -50,6 +56,8 @@ import {
   type RebaseRegradeJudge,
 } from './rebase-regrade-judgement.js';
 import type { ConductorEvent } from '../types/events.js';
+
+const rebaseRecoveryAttemptFilesystem = { mkdir, readFile, rename, unlink, writeFile };
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -480,6 +488,40 @@ export function filterCodeOrTestPaths(paths: string[]): string[] {
   return paths.filter(isCodeOrTestPath);
 }
 
+/**
+ * Rebuild the same delta and feature surface a normal completed rebase would
+ * have carried into gate invalidation. Recovery has immutable replay refs, so
+ * empty arrays must never stand in for a failed inspection.
+ */
+export async function deriveRecoveredRebaseOutcome(
+  git: GitRunner,
+  projectRoot: string,
+  replay: ReplayIdentity,
+): Promise<Extract<RebaseOutcome, { kind: 'changed' }>> {
+  const [delta, feature] = await Promise.all([
+    git(['diff', '--name-only', replay.preRebaseHead, replay.completedHead]),
+    git(['diff', '--name-only', replay.mergeBase, replay.preRebaseHead]),
+  ]);
+  if (delta.exitCode !== 0 || feature.exitCode !== 0) throw new Error('cannot derive recovered rebase change surfaces');
+  const allChangedPaths = delta.stdout
+    .split('\n')
+    .map((path) => path.trim())
+    .filter(Boolean);
+  const featureSurface = feature.stdout
+    .split('\n')
+    .map((path) => path.trim())
+    .filter(Boolean);
+  const documentInputs = await resolveReviewInputs(projectRoot, allChangedPaths);
+  return {
+    kind: 'changed',
+    changedCodePaths: filterCodeOrTestPaths(allChangedPaths),
+    allChangedPaths,
+    featureSurface,
+    documentInputs,
+    replay,
+  };
+}
+
 /** The set of paths that differ between two tree-ish refs (name-only). */
 export async function changedPathsBetween(git: GitRunner, fromRef: string, toRef: string): Promise<string[]> {
   const r = await git(['diff', '--name-only', fromRef, toRef]);
@@ -694,6 +736,19 @@ export async function writeHalt(
   events?: ConductorEventEmitter,
   resumeShape: RebaseResumeShape = 'paused-rebase',
 ): Promise<HaltMarkerWriteResult> {
+  return writeRebaseHalt(projectRoot, conflicts, extraReason, events, resumeShape, 'needs-human');
+}
+
+/** Only the rebase writer may select its evidence-bound recovery class. */
+async function writeRebaseHalt(
+  projectRoot: string,
+  conflicts: string[],
+  extraReason: string | undefined,
+  events: ConductorEventEmitter | undefined,
+  resumeShape: RebaseResumeShape,
+  haltClass: 'needs-human' | 'rebase-recovery',
+  recoveryGeneration?: string,
+): Promise<HaltMarkerWriteResult> {
   const note =
     resumeShape === 'completed-rebase'
       ? `rebase completed — parked for human review\n` +
@@ -711,7 +766,11 @@ export async function writeHalt(
         `  2. git rebase --continue\n` +
         `  3. rm .pipeline/HALT\n` +
         `  4. Re-queue the feature for the daemon.\n`;
-  return writeHaltMarker(projectRoot, note, 'needs-human', events);
+  const boundNote =
+    haltClass === 'rebase-recovery' && recoveryGeneration
+      ? `${note}${REBASE_RECOVERY_GENERATION_PREFIX}${recoveryGeneration}\n`
+      : note;
+  return writeHaltMarker(projectRoot, boundNote, haltClass, events);
 }
 
 /** Park a seal refusal that happened before git started a rebase. */
@@ -775,6 +834,8 @@ type RebaseOutcomeKind =
       reason: string;
       /** Immutable P/B/O captured before replay; not completed replay authority. */
       replaySeed?: ReplayIdentitySeed;
+      /** Durable replay operation captured before Git moved HEAD. */
+      recoveryAttempt?: RebaseRecoveryAttempt;
       /** A completed rebase failed a post-resolution acceptance guard. */
       resumeShape?: RebaseResumeShape;
       /** Git refused before creating rebase state; `--continue` is invalid. */
@@ -1324,7 +1385,19 @@ export async function writeRebaseOutcomeHalt(
     );
   }
   if (!outcome.startFailure) {
-    return writeHalt(projectRoot, outcome.conflicts, outcome.reason, events, outcome.resumeShape);
+    const attempt = await readRebaseRecoveryAttempt(projectRoot, rebaseRecoveryAttemptFilesystem);
+    const haltClass = matchesRebaseRecoveryAttempt(attempt, outcome.recoveryAttempt)
+      ? 'rebase-recovery'
+      : 'needs-human';
+    return writeRebaseHalt(
+      projectRoot,
+      outcome.conflicts,
+      outcome.reason,
+      events,
+      outcome.resumeShape ?? 'paused-rebase',
+      haltClass,
+      haltClass === 'rebase-recovery' ? outcome.recoveryAttempt?.generation : undefined,
+    );
   }
   const quarantine = outcome.quarantine
     ? `\nQuarantined files: ${outcome.quarantine.paths.join(', ')}\nQuarantine directory: ${outcome.quarantine.directory}\n`
@@ -1544,6 +1617,8 @@ function reviewDelta(outcome: Extract<RebaseOutcome, { kind: 'changed' }>): stri
 }
 
 export interface PerformRebaseOpts {
+  /** Execution child that owns this replay; absent for an ordinary flat feature. */
+  executionChild?: ChildId;
   /**
    * Enables the normal-finish-only prospective-merge policy. Omitted callers
    * retain the mandatory rebase required by recovery/re-kick paths.
@@ -1658,6 +1733,22 @@ export async function performRebase(
     mergeBase: (await git(['merge-base', 'HEAD', base.ref])).stdout.trim(),
     target: (await git(['rev-parse', base.ref])).stdout.trim(),
   };
+  const persistedRecoveryAttempt = await persistRebaseRecoveryAttempt(
+    projectRoot,
+    replaySeed,
+    rebaseRecoveryAttemptFilesystem,
+    opts?.executionChild,
+  );
+  if (persistedRecoveryAttempt.kind === 'failed') {
+    return {
+      kind: 'conflict_halt',
+      conflicts: [],
+      reason: `could not persist rebase recovery attempt: ${persistedRecoveryAttempt.reason}`,
+      startFailure: true,
+      replaySeed,
+    };
+  }
+  const recoveryAttempt = persistedRecoveryAttempt.kind === 'persisted' ? persistedRecoveryAttempt.attempt : undefined;
   const { preRebaseHead: preTree, mergeBase, target } = replaySeed;
   const attachReplayIdentity = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
     if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;
@@ -1667,6 +1758,7 @@ export async function performRebase(
   const attachReplaySeed = (outcome: Extract<RebaseOutcome, { kind: 'conflict_halt' }>): RebaseOutcome => ({
     ...outcome,
     replaySeed,
+    ...(recoveryAttempt === undefined ? {} : { recoveryAttempt }),
   });
   const translateCompletedRebase = async (flatten?: FlattenedReplayPlan): Promise<void> => {
     if (!opts?.translateAfterRebase) return;
@@ -2582,7 +2674,9 @@ export async function runGatedRebaseResolution(opts: {
       /* best-effort */
     }
   }
-  return resolved;
+  return resolved.kind === 'conflict_halt' && outcome.recoveryAttempt !== undefined
+    ? { ...resolved, recoveryAttempt: outcome.recoveryAttempt }
+    : resolved;
 }
 
 // ── Verdict + event wiring (consumed by the conductor) ───────────────────────
@@ -2705,6 +2799,8 @@ export async function applyRebaseVerdicts(
   },
   child?: ChildId,
   cause?: RestackCause,
+  /** Stable recovery identity, so an interrupted provisional fence can resume. */
+  operationId?: string,
 ): Promise<{
   satisfied: boolean;
   kickedBack: StepName[];
@@ -2762,7 +2858,7 @@ export async function applyRebaseVerdicts(
     provisionalReplay === undefined
       ? undefined
       : {
-          id: `preparing-${createHash('sha256').update(JSON.stringify(provisionalReplay)).digest('hex')}`,
+          id: operationId ?? `preparing-${createHash('sha256').update(JSON.stringify(provisionalReplay)).digest('hex')}`,
           status: 'applying' as const,
           transition: { preserved: [], invalidated: [], reverified: [] },
           replay: provisionalReplay,

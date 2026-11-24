@@ -18,6 +18,56 @@ export interface FeatureDispatchLease {
   release(): Promise<{ ok: true } | { ok: false; message: string }>;
 }
 
+// A stacked executor holds this lease for its complete dispatch. Marker
+// writers belong to that dispatch, so they share its ownership rather than
+// contend with it as a second dispatch. The on-disk owner remains the
+// cross-process boundary; this registry only makes that owner reentrant here.
+const locallyOwnedLeases = new Map<string, FeatureDispatchLease>();
+// The durable lease excludes other processes.  A registered owner deliberately
+// makes acquisition re-entrant for work performed by its dispatch, so local
+// writers still need this keyed queue to avoid racing one another.
+const localSerializationTails = new Map<string, Promise<void>>();
+
+function localLeaseKey(repositoryRoot: string, slug: string): string {
+  return `${repositoryRoot}\u0000${slug}`;
+}
+
+/** Run one feature-scoped mutation after every earlier local mutation. */
+export async function withFeatureDispatchSerialization<T>(
+  repositoryRoot: string,
+  slug: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const key = localLeaseKey(repositoryRoot, slug);
+  const prior = localSerializationTails.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => { release = resolve; });
+  const tail = prior.then(() => mine);
+  localSerializationTails.set(key, tail);
+  await prior;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (localSerializationTails.get(key) === tail) localSerializationTails.delete(key);
+  }
+}
+
+export function registerFeatureDispatchLease(
+  repositoryRoot: string,
+  slug: string,
+  lease: FeatureDispatchLease,
+): FeatureDispatchLease {
+  const key = localLeaseKey(repositoryRoot, slug);
+  locallyOwnedLeases.set(key, lease);
+  return {
+    async release() {
+      if (locallyOwnedLeases.get(key) === lease) locallyOwnedLeases.delete(key);
+      return lease.release();
+    },
+  };
+}
+
 export type FeatureDispatchLeaseAcquireResult =
   | { kind: 'acquired'; lease: FeatureDispatchLease }
   | { kind: 'live-owner'; owner: FeatureDispatchLeaseOwner }
@@ -136,6 +186,9 @@ export async function acquireFeatureDispatchLease(
   purpose: string,
   options: FeatureDispatchLeaseOptions = {},
 ): Promise<FeatureDispatchLeaseAcquireResult> {
+  if (locallyOwnedLeases.has(localLeaseKey(repositoryRoot, slug))) {
+    return { kind: 'acquired', lease: { release: async () => ({ ok: true }) } };
+  }
   const leasePath = featureDispatchLeasePath(repositoryRoot, slug);
   const hostname = options.hostname ?? localHostname;
   const pid = options.pid ?? process.pid;

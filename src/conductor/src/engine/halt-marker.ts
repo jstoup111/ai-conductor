@@ -18,6 +18,8 @@ import {
   type HaltRecordRemoteOptions,
 } from './halt-record.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { acquireFeatureDispatchLease, withFeatureDispatchSerialization } from './feature-dispatch-lease.js';
+import { resolveMainRepoRoot } from './park-marker.js';
 import { readRestackJournal, isJournalOwnerAlive } from './restack/restack-journal.js';
 import { recoverRestackJournal } from './restack/restack-recovery.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
@@ -29,6 +31,19 @@ export const HALT_MARKER = '.pipeline/HALT';
 
 /** Machine-readable sidecar classifying why a HALT was raised. */
 export const HALT_CLASS_MARKER = '.pipeline/HALT.class';
+
+/** A recovery HALT binds its body to this one persisted replay generation. */
+export const REBASE_RECOVERY_GENERATION_PREFIX = 'Rebase recovery generation: ';
+
+/** Read the generation embedded in a rebase-recovery marker, if it is intact. */
+export async function readRebaseRecoveryHaltGeneration(worktreePath: string): Promise<string> {
+  try {
+    const body = await readFile(join(worktreePath, HALT_MARKER), 'utf8');
+    return new RegExp(`^${REBASE_RECOVERY_GENERATION_PREFIX}([^\\s]+)$`, 'm').exec(body)?.[1] ?? '';
+  } catch {
+    return '';
+  }
+}
 
 /** HALT class for a feature-authored protected-artifact violation. */
 export const PROTECTED_ARTIFACT_HALT_CLASS = 'protected-artifact';
@@ -45,6 +60,7 @@ export const STACK_TIP_DIVERGED_HALT_CLASS = 'stack-tip-diverged';
  */
 export type HaltClass =
   | 'needs-human'
+  | 'rebase-recovery'
   | 'mechanical'
   | typeof PROTECTED_ARTIFACT_HALT_CLASS
   | typeof PLAN_GAP_HALT_CLASS
@@ -56,12 +72,14 @@ export function isOperatorActionHalt(
   haltClass: HaltDisposition,
 ): haltClass is
   | 'needs-human'
+  | 'rebase-recovery'
   | typeof PROTECTED_ARTIFACT_HALT_CLASS
   | typeof PLAN_GAP_HALT_CLASS
   | typeof STACK_TIP_DIVERGED_HALT_CLASS
   | 'unclassified' {
   return (
     haltClass === 'needs-human' ||
+    haltClass === 'rebase-recovery' ||
     haltClass === PROTECTED_ARTIFACT_HALT_CLASS ||
     haltClass === PLAN_GAP_HALT_CLASS ||
     haltClass === STACK_TIP_DIVERGED_HALT_CLASS ||
@@ -70,9 +88,7 @@ export function isOperatorActionHalt(
 }
 
 /** True when a newly written step HALT has a class that carries its body as a reason. */
-function isStepWrittenHumanHalt(
-  haltClass: HaltDisposition,
-): haltClass is 'needs-human' | typeof PLAN_GAP_HALT_CLASS {
+function isStepWrittenHumanHalt(haltClass: HaltDisposition): haltClass is 'needs-human' | typeof PLAN_GAP_HALT_CLASS {
   return haltClass === 'needs-human' || haltClass === PLAN_GAP_HALT_CLASS;
 }
 
@@ -86,10 +102,7 @@ export type HaltMarkerWriteResult =
 // recurse into the same journal and produce a second halt record.
 const haltRecoveryInProgress = new Set<string>();
 
-async function recoverRestackBeforeHalt(
-  projectRoot: string,
-  events: ConductorEventEmitter | undefined,
-): Promise<void> {
+async function recoverRestackBeforeHalt(projectRoot: string, events: ConductorEventEmitter | undefined): Promise<void> {
   const slug = basename(projectRoot);
   const key = `${projectRoot}\0${slug}`;
   if (haltRecoveryInProgress.has(key)) return;
@@ -97,8 +110,9 @@ async function recoverRestackBeforeHalt(
   haltRecoveryInProgress.add(key);
   try {
     const read = await readRestackJournal(projectRoot, slug);
-    if (read.kind !== 'journal' || await isJournalOwnerAlive(read.journal.owner)) return;
-    if (read.journal.state !== 'ready' && read.journal.state !== 'moved' && read.journal.state !== 'rolling-back') return;
+    if (read.kind !== 'journal' || (await isJournalOwnerAlive(read.journal.owner))) return;
+    if (read.journal.state !== 'ready' && read.journal.state !== 'moved' && read.journal.state !== 'rolling-back')
+      return;
     await recoverRestackJournal({ worktree: projectRoot, slug, events, target: 'synced' });
   } catch {
     // The outer marker is the one durable failure signal.  Targeted recovery
@@ -126,6 +140,16 @@ export async function writeHaltMarker(
   events?: ConductorEventEmitter,
   recordRemote?: HaltRecordRemoteOptions,
 ): Promise<HaltMarkerWriteResult> {
+  // This is the same feature-scoped ownership boundary used by verified
+  // rebase admission.  A recovery cannot validate an old halt while a writer
+  // replaces it, then clear the replacement after its own transition.
+  const mainRoot = await resolveMainRepoRoot(projectRoot);
+  return withFeatureDispatchSerialization(mainRoot, basename(projectRoot), async () => {
+  const acquired = await acquireFeatureDispatchLease(mainRoot, basename(projectRoot), 'halt marker write');
+  if (acquired.kind !== 'acquired') {
+    return { status: 'failed' as const, path: join(projectRoot, HALT_MARKER), reason: 'feature serialization boundary unavailable' };
+  }
+  const release = () => acquired.lease.release().catch(() => undefined);
   const markerPath = join(projectRoot, HALT_MARKER);
   const haltClassPath = join(projectRoot, HALT_CLASS_MARKER);
   const haltClassTempPath = `${haltClassPath}.tmp`;
@@ -140,6 +164,7 @@ export async function writeHaltMarker(
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     await events?.emit({ type: 'halt_marker_write_failed', path: markerPath, reason }).catch(() => {});
+    await release();
     return { status: 'failed', path: markerPath, reason };
   }
 
@@ -150,13 +175,16 @@ export async function writeHaltMarker(
       ...recordRemote,
       events: recordRemote?.events ?? events,
     });
+    await release();
     return { status: 'written' };
   } catch (error) {
     await unlink(haltClassTempPath).catch(() => {});
     const reason = error instanceof Error ? error.message : String(error);
     await events?.emit({ type: 'halt_marker_write_failed', path: haltClassPath, reason }).catch(() => {});
+    await release();
     return { status: 'partial', writtenPath: markerPath, path: haltClassPath, reason };
   }
+  });
 }
 
 async function writeHaltRecord(
@@ -174,7 +202,9 @@ async function writeHaltRecord(
   try {
     const result = await recordHalt(projectRoot, input, recordRemote);
     if (result.kind === 'written') {
-      await events?.emit({ type: 'halt_record_written', path: result.path ?? path, slug: input.slug, haltClass }).catch(() => {});
+      await events
+        ?.emit({ type: 'halt_record_written', path: result.path ?? path, slug: input.slug, haltClass })
+        .catch(() => {});
     } else if (result.kind === 'failed') {
       await events?.emit({ type: 'halt_record_write_failed', path, reason: result.reason }).catch(() => {});
     } else if (result.kind === 'pushFailed') {
@@ -186,17 +216,13 @@ async function writeHaltRecord(
   }
 }
 
-async function haltRecordInput(
-  projectRoot: string,
-  haltBody: string,
-  haltClass: HaltClass,
-): Promise<HaltRecordInput> {
+async function haltRecordInput(projectRoot: string, haltBody: string, haltClass: HaltClass): Promise<HaltRecordInput> {
   const slug = basename(projectRoot);
   const [branch, headSha, phaseMarker, activeChild] = await Promise.all([
     gitValue(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']),
     gitValue(projectRoot, ['rev-parse', 'HEAD']),
     readFile(join(projectRoot, '.pipeline', 'phase-active'), 'utf8').catch(() => ''),
-    resolveActiveChild(projectRoot, slug).catch(() => ({ kind: 'no-child' } as const)),
+    resolveActiveChild(projectRoot, slug).catch(() => ({ kind: 'no-child' }) as const),
   ]);
   const fields = new Map(
     phaseMarker.split('\n').flatMap((line) => {
@@ -297,6 +323,7 @@ export async function readHaltClass(worktreePath: string): Promise<HaltDispositi
     const contents = (await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8')).trim();
     if (
       contents === 'needs-human' ||
+      contents === 'rebase-recovery' ||
       contents === 'mechanical' ||
       contents === 'legacy' ||
       contents === PROTECTED_ARTIFACT_HALT_CLASS ||
@@ -326,6 +353,7 @@ export async function readHaltSidecarClassification(worktreePath: string): Promi
     const contents = (await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8')).trim();
     if (
       contents === 'needs-human' ||
+      contents === 'rebase-recovery' ||
       contents === 'mechanical' ||
       contents === 'kickback-cap' ||
       contents === 'over-scope' ||
@@ -333,7 +361,8 @@ export async function readHaltSidecarClassification(worktreePath: string): Promi
       contents === PROTECTED_ARTIFACT_HALT_CLASS ||
       contents === PLAN_GAP_HALT_CLASS ||
       contents === STACK_TIP_DIVERGED_HALT_CLASS
-    ) return contents;
+    )
+      return contents;
     return 'unclassified';
   } catch {
     return 'unclassified';
