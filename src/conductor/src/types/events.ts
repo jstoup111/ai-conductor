@@ -1383,6 +1383,13 @@ type ConductorEventBody =
       nextProvider: string;
     }
   | {
+      /** A SHIP validator proceeds after its protected boundary was unavailable. */
+      type: 'ship_validator_fallback';
+      step: StepName;
+      provider: string;
+      reason: string;
+    }
+  | {
       /** A provider capability suppressed a would-be session resume. */
       type: 'session_policy';
       step: StepName;

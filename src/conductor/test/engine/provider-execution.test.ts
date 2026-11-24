@@ -774,6 +774,34 @@ describe('executeProviderCandidates', () => {
     },
   );
 
+  // Covers: task:2, S1.3
+  it.each(['manual_test', 'prd_audit', 'architecture_review_as_built'] as const)(
+    'warns and invokes the opted-in SHIP fallback when no protected boundary is available: %s',
+    async (step) => {
+      const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'validator evidence', exitCode: 0 }));
+      const warn = vi.fn();
+      const result = await executeProviderCandidates({
+        step, configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn()),
+        options: { prompt: 'validate', cwd: '/authoritative-worktree' },
+        allowShipValidatorFallback: true,
+        warn,
+        prepareCandidateSelfHost: async () => ({
+          executable: 'fallback-validator', env: {}, args: [], cwd: '/isolated-fallback-checkout',
+          shipValidatorFallbackReason: 'product write protection unavailable', teardown: async () => {},
+        }),
+      });
+      expect(result).toMatchObject({ success: true, output: 'validator evidence' });
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/isolated-fallback-checkout' }));
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`SHIP validator ${step}`),
+        expect.objectContaining({ type: 'ship_validator_fallback', step, provider: 'codex' }),
+      );
+    },
+  );
+
   // Covers: task:1, S1.1, S1.2
   it('keeps every SHIP validator inside its prepared boundary in serial and grouped launches', async () => {
     const calls: Array<{ step: StepName; protected: boolean }> = [];

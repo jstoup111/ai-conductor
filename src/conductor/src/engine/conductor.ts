@@ -6,6 +6,7 @@ import {
   access as accessFile,
   unlink as unlinkFile,
   stat,
+  symlink,
 } from 'node:fs/promises';
 import { registerSighupPersistence } from './sighup-persistence.js';
 import { manualTestBlockerClause } from './manual-test-blocker.js';
@@ -130,7 +131,7 @@ import type {
 } from '../types/index.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ProviderExecutionContext, ProviderCandidate } from './provider-execution.js';
-import { formatProviderCapabilityGapMessages } from './provider-execution.js';
+import { formatProviderCapabilityGapMessages, SHIP_VALIDATOR_STEPS } from './provider-execution.js';
 import { ProviderSetupUnavailableError } from '../execution/provider-setup-failure.js';
 import {
   BUILT_IN_PROVIDERS,
@@ -7728,6 +7729,33 @@ export class Conductor {
             if (!acquiredBoundaryLease.containment.contained) return invocation;
             return { ...invocation, ...wrapForContainment(invocation, bindSet) };
           };
+          const prepareShipValidatorFallback = async (): Promise<string | undefined> => {
+            if (acquiredBoundaryLease.containment.contained || !SHIP_VALIDATOR_STEPS.has(candidate.step)) return undefined;
+            // The fallback is deliberately a detached worktree at the exact
+            // inspected revision. It keeps the authoritative feature worktree
+            // and sibling validators untouched while the validator itself
+            // remains able to write its local evidence and runtime scratch.
+            const fallbackRoot = join(
+              this.projectRoot,
+              '.daemon',
+              'fallback-validators',
+              identity!.runId,
+              String(identity!.attempt),
+              candidate.step,
+              `${candidate.providerKey}-${randomUUID()}`,
+            );
+            await mkdir(dirname(fallbackRoot), { recursive: true });
+            const revision = await currentCommitSha(this.projectRoot);
+            if (!revision) throw new Error('Cannot provision SHIP validator fallback without a dispatch revision.');
+            await execa('git', ['worktree', 'add', '--detach', fallbackRoot, revision], { cwd: this.projectRoot });
+            // Validators own evidence below .pipeline; link only that owned
+            // destination back to the feature worktree while keeping every
+            // product and Git path in the independent detached checkout.
+            const evidenceRoot = join(this.projectRoot, '.pipeline');
+            await mkdir(evidenceRoot, { recursive: true });
+            await symlink(evidenceRoot, join(fallbackRoot, '.pipeline'), 'dir');
+            return fallbackRoot;
+          };
           // Until a context is returned its setup owns this window.  If any
           // allocation or verification precondition fails, there is no executor
           // teardown to close it on the candidate's behalf.
@@ -7766,12 +7794,15 @@ export class Conductor {
               events: this.events,
             });
             ownershipTransferred = true;
+            const fallbackCwd = await prepareShipValidatorFallback();
             return prepareInvocation({
               executable,
               env: home.childEnv(),
               args: home.childArgs(),
               originalCatalogHome: providerHome,
               scratchRoot: this.projectRoot,
+              ...(fallbackCwd === undefined ? {} : { cwd: fallbackCwd }),
+              ...(fallbackCwd === undefined ? {} : { shipValidatorFallbackReason: 'self-host containment unavailable' }),
               teardown: async () => {
                 try {
                   await home.teardown();
@@ -7796,12 +7827,15 @@ export class Conductor {
             injectedToken: daemonToken,
           });
           ownershipTransferred = true;
+          const fallbackCwd = await prepareShipValidatorFallback();
           return prepareInvocation({
             executable: provider.defaultExecutable,
             env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
             args: [],
             originalCatalogHome: providerHome,
             scratchRoot: this.projectRoot,
+            ...(fallbackCwd === undefined ? {} : { cwd: fallbackCwd }),
+            ...(fallbackCwd === undefined ? {} : { shipValidatorFallbackReason: 'self-host containment unavailable' }),
             teardown: async () => {
               try {
                 await sandbox.teardown();

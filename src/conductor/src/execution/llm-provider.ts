@@ -108,6 +108,14 @@ export interface SelfHostInvocation {
    * snapshot), so scratch confinement checks the home against this owner.
    */
   scratchRoot?: string;
+  /**
+   * A dispatch-owned checkout for an unprotected SHIP validator.  The provider
+   * adapter still receives the invocation as `selfHost`, but executes from
+   * this independent Git worktree rather than the authoritative feature tree.
+   */
+  cwd?: string;
+  /** Non-empty only when `cwd` is an ADR-approved SHIP fallback checkout. */
+  shipValidatorFallbackReason?: string;
   teardown(): Promise<void>;
 }
 

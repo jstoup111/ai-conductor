@@ -57,6 +57,7 @@ export const DAEMON_EVENT_DEPTH: DaemonEventDepthTable = {
   scratch_cleanup_failed: 1,
   feature_usage_total: 2,
   provider_fallback: 0,
+  ship_validator_fallback: 0,
   session_policy: 2,
   step_retry: 1,
   navigation_back: 0,
