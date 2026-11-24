@@ -142,6 +142,22 @@ export interface ProviderCandidate {
   effort: EffortLevel;
 }
 
+/**
+ * These are the SHIP validators which inspect product code while sharing a
+ * feature worktree. They must enter through the prepared invocation seam:
+ * that seam is where the daemon attaches the verified read-only product/Git
+ * boundary while retaining the validator's owned evidence and scratch paths.
+ */
+export const SHIP_VALIDATOR_STEPS = new Set<StepName>([
+  'manual_test',
+  'prd_audit',
+  'architecture_review_as_built',
+]);
+
+function requiresPreparedShipValidatorBoundary(step: StepName): boolean {
+  return SHIP_VALIDATOR_STEPS.has(step);
+}
+
 /** Identity of one actual model ladder rung; step ownership remains unchanged. */
 export type ProviderCandidateRung = Omit<ProviderCandidate, 'step'>;
 
@@ -1089,8 +1105,10 @@ export async function executeProviderCandidates({
           resolved,
           options: candidateInvocationOptions,
           prepareInvocationOptions: async (rungOptions) => {
+            // A protected validator still needs a per-invocation schema scratch
+            // home. Its provider home protects product/Git paths; it is not an
+            // evidence or runtime-scratch destination shared by siblings.
             if (
-              selfHost === undefined &&
               supportsNativeSchemaCapability &&
               rungOptions.nativeSchema !== undefined &&
               nativeSchemaScratch !== undefined
@@ -1152,6 +1170,14 @@ export async function executeProviderCandidates({
             selfHostCaptureIdentity,
             onPreparationRevoked,
           );
+          if (requiresPreparedShipValidatorBoundary(step) && selfHost === undefined) {
+            throw new ProviderSetupUnavailableError({
+              provider: providerKey,
+              capability: 'ship-validator-write-protection',
+              reason: `SHIP validator ${step} cannot establish its protected launch boundary.`,
+              recoveryAction: 'Provide a protected validator launch or an isolated fallback checkout before retrying.',
+            });
+          }
           // ADR daemon-session-command-contracts D6 (#3022): a read-only
           // review whose real launch argv can reach no observed command can
           // write no observation record, so it is provisioned no destination

@@ -755,6 +755,52 @@ describe('executeProviderCandidates', () => {
     expect(claudeInvoke).not.toHaveBeenCalled();
   });
 
+  // Covers: task:1, S1.1, S1.2
+  it.each(['manual_test', 'prd_audit', 'architecture_review_as_built'] as const)(
+    'refuses an unprotected SHIP validator launch before provider invocation: %s',
+    async (step) => {
+      const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'must not run', exitCode: 0 }));
+      const result = await executeProviderCandidates({
+        step, configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn()),
+        options: { prompt: 'validate', cwd: '/workspace' },
+      });
+      expect(result).toMatchObject({
+        success: false,
+        providerSetupExhaustion: { candidates: [{ provider: 'codex', capability: 'ship-validator-write-protection' }] },
+      });
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
+
+  // Covers: task:1, S1.1, S1.2
+  it('keeps every SHIP validator inside its prepared boundary in serial and grouped launches', async () => {
+    const calls: Array<{ step: StepName; protected: boolean }> = [];
+    const execute = async (step: 'manual_test' | 'prd_audit' | 'architecture_review_as_built') => {
+      const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        calls.push({ step, protected: options.selfHost?.executable === 'protected-validator' });
+        return { success: true, output: `${step} evidence`, exitCode: 0 };
+      });
+      return executeProviderCandidates({
+        step, configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn()),
+        options: { prompt: 'validate', cwd: '/workspace' },
+        prepareCandidateSelfHost: async () => ({ executable: 'protected-validator', env: {}, args: [], teardown: async () => {} }),
+      });
+    };
+    await expect(execute('manual_test')).resolves.toMatchObject({ success: true });
+    await expect(Promise.all([execute('prd_audit'), execute('architecture_review_as_built')])).resolves.toEqual([
+      expect.objectContaining({ success: true }), expect.objectContaining({ success: true }),
+    ]);
+    expect(calls).toEqual([
+      { step: 'manual_test', protected: true },
+      { step: 'prd_audit', protected: true },
+      { step: 'architecture_review_as_built', protected: true },
+    ]);
+  });
+
   it('falls through a typed setup-unavailable candidate without treating ordinary errors as fallback authority', async () => {
     const codexInvoke = vi.fn();
     const claudeInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 }));
@@ -2805,6 +2851,12 @@ describe('executeProviderCandidates', () => {
         attempt: 1,
         nativeSchemaScratch: { worktreeRoot, repository: 'acme/repo', featureSlug: 'feature' },
         options: { prompt: 'Return the constrained result.', cwd: worktreeRoot, nativeSchema: { type: 'object' } },
+        prepareCandidateSelfHost: async () => ({
+          executable: 'protected-validator',
+          env: {},
+          args: [],
+          teardown: async () => {},
+        }),
       });
     try {
       const first = execute('prd_audit');
