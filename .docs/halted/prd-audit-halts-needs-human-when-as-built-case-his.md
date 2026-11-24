@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-24T13:35:39.907Z
 Slug: prd-audit-halts-needs-human-when-as-built-case-his
 Class: needs-human
 Halting step: unknown
