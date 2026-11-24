@@ -1,4 +1,4 @@
-// Covers: task:5, task:6
+// Covers: task:5, task:6, task:rem-as-built-6a, task:rem-as-built-6b
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
