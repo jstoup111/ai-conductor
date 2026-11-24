@@ -1425,3 +1425,13 @@ implementation PR carries the waiver or migration block that the gate requires.
 **Done when:**
 - adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 8 is satisfied by this task.
 - The repair for task rem-as-built-rem2-asb-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-refusal-da1f1eb6-9eb0-488e-bd71-017f391a9819: Delete docs/reports/late-gate-build-coverage-audit/ (report.html, added in 7ed0c16ef3) so the feature diff no longer contains it. Add no replacement artifact or behavior.
+**Gate:** prd-audit
+**Rationale:** The operator refused docs/reports/late-gate-build-coverage-audit/report.html (commit 7ed0c16ef3) as process telemetry. It still exists in the branch. The repair is removal-only: delete the directory from the diff and add no behavior. No plan task or spec criterion depends on the file.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision da1f1eb6-9eb0-488e-bd71-017f391a9819 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision da1f1eb6-9eb0-488e-bd71-017f391a9819 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-da1f1eb6-9eb0-488e-bd71-017f391a9819 is committed and its targeted tests pass.
