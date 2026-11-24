@@ -3084,7 +3084,13 @@ export function resetRenderedReclaimRetentions(): void {
  * dispatch without forwarding it to the untagged daemon logger.
  */
 export function subscribeScopedProviderRendering(events: ConductorEventEmitter, log: (msg: string) => void): void {
-  for (const type of ['provider_attempt', 'provider_fallback', 'ship_validator_fallback', 'session_policy', 'provider_attempt_started'] as const) {
+  for (const type of [
+    'provider_attempt',
+    'provider_fallback',
+    'ship_validator_fallback',
+    'session_policy',
+    'provider_attempt_started',
+  ] as const) {
     events.on(type, (event) => renderDaemonEvent(event, log));
   }
 }

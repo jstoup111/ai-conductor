@@ -157,9 +157,7 @@ export interface ProviderSystemPromptCapability {
 }
 
 /** The synchronous authority decision made immediately before process creation. */
-export type SpawnPermitDecision =
-  | { permitted: true }
-  | { permitted: false; reason: 'revoked' | 'superseded' };
+export type SpawnPermitDecision = { permitted: true } | { permitted: false; reason: 'revoked' | 'superseded' };
 
 /**
  * The provider action being authorized by a lifecycle-owned spawn permit.
@@ -403,6 +401,9 @@ export interface LLMProvider {
    * an absent method keeps that proof mandatory.
    */
   readOnlyReviewObservedCommandReach?(
-    options: Pick<InvokeOptions, 'selfHost' | 'systemPrompt' | 'model' | 'nativeSchema' | 'sessionName' | 'interactive'>,
+    options: Pick<
+      InvokeOptions,
+      'selfHost' | 'systemPrompt' | 'model' | 'nativeSchema' | 'sessionName' | 'interactive'
+    >,
   ): 'none' | 'possible';
 }

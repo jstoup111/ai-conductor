@@ -486,27 +486,30 @@ describe('self-host live-boundary events', () => {
   // Covers: task:2, S1.3
   it('gives concurrent uncontained SHIP validators independent fallback checkouts', async () => {
     await writeState(join(projectRoot, 'conduct-state.json'), { ...BUILD_ONLY, manual_test: 'pending' });
-    const { conductor, persister, providerExecution } = harness(async () => {
-      const first = lastPrepared!;
-      const sibling = await providerExecution.prepareCandidateSelfHost!(
-        { step: 'manual_test', providerKey: 'claude', model: 'opus', effort: 'high' } as never,
-        {} as never,
-        { step: 'manual_test', runId: 'live-boundary-events', attempt: 2 },
-      );
-      try {
-        expect(first.cwd).toBeDefined();
-        expect(sibling?.cwd).toBeDefined();
-        expect(sibling?.cwd).not.toBe(first.cwd);
-        await writeFile(join(first.cwd!, 'fixture.txt'), 'first validator\n');
-        await execa('git', ['add', 'fixture.txt'], { cwd: first.cwd });
-        await execa('git', ['commit', '-m', 'validator edit'], { cwd: first.cwd });
-        expect(await readFile(join(projectRoot, 'fixture.txt'), 'utf8')).toBe('original\n');
-        expect(await readFile(join(sibling!.cwd!, 'fixture.txt'), 'utf8')).toBe('original\n');
-        return { success: true, output: 'done' };
-      } finally {
-        await sibling?.teardown();
-      }
-    }, { containment: false, fromStep: 'manual_test' });
+    const { conductor, persister, providerExecution } = harness(
+      async () => {
+        const first = lastPrepared!;
+        const sibling = await providerExecution.prepareCandidateSelfHost!(
+          { step: 'manual_test', providerKey: 'claude', model: 'opus', effort: 'high' } as never,
+          {} as never,
+          { step: 'manual_test', runId: 'live-boundary-events', attempt: 2 },
+        );
+        try {
+          expect(first.cwd).toBeDefined();
+          expect(sibling?.cwd).toBeDefined();
+          expect(sibling?.cwd).not.toBe(first.cwd);
+          await writeFile(join(first.cwd!, 'fixture.txt'), 'first validator\n');
+          await execa('git', ['add', 'fixture.txt'], { cwd: first.cwd });
+          await execa('git', ['commit', '-m', 'validator edit'], { cwd: first.cwd });
+          expect(await readFile(join(projectRoot, 'fixture.txt'), 'utf8')).toBe('original\n');
+          expect(await readFile(join(sibling!.cwd!, 'fixture.txt'), 'utf8')).toBe('original\n');
+          return { success: true, output: 'done' };
+        } finally {
+          await sibling?.teardown();
+        }
+      },
+      { containment: false, fromStep: 'manual_test' },
+    );
     await conductor.run();
     persister.stop();
   });

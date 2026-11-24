@@ -280,7 +280,11 @@ import {
   routedRoundOpen,
   routedWorkOutstanding,
 } from './routing/round-admission.js';
-import { captureFallbackValidatorHandoff, enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
+import {
+  captureFallbackValidatorHandoff,
+  enterHostRegion,
+  verifyGreenAcceptance,
+} from './routing/host-region-entry.js';
 import { settleDerivedNoOpHost } from './routing/routed-exit.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
 import { admitQueuedRevalidation } from './routing/queue-admission.js';
@@ -7729,8 +7733,11 @@ export class Conductor {
             if (!acquiredBoundaryLease.containment.contained) return invocation;
             return { ...invocation, ...wrapForContainment(invocation, bindSet) };
           };
-          const prepareShipValidatorFallback = async (): Promise<{ cwd: string; fallback: NonNullable<SelfHostInvocation['shipValidatorFallback']> } | undefined> => {
-            if (acquiredBoundaryLease.containment.contained || !SHIP_VALIDATOR_STEPS.has(candidate.step)) return undefined;
+          const prepareShipValidatorFallback = async (): Promise<
+            { cwd: string; fallback: NonNullable<SelfHostInvocation['shipValidatorFallback']> } | undefined
+          > => {
+            if (acquiredBoundaryLease.containment.contained || !SHIP_VALIDATOR_STEPS.has(candidate.step))
+              return undefined;
             // The fallback is deliberately a detached worktree at the exact
             // inspected revision. It keeps the authoritative feature worktree
             // and sibling validators untouched while the validator itself
@@ -7817,7 +7824,13 @@ export class Conductor {
               args: home.childArgs(),
               originalCatalogHome: providerHome,
               scratchRoot: this.projectRoot,
-              ...(fallback === undefined ? {} : { cwd: fallback.cwd, shipValidatorFallback: fallback.fallback, shipValidatorFallbackReason: 'self-host containment unavailable' }),
+              ...(fallback === undefined
+                ? {}
+                : {
+                    cwd: fallback.cwd,
+                    shipValidatorFallback: fallback.fallback,
+                    shipValidatorFallbackReason: 'self-host containment unavailable',
+                  }),
               teardown: async () => {
                 try {
                   await home.teardown();
@@ -7849,7 +7862,13 @@ export class Conductor {
             args: [],
             originalCatalogHome: providerHome,
             scratchRoot: this.projectRoot,
-            ...(fallback === undefined ? {} : { cwd: fallback.cwd, shipValidatorFallback: fallback.fallback, shipValidatorFallbackReason: 'self-host containment unavailable' }),
+            ...(fallback === undefined
+              ? {}
+              : {
+                  cwd: fallback.cwd,
+                  shipValidatorFallback: fallback.fallback,
+                  shipValidatorFallbackReason: 'self-host containment unavailable',
+                }),
             teardown: async () => {
               try {
                 await sandbox.teardown();

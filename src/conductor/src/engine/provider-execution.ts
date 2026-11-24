@@ -155,11 +155,7 @@ export interface ProviderCandidate {
  * that seam is where the daemon attaches the verified read-only product/Git
  * boundary while retaining the validator's owned evidence and scratch paths.
  */
-export const SHIP_VALIDATOR_STEPS = new Set<StepName>([
-  'manual_test',
-  'prd_audit',
-  'architecture_review_as_built',
-]);
+export const SHIP_VALIDATOR_STEPS = new Set<StepName>(['manual_test', 'prd_audit', 'architecture_review_as_built']);
 
 function requiresPreparedShipValidatorBoundary(step: StepName): boolean {
   return SHIP_VALIDATOR_STEPS.has(step);
@@ -1112,7 +1108,12 @@ export async function executeProviderCandidates({
               ...(selfHost ? { selfHost } : {}),
             }
           : selfHost
-            ? { ...ownedCandidateOptions, ...overrides, ...(selfHost.cwd === undefined ? {} : { cwd: selfHost.cwd }), selfHost }
+            ? {
+                ...ownedCandidateOptions,
+                ...overrides,
+                ...(selfHost.cwd === undefined ? {} : { cwd: selfHost.cwd }),
+                selfHost,
+              }
             : { ...ownedCandidateOptions, ...overrides };
         invocation = await invokeProviderCandidate({
           providerKey,
@@ -1193,14 +1194,17 @@ export async function executeProviderCandidates({
                 provider: providerKey,
                 capability: 'ship-validator-write-protection',
                 reason: `SHIP validator ${step} cannot establish its protected launch boundary.`,
-                recoveryAction: 'Provide a protected validator launch or an isolated fallback checkout before retrying.',
+                recoveryAction:
+                  'Provide a protected validator launch or an isolated fallback checkout before retrying.',
               });
             }
             const reason = fallbackReason ?? 'protected launch boundary unavailable';
-            await warn?.(
-              `SHIP validator ${step}: ${reason}.`,
-              { type: 'ship_validator_fallback', step, provider: providerKey, reason },
-            );
+            await warn?.(`SHIP validator ${step}: ${reason}.`, {
+              type: 'ship_validator_fallback',
+              step,
+              provider: providerKey,
+              reason,
+            });
           }
           // ADR daemon-session-command-contracts D6 (#3022): a read-only
           // review whose real launch argv can reach no observed command can
