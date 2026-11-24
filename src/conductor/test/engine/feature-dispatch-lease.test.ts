@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   acquireFeatureDispatchLease,
+  registerFeatureDispatchLease,
   type FeatureDispatchLeaseOwner,
 } from '../../src/engine/feature-dispatch-lease.js';
 
@@ -102,6 +103,21 @@ describe('feature dispatch lease', () => {
     });
     await expect(readFile(ownerPath(repositoryRoot), 'utf8')).resolves.toBe(before);
     await held.lease.release();
+  });
+
+  it('lets a marker writer share a stacked dispatch lease without releasing its owner', async () => {
+    const repositoryRoot = await createRepository();
+    const dispatch = await acquire(repositoryRoot, 'daemon dispatch');
+    expectAcquired(dispatch);
+    const owner = registerFeatureDispatchLease(repositoryRoot, 'demo', dispatch.lease);
+
+    const markerWriter = await acquire(repositoryRoot, 'halt marker write');
+    expectAcquired(markerWriter);
+    await expect(markerWriter.lease.release()).resolves.toEqual({ ok: true });
+    await expect(readFile(ownerPath(repositoryRoot), 'utf8')).resolves.toContain('daemon dispatch');
+
+    await expect(owner.release()).resolves.toEqual({ ok: true });
+    await expect(readFile(ownerPath(repositoryRoot), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('reclaims a lease from a dead pid', async () => {

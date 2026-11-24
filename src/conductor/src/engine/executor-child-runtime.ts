@@ -45,7 +45,7 @@ import { leafBranchFor } from './feature-branch-identity.js';
 
 const execFile = promisify(execFileCb);
 import { hasDurableChildState } from './child-cursor.js';
-import { acquireFeatureDispatchLease } from './feature-dispatch-lease.js';
+import { acquireFeatureDispatchLease, registerFeatureDispatchLease } from './feature-dispatch-lease.js';
 import { seedDaemonDispatchState } from './daemon-state.js';
 import type { ConductStateStore } from './conduct-state-store.js';
 import type { ConductState } from '../types/index.js';
@@ -140,7 +140,8 @@ export async function makeExecutorChildDispatchAdmission(
     throw error;
   }
 
-  return { kind: 'admitted', release: () => leaseResult.lease.release() };
+  const lease = registerFeatureDispatchLease(projectRoot, order.slug, leaseResult.lease);
+  return { kind: 'admitted', release: () => lease.release() };
 }
 
 /**

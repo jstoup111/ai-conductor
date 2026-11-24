@@ -56,6 +56,7 @@ import { formatProviderStartLine } from './ui/provider-start-line.js';
 import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
 import type { UIRenderer } from './ui/types.js';
 import { ALL_STEPS } from './engine/steps.js';
+import { pipelinePathFor } from './engine/child-context.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
@@ -2643,9 +2644,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               result.proof.completedHead !== proof.completedHead
             )
               throw new Error('verified replay proof changed before admission');
-            const state = await readState(join(worktreePath, '.pipeline', 'conduct-state.json'));
+            // Region gates belong to the routed child state.  Reading and
+            // transitioning the flat state here would leave the child verdicts
+            // and state split across two execution identities.
+            const statePath = pipelinePathFor(worktreePath, 'conduct-state.json', child);
+            const state = await readState(statePath);
             if (!state.ok) throw new Error('cannot read conduct state for verified rebase recovery');
-            const stateStore = createFilesystemConductStateStore(join(worktreePath, '.pipeline', 'conduct-state.json'));
+            const stateStore = createFilesystemConductStateStore(statePath);
             const operationId = `verified-rebase-${proof.completedHead}`;
             // Transition recording is a durable two-phase operation.  A retry
             // must continue the matching record rather than let verdict
@@ -2655,6 +2660,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               recorded?.id === operationId && recorded.status === 'applying'
                 ? await completeInterruptedRebaseOperation({
                     projectRoot: worktreePath,
+                    stateFilePath: statePath,
                     stateStore,
                     operation: recorded,
                     downstreamSteps: ALL_STEPS.map((step) => step.name),
@@ -2676,6 +2682,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                       if (!verdict.replay) throw new Error('verified replay produced no transition identity');
                       return applyRebaseTransition({
                         projectRoot: worktreePath,
+                        stateFilePath: statePath,
                         stateStore,
                         replay: verdict.replay,
                         invalidated: verdict.kickedBack,
@@ -2687,6 +2694,32 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                       });
                     })();
             if (transition.stateResult === 'refused') throw new Error('verified rebase transition was refused');
+            // The transition can perform filesystem work.  Do not let an
+            // operator park or replacement recovery halt that arrived during
+            // it get erased by the originally verified proof.
+            const liveCursor = await resolveActiveChild(worktreePath, slug);
+            const liveExecution = resolveExecutionChild(liveCursor, slug);
+            const liveChild = 'target' in liveExecution ? liveExecution.target.child : undefined;
+            const liveHeadResult = await git(['rev-parse', 'HEAD']);
+            const liveProof = await evaluateRebaseRecoveryHalt({
+              worktreePath,
+              feature: slug,
+              ...(liveChild === undefined ? {} : { child: liveChild }),
+              git,
+            });
+            const stillVerified =
+              !(await isOperatorParked(projectRoot, slug)) &&
+              (await readRawHaltClass(worktreePath)).trim() === 'rebase-recovery' &&
+              (await readRebaseRecoveryHaltGeneration(worktreePath)).trim() === proof.attemptGeneration &&
+              liveChild === child &&
+              liveHeadResult.exitCode === 0 && liveHeadResult.stdout.trim() === proof.completedHead &&
+              liveProof.kind === 'verified' &&
+              liveProof.proof.attemptGeneration === proof.attemptGeneration &&
+              liveProof.proof.completedHead === proof.completedHead;
+            if (!stillVerified) {
+              log(`verified-rebase ${slug}: retained — recovery ownership changed before clear`);
+              return;
+            }
             // Persist the occurrence before removing the only recovery signal.
             // The feature persister deduplicates the stable id if a process
             // dies after delivery but before the marker rename.
