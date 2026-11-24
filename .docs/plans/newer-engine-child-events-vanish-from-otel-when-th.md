@@ -396,3 +396,37 @@ dispatch bookkeeping. 11 tasks, single PR, blocked by #3333.
 **Done when:**
 - adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 4 is satisfied by this task.
 - The repair for task rem-as-built-6b is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-11a: test/engine/executor-child-lifecycle.integration.test.ts (or a new skewed-pair integration test): drive an accepted skewed pair whose child gate_verdict writes a span batch under <mainRoot>/.daemon/otel-spool/traces (mainRoot = worktree/../..); assert the supervisor's wireDaemonOtel drainer posts it to a stub OTLP endpoint, the supervisor MeterProvider exports conductor.gate.verdicts, the supervisor neither renders nor persists that event, and the child's .pipeline/events.jsonl contains it
+**Gate:** prd-audit
+**Rationale:** Verified test-coverage gap inside approved scope. No changed test drives a child-written span batch under <mainRoot>/.daemon/otel-spool/traces that the supervisor drainer (wire.ts wireDaemonOtel) then posts to a stub OTLP endpoint. The diff touches executor-child-lifecycle.integration and child-otel tests, but neither covers the end-to-end spool hand-off. Task 11's first Done-when already admits this work, so it goes to BUILD under task 11. No architecture or product decision is needed.
+**Criterion:** S1.1
+**Parent task:** 11
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-11a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-7a: test/engine/executor-child.test.ts / executor-child-runtime.ts: with an accepted child holding an open run span, deliver SIGTERM and assert the child visualizer exports the root span with conductor.run.outcome 'terminated' (span batch flushed) before the child process exits within child-feature-executor's teardown timeout; fix executor-child-runtime shutdown ordering if the flush is cut off
+**Gate:** prd-audit
+**Rationale:** Verified gap: no test exercises SIGTERM inside the executor child. The only existing 'terminated' assertions are on the supervisor's feature_dispatch_ended in child-feature-executor.test.ts. The inherited OtelVisualizer SIGTERM handler must be shown to export the root span with conductor.run.outcome=terminated before the child exits. That outcome depends on executor-child-runtime abort/closeForShutdown ordering and the teardown timeout in child-feature-executor.ts. Task 7's fourth Done-when admits both the test and any ordering fix, so this goes to BUILD under task 7.
+**Criterion:** S6.5
+**Parent task:** 7
+**Done when:**
+- [test] S6.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-7a is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-4c: spool-store.ts: make cap-lock recovery ownership-preserving — never move or remove a recovery or cap lock not proven abandoned by its own recorded owner (e.g. per-owner unique lock tokens verified before rename/rm, owner-tagged release that only unlinks its own token), so a stale observation can never rename a successor's .cap.lock and at most one writer performs eviction/publication at a time
+**Gate:** as-built
+**Rationale:** Verified in spool-store.ts. reclaimOrphanedCapRecoveryLock renames a possibly live .cap.lock.reclaim aside before checking its owner, then later re-links it. In that window a second contender can take the recovery slot while the first owner, holding a stale observation, still renames .cap.lock. That removes a fresh owner's cap lock, two writers run eviction and publication concurrently, and D16's maxBytes bound is exceeded. The same applies to the unconditional rm of recoveryPath and lockPath on release. ADR-014 D16 stays authoritative and only the implementation is wrong, so this is conforming BUILD work under the S1.5 lock-recovery scope that rem-prd-audit-4a/4b own.
+**Governing clause:** adr-014-otel-observability-exporter decision 16
+**Done when:**
+- adr-014-otel-observability-exporter decision 16 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-4c is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-4d: test/engine/otel/spool-store.test.ts: deterministic interleaving tests (injected filesystem) where two reclaimers race over an abandoned cap lock and over a live recovery lock; assert a successor's .cap.lock and .cap.lock.reclaim are never removed by a stale reclaimer, writers never overlap in the cap critical section, and total spool bytes never exceed maxBytes; existing orphaned-lock bounded-acquisition tests keep passing
+**Gate:** as-built
+**Rationale:** Verified in spool-store.ts. reclaimOrphanedCapRecoveryLock renames a possibly live .cap.lock.reclaim aside before checking its owner, then later re-links it. In that window a second contender can take the recovery slot while the first owner, holding a stale observation, still renames .cap.lock. That removes a fresh owner's cap lock, two writers run eviction and publication concurrently, and D16's maxBytes bound is exceeded. The same applies to the unconditional rm of recoveryPath and lockPath on release. ADR-014 D16 stays authoritative and only the implementation is wrong, so this is conforming BUILD work under the S1.5 lock-recovery scope that rem-prd-audit-4a/4b own.
+**Governing clause:** adr-014-otel-observability-exporter decision 16
+**Done when:**
+- adr-014-otel-observability-exporter decision 16 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-4d is committed and its targeted tests pass.
