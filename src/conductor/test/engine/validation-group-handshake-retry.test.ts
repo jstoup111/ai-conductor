@@ -115,7 +115,7 @@ async function seedRoutedTasklessFixture(dir: string): Promise<void> {
 }
 
 describe('validation-group dispatch handshake retries', () => {
-  it('persists a taskless manual-test receipt and its FAIL rows on the routed host when the join is otherwise green', async () => {
+  it('persists a current taskless manual-test product defect and restages BUILD, test_suite, and build_review on the routed repair host', async () => {
     const { dir, statePath } = await fixture();
     await seedRoutedTasklessFixture(dir);
     const roundId = parseRoundId('r1');
@@ -184,9 +184,13 @@ describe('validation-group dispatch handshake retries', () => {
     });
     expect(runner.run).toHaveBeenCalledWith('prd_audit', expect.anything(), expect.anything());
     expect(runner.run).toHaveBeenCalledWith('architecture_review_as_built', expect.anything(), expect.anything());
+    const state = await readState(statePath);
+    expect(state.ok && state.value).toMatchObject({
+      build: 'pending', test_suite: 'stale', build_review: 'stale',
+    });
   });
 
-  it('retries only a stale prd_audit dispatch and completes the validation group after its fresh verdict', async () => {
+  it('retains valid parallel siblings while automatically rerunning a stale audit to a current verdict', async () => {
     const { dir, statePath } = await fixture();
     const calls: StepName[] = [];
     const events: ConductorEvent[] = [];
@@ -231,7 +235,7 @@ describe('validation-group dispatch handshake retries', () => {
   });
 
   it.each(['manual_test', 'prd_audit', 'architecture_review_as_built'] as const)(
-    'retries the stale %s dispatch exactly once and includes its handshake reason in the retry event',
+    'does not consume obsolete %s evidence and retries it exactly once with its handshake reason',
     async (member) => {
       const { dir, statePath } = await fixture();
       const retries: ConductorEvent[] = [];
@@ -266,6 +270,35 @@ describe('validation-group dispatch handshake retries', () => {
       }));
     },
   );
+
+  it('takes the existing evidence-failure path for a wrong PRD-audit run identity without established code drift', async () => {
+    const { dir, statePath } = await fixture();
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        calls.push(step);
+        if (step === 'manual_test') {
+          await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+        } else if (step === 'prd_audit') {
+          await writePrdPass(dir, { ...options, runId: 'wrong-run-identity' });
+        } else if (step === 'architecture_review_as_built') {
+          await writeAsBuiltPass(dir, options);
+        }
+        return { success: true };
+      }),
+    };
+
+    await new Conductor({
+      projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
+      fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true,
+      config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 1 } },
+    }).run();
+
+    expect(calls.filter((step) => step === 'prd_audit')).toHaveLength(1);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain('produced no-verdict');
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    expect(calls).not.toContain('remediate');
+  });
 
   it('dispatches a current complete but FIXABLE prd_audit verdict once before one remediation dispatch', async () => {
     const { dir, statePath } = await fixture();
@@ -307,7 +340,7 @@ describe('validation-group dispatch handshake retries', () => {
     expect(calls.filter((step) => step === 'remediate')).toHaveLength(1);
   });
 
-  it('keeps a no-verdict PRD audit verification-off group dispatch-success-only and completes it', async () => {
+  it('settles harness-only validation evidence without scheduling BUILD and retains the prior build proof', async () => {
     const { dir, statePath } = await fixture();
     const calls: StepName[] = [];
     const events: ConductorEvent[] = [];
@@ -342,7 +375,9 @@ describe('validation-group dispatch handshake retries', () => {
     const result = await readState(statePath);
     expect(result.ok && result.value).toMatchObject({
       manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
+      build: 'done', test_suite: 'done', build_review: 'done',
     });
+    expect(calls).not.toContain('build');
   });
 
   it('observes a failed prd_audit dispatch at terminal settlement', async () => {
