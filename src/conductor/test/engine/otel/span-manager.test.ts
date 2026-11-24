@@ -1447,7 +1447,7 @@ describe('context-free provider attempts within an explicit execution', () => {
     });
   });
 
-  it('records restack attributes for a resolver attempt without an open lifecycle span [late-gate regression]', async () => {
+  it('opens an attributed resolver span for a restack attempt without an open lifecycle span [late-gate regression]', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
     await emitter.emit({ type: 'step_started', step: 'build', index: 1 });
@@ -1463,8 +1463,8 @@ describe('context-free provider attempts within an explicit execution', () => {
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
-    expect(run.attributes).toMatchObject({
+    const resolver = spanExporter.getFinishedSpans().find((span) => span.name === 'rebase.resolver')!;
+    expect(resolver.attributes).toMatchObject({
       'conductor.restack.op_id': 'fold-op',
       'conductor.restack.cause': 'fold',
       'conductor.round': 'r7',

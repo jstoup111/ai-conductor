@@ -1060,6 +1060,12 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
       folded.commits.flatMap((source) => source.parts.flatMap((part) => (part.child === 'leaf' ? [] : [part.child]))),
     ),
   ].sort((left, right) => Number(left) - Number(right));
+  const foldRouteSnapshots: RestackJournalDeferredRoute[] = [];
+  for (const roundId of [...new Set(folded.commits.map((source) => source.roundId))]) {
+    const stored = await readRouteRecord(options.worktree, options.slug, roundId, { git });
+    if (stored.kind !== 'record') return { kind: 'unavailable', detail: `cannot snapshot fold route ${roundId}` };
+    foldRouteSnapshots.push({ roundId, routeOld: stored.blob });
+  }
   const allowance = await resolveCascadeAllowanceForWorktree(options.worktree);
   const cap = await checkCascadeCap(options.worktree, options.slug, foldTargets, allowance.limit, { git });
   if (cap.kind === 'exhausted') {
@@ -1117,6 +1123,8 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
     committer: await committerStamp(git),
     ...((await queueTrackingAtCreation(options.worktree, options.slug, git)) ?? {}),
     foldPlan: folded.commits,
+    originatingChildren: foldTargets,
+    deferredRoutes: foldRouteSnapshots,
     dirtyPaths: [],
     refs: await journalRefs(git, options.slug, planned.ranges),
     ranges: planned.ranges,
@@ -1159,10 +1167,9 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
         })),
       });
 
-      const byChild = new Map<ChildId, Array<{ source: FoldCommitPlan; parts: FoldPart[] }>>();
+      const byChild = new Map<ChildId | 'leaf', Array<{ source: FoldCommitPlan; parts: FoldPart[] }>>();
       for (const source of folded.commits)
         for (const part of source.parts) {
-          if (part.child === 'leaf') continue;
           const entries = byChild.get(part.child) ?? [];
           const last = entries.at(-1);
           if (last?.source.sha === source.sha) last.parts.push(part);
@@ -1219,8 +1226,13 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
             replay = { tip: resolution.tip, rewrites: resolution.rewrites };
           }
           let tip = replay.tip;
+          const rewrites = new Map(replay.rewrites);
           try {
-            for (const entry of byChild.get(range.child) ?? []) {
+            const placed = [
+              ...(byChild.get(range.child) ?? []),
+              ...(range.kind === 'leaf-active' ? byChild.get('leaf') ?? [] : []),
+            ];
+            for (const entry of placed) {
               tip = await writeFoldCommit(
                 git,
                 tip,
@@ -1229,6 +1241,10 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
                 draft.committer,
                 join(directory, `c${range.child}-${entry.source.sha}.index`),
               );
+              // A source can be placed on more than one child. Preserve the
+              // exact source-to-child correspondence for evidence translation
+              // and for recovery after the journal becomes durable.
+              rewrites.set(entry.source.sha, tip);
             }
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
@@ -1244,7 +1260,6 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
             }
             throw error;
           }
-          const rewrites = new Map(replay.rewrites);
           const updated = await updateRestackChildStatus(
             options.worktree,
             options.slug,
@@ -1319,14 +1334,12 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
         foldedHosts.set(source.roundId, hosts);
       }
       const leafHead = staged.get(leafRange.child)!;
-      const foldRoutes: Array<{
-        readonly roundId: import('../routing/route-types.js').RoundId;
-        readonly old: CommitSha;
-        readonly next: CommitSha;
-      }> = [];
+      const foldRoutes: RestackJournalDeferredRoute[] = [];
       for (const [roundId, hosts] of foldedHosts) {
         const stored = await readRouteRecord(options.worktree, options.slug, roundId, { git });
-        if (stored.kind !== 'record') return { kind: 'unavailable', detail: `cannot prepare fold route ${roundId}` };
+        const snapshot = journal.journal.deferredRoutes?.find((route) => route.roundId === roundId);
+        if (stored.kind !== 'record' || snapshot === undefined || stored.blob !== snapshot.routeOld)
+          return { kind: 'unavailable', detail: `cannot prepare fold route ${roundId}` };
         const placements = { ...(stored.record.placements ?? {}) };
         for (const host of hosts) {
           const placement = placements[host];
@@ -1342,7 +1355,7 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
         });
         const next = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
         if (!next) return { kind: 'unavailable', detail: `cannot prepare fold route ${roundId}` };
-        foldRoutes.push({ roundId, old: stored.blob, next });
+        foldRoutes.push({ roundId, routeOld: snapshot.routeOld, routeNew: next });
       }
       const moved = await applyRestackMove(options.worktree, journal, moves, { git, events: options.events });
       if (moved.kind !== 'moved')
@@ -1361,13 +1374,15 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
       if (!checked) return { kind: 'unavailable', detail: 'checked-out leaf was not moved by fold' };
       await syncRestackedWorktree(options.worktree, checked.oldSha, checked.newSha, { git });
       journal = await transitionState(options.worktree, journal, 'synced', git);
-      // The fold's branch moves are already verified.  Its route placement state
-      // and terminal journal transition now commit together, guarded by the route
-      // blobs observed before any ref moved.
+      // The fold's branch moves are already verified. Persist every remaining
+      // applied-side effect in the journal before the one applied transaction,
+      // so recovery from ready, moved, or synced has the same authority.
       // Every non-leaf range rebuilt by a fold must be revalidated before the
       // stack can publish.  Record the generation in the journal before the
       // applied transaction so crash recovery has one durable authority for the
       // queue CAS as well as the route replacements.
+      let foldQueueNew: CommitSha | undefined;
+      let foldQueueInvalidation: RevalidationQueueEntry[] | undefined;
       if (journal.journal.queueTracked === true) {
         const queueBefore = await queueRecordAtJournalStart(journal, git);
         const entries: RevalidationQueueEntry[] = [];
@@ -1413,57 +1428,48 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
         const queueBlob = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(nextQueue));
         const queueNew = queueBlob.exitCode === 0 ? parseCommitSha(queueBlob.stdout.trim()) : undefined;
         if (queueNew === undefined) return { kind: 'unavailable', detail: 'cannot write fold revalidation queue' };
-        const recorded = await recordRoutedApplyPlan(
-          options.worktree,
-          journal,
-          {
-            queueNew,
-            invalidation: entries.map(({ child, gates }) => ({ child, gates })),
-            queueInvalidation: entries,
-          },
-          { git },
-        );
-        if (recorded.kind !== 'updated')
-          return { kind: 'unavailable', detail: 'cannot journal fold revalidation queue' };
-        journal = recorded.journal;
+        foldQueueNew = queueNew;
+        foldQueueInvalidation = entries;
       }
-      const applied = { ...journal.journal, state: 'applied' as const };
-      const appliedBlob = await writeRestackJournalBlob(options.worktree, applied, { git });
-      const cascade = await cascadeUpdateLines(options.worktree, options.slug, foldTargets, { git });
-      if (cascade.kind !== 'lines') return { kind: 'unavailable', detail: cascade.detail };
-      const appliedLines = [
-        ...foldRoutes.map(
-          (route) => `update ${routeRecordRefFor(options.slug, route.roundId)} ${route.next} ${route.old}`,
-        ),
-        ...cascade.lines,
-        ...(journal.journal.queueTracked !== true || journal.journal.queueNew === undefined
-          ? []
-          : journal.journal.queueOld === undefined
-            ? [`create ${revalidationQueueRefFor(options.slug)} ${journal.journal.queueNew}`]
-            : [
-                `update ${revalidationQueueRefFor(options.slug)} ${journal.journal.queueNew} ${journal.journal.queueOld}`,
-              ]),
-        ...journalStateUpdateLines(journal, appliedBlob, 'applied'),
-      ];
-      const appliedWrite = await writeRoutingTransaction(
+      const recorded = await recordRoutedApplyPlan(
         options.worktree,
-        options.slug,
-        [
-          {
-            kind: 'restack-applied',
-            ownerOpId: journal.journal.opId,
-            lines: appliedLines,
-          },
-        ],
+        journal,
+        {
+          deferredRoutes: foldRoutes,
+          ...(foldQueueNew === undefined ? {} : { queueNew: foldQueueNew }),
+          invalidation: (foldQueueInvalidation ?? []).map(({ child, gates }) => ({ child, gates })),
+          ...(foldQueueInvalidation === undefined ? {} : { queueInvalidation: foldQueueInvalidation }),
+        },
         { git },
       );
-      if (appliedWrite.kind !== 'updated') {
+      if (recorded.kind !== 'updated') return { kind: 'unavailable', detail: 'cannot journal fold applied transaction' };
+      journal = recorded.journal;
+      await applyRestackTransition({
+        worktree: options.worktree,
+        cause: 'fold',
+        opId: journal.journal.opId,
+        oldDefault: base,
+        newDefault: base,
+        activeChild: leafRange.child,
+        ranges: planned.ranges,
+        moves,
+        git,
+        rewritesByChild: new Map(
+          journal.journal.children.flatMap((entry) =>
+            entry.rewrites === undefined ? [] : [[entry.child, new Map(entry.rewrites.map(({ from, to }) => [from, to]))] as const],
+          ),
+        ),
+        ...(options.events === undefined ? {} : { events: options.events }),
+      });
+      const appliedTransaction = await restackTransactionBuilder.appliedTransactionLines(options.worktree, journal, git);
+      const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(appliedTransaction.lines));
+      if (appliedWrite.exitCode !== 0) {
         await haltRestack(options.worktree, 'stack-ref-changed', options.events, {
           detail: 'fold route record changed during applied transaction',
         });
         return haltedResult(options.worktree);
       }
-      journal = { slug: journal.slug, blob: appliedBlob, journal: applied };
+      journal = appliedTransaction.journal;
       await cleanAppliedJournal(journal, git);
       for (const range of planned.ranges) {
         const move = moves.find((entry) => entry.child === range.child && entry.ref.startsWith('refs/heads/'))!;

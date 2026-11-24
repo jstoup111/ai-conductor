@@ -344,9 +344,14 @@ export class SpanManager {
       attrs['conductor.restack.op_id'] = event.restack.opId;
       attrs['conductor.restack.cause'] = event.restack.cause;
       if (event.restack.roundId !== undefined) attrs['conductor.round'] = event.restack.roundId;
-      this.runSpan.setAttribute('conductor.restack.op_id', event.restack.opId);
-      this.runSpan.setAttribute('conductor.restack.cause', event.restack.cause);
-      if (event.restack.roundId !== undefined) this.runSpan.setAttribute('conductor.round', event.restack.roundId);
+      // Resolver calls are not lifecycle step dispatches, so their explicit
+      // restack execution context cannot resolve to an open step span. Give
+      // each attempt its own short-lived child span instead of overwriting the
+      // shared run span with the most recent resolver's dimensions.
+      const resolver = this.tracer.startSpan('rebase.resolver', {}, this.runCtx);
+      for (const [key, value] of Object.entries(attrs)) resolver.setAttribute(key, value);
+      resolver.setStatus({ code: event.outcome === 'success' ? SpanStatusCode.OK : SpanStatusCode.ERROR });
+      resolver.end();
     }
     this.runSpan.addEvent('provider_attempt', attrs);
     return true;

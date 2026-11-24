@@ -1303,14 +1303,20 @@ export async function recoverRestackJournal(
         ),
         ...(options.events === undefined ? {} : { events: options.events }),
       });
-      try {
-        journal = await journalRoutedApplyPlan(options.worktree, journal, transitionResult, git);
-      } catch (error) {
-        if (error instanceof RoutedApplyPlanRefChangedError) {
-          await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: error.ref });
-          return { kind: 'halted' };
+      // A fold journals its route replacements, cascade charges, and queue
+      // generation as one durable apply plan before it reaches `synced`.
+      // Translation still needs to run here, but deriving a second queue plan
+      // would replace the fold's precomputed generation during recovery.
+      if (journal.journal.cause !== 'fold') {
+        try {
+          journal = await journalRoutedApplyPlan(options.worktree, journal, transitionResult, git);
+        } catch (error) {
+          if (error instanceof RoutedApplyPlanRefChangedError) {
+            await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: error.ref });
+            return { kind: 'halted' };
+          }
+          throw error;
         }
-        throw error;
       }
       const appliedTransaction = await restackTransactionBuilder.appliedTransactionLines(
         options.worktree,

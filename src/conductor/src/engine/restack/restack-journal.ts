@@ -150,6 +150,8 @@ export type UpdateRestackChildStatusResult =
 
 export interface RoutedApplyPlan {
   readonly routeNew?: CommitSha;
+  /** Precomputed replacements for deferred routes owned by a fold. */
+  readonly deferredRoutes?: readonly RestackJournalDeferredRoute[];
   readonly queueNew?: CommitSha;
   readonly invalidation: readonly RestackJournalInvalidation[];
   readonly queueInvalidation?: readonly RevalidationQueueEntry[];
@@ -710,6 +712,7 @@ export async function recordRoutedApplyPlan(
             ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
           },
         }),
+    ...(plan.deferredRoutes === undefined ? {} : { deferredRoutes: plan.deferredRoutes }),
     ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
     invalidation: plan.invalidation.map((entry) => ({ ...entry, gates: [...entry.gates] })),
     ...(plan.queueInvalidation === undefined
