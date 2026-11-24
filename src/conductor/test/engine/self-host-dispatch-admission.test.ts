@@ -2,15 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Conductor, type StepRunResult, type StepRunner } from '../../src/engine/conductor.js';
 import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
 import { LiveBoundaryCoordinator } from '../../src/engine/self-host/live-boundary-coordinator.js';
-import { createProviderLifecycleSupervisor, systemProviderLifecycleTimer } from '../../src/engine/provider-lifecycle.js';
+import {
+  createProviderLifecycleSupervisor,
+  systemProviderLifecycleTimer,
+} from '../../src/engine/provider-lifecycle.js';
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState } from '../../src/types/index.js';
 
 vi.mock('../../src/engine/self-host/live-boundary.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/self-host/live-boundary.js')>(),
-  fingerprintLiveBoundary: vi.fn(async () => ({})),
+  ...(await importOriginal<typeof import('../../src/engine/self-host/live-boundary.js')>()),
   verifyLiveBoundary: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock('../../src/engine/self-host/build-auth-preflight.js', () => ({
@@ -26,18 +28,24 @@ describe('self-host dispatch admission', () => {
     const coordinator = new LiveBoundaryCoordinator();
     const active = await coordinator.openWindow({ contained: false, reason: 'earlier build' });
     const order: string[] = [];
-    const mutation = coordinator.runMutation(async () => { order.push('root refreshed'); });
+    const mutation = coordinator.runMutation(async () => {
+      order.push('root refreshed');
+    });
     const providerExecution = {} as ProviderExecutionContext;
     const teardown = vi.fn(async () => undefined);
     const events = new ConductorEventEmitter();
     const admissions: string[] = [];
-    events.on('self_host_dispatch_admission', (event) => { if (event.type === 'self_host_dispatch_admission') admissions.push(event.state); });
+    events.on('self_host_dispatch_admission', (event) => {
+      if (event.type === 'self_host_dispatch_admission') admissions.push(event.state);
+    });
     const runner: StepRunner = {
       run: vi.fn(async () => {
         order.push('preparing');
         const supervisor = createProviderLifecycleSupervisor({
-          attempt: { logicalStep: 'build', id: 'first-attempt' }, recoveryCount: 0,
-          preparationTimeoutMinutes: 5, timer: systemProviderLifecycleTimer,
+          attempt: { logicalStep: 'build', id: 'first-attempt' },
+          recoveryCount: 0,
+          preparationTimeoutMinutes: 5,
+          timer: systemProviderLifecycleTimer,
         });
         const result = await supervisor.supervise(async (lease) => {
           const prepared = await providerExecution.prepareCandidateSelfHost!(
@@ -49,7 +57,9 @@ describe('self-host dispatch admission', () => {
             expect(lease.spawnPermit()).toEqual({ permitted: true });
             order.push('spawned');
             return { success: true };
-          } finally { await prepared!.teardown(); }
+          } finally {
+            await prepared!.teardown();
+          }
         });
         if ('kind' in result) throw new Error('unexpected preparation halt');
         return result;
@@ -60,17 +70,45 @@ describe('self-host dispatch admission', () => {
       provisionSandbox: vi.fn(async () => ({ childEnv: () => ({}), teardown })),
     } as unknown as SelfHostGuardrails;
     const conductor = new Conductor({
-      stateFilePath: '/test/worktree/conduct-state.json', projectRoot: '/test/worktree',
-      events, stepRunner: runner, daemon: true, selfHost: true,
-      featureSlug: 'admission-test', providerExecution, selfHostGuardrails: guardrails,
-      liveBoundaryCoordinator: coordinator, operatorParkBoundary: async () => parked,
-      config: { llm_provider: 'claude', harness_self_host: { live_containment: false, build_auth: { mode: 'api-key' } } },
+      stateFilePath: '/test/worktree/conduct-state.json',
+      projectRoot: '/test/worktree',
+      events,
+      stepRunner: runner,
+      daemon: true,
+      selfHost: true,
+      featureSlug: 'admission-test',
+      providerExecution,
+      selfHostGuardrails: guardrails,
+      liveBoundaryCoordinator: coordinator,
+      operatorParkBoundary: async () => parked,
+      config: {
+        llm_provider: 'claude',
+        harness_self_host: { live_containment: false, build_auth: { mode: 'api-key' } },
+      },
     });
     // Exercise the dispatch entry directly; no unrelated SDLC steps or external providers run.
     const settlePendingRepair = vi.fn(async () => false);
-    const dispatch = (conductor as unknown as {
-      runSelfBuildDispatch(step: 'build', state: ConductState, attempt: number, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>): Promise<StepRunResult>;
-    }).runSelfBuildDispatch('build', { feature_desc: 'admission-test' } as ConductState, 1, undefined, undefined, undefined, settlePendingRepair);
+    const dispatch = (
+      conductor as unknown as {
+        runSelfBuildDispatch(
+          step: 'build',
+          state: ConductState,
+          attempt: number,
+          hint?: string,
+          verdict?: string,
+          context?: unknown,
+          settle?: () => Promise<boolean>,
+        ): Promise<StepRunResult>;
+      }
+    ).runSelfBuildDispatch(
+      'build',
+      { feature_desc: 'admission-test' } as ConductState,
+      1,
+      undefined,
+      undefined,
+      undefined,
+      settlePendingRepair,
+    );
     void dispatch.catch(() => undefined); // Observe failure even while the queue is held.
     try {
       await vi.advanceTimersByTimeAsync(11 * 60_000);
@@ -106,15 +144,37 @@ describe('self-host dispatch admission', () => {
     vi.mocked(preflightBuildAuthCheck).mockResolvedValueOnce({ success: false, output: 'build auth unavailable' });
     const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
     const conductor = new Conductor({
-      stateFilePath: '/test/worktree/conduct-state.json', projectRoot: '/test/worktree',
-      events: new ConductorEventEmitter(), stepRunner: runner, daemon: true, selfHost: true,
+      stateFilePath: '/test/worktree/conduct-state.json',
+      projectRoot: '/test/worktree',
+      events: new ConductorEventEmitter(),
+      stepRunner: runner,
+      daemon: true,
+      selfHost: true,
       featureSlug: 'auth-refusal',
       config: { llm_provider: 'claude', harness_self_host: { build_auth: { mode: 'daemon-token' } } },
     });
     const settlePendingRepair = vi.fn(async () => false);
-    const dispatch = (conductor as unknown as {
-      runSelfBuildDispatch(step: 'build', state: ConductState, attempt: number, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>): Promise<StepRunResult>;
-    }).runSelfBuildDispatch('build', { feature_desc: 'auth-refusal' } as ConductState, 1, undefined, undefined, undefined, settlePendingRepair);
+    const dispatch = (
+      conductor as unknown as {
+        runSelfBuildDispatch(
+          step: 'build',
+          state: ConductState,
+          attempt: number,
+          hint?: string,
+          verdict?: string,
+          context?: unknown,
+          settle?: () => Promise<boolean>,
+        ): Promise<StepRunResult>;
+      }
+    ).runSelfBuildDispatch(
+      'build',
+      { feature_desc: 'auth-refusal' } as ConductState,
+      1,
+      undefined,
+      undefined,
+      undefined,
+      settlePendingRepair,
+    );
 
     await expect(dispatch).resolves.toMatchObject({ success: false, output: 'build auth unavailable' });
     expect(settlePendingRepair).not.toHaveBeenCalled();
@@ -124,16 +184,35 @@ describe('self-host dispatch admission', () => {
   it('threads the active attempt abort signal into a self-host build runner', async () => {
     const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
     const conductor = new Conductor({
-      stateFilePath: '/test/worktree/conduct-state.json', projectRoot: '/test/worktree',
-      events: new ConductorEventEmitter(), stepRunner: runner, daemon: true, selfHost: true,
-      featureSlug: 'abort-signal', providerExecution: {} as ProviderExecutionContext,
-      config: { llm_provider: 'claude', harness_self_host: { live_containment: false, build_auth: { mode: 'api-key' } } },
+      stateFilePath: '/test/worktree/conduct-state.json',
+      projectRoot: '/test/worktree',
+      events: new ConductorEventEmitter(),
+      stepRunner: runner,
+      daemon: true,
+      selfHost: true,
+      featureSlug: 'abort-signal',
+      providerExecution: {} as ProviderExecutionContext,
+      config: {
+        llm_provider: 'claude',
+        harness_self_host: { live_containment: false, build_auth: { mode: 'api-key' } },
+      },
     });
     const attempt = new AbortController();
 
-    await (conductor as unknown as {
-      runSelfBuildDispatch(step: 'build', state: ConductState, attempt: number, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>, abortSignal?: AbortSignal): Promise<StepRunResult>;
-    }).runSelfBuildDispatch(
+    await (
+      conductor as unknown as {
+        runSelfBuildDispatch(
+          step: 'build',
+          state: ConductState,
+          attempt: number,
+          hint?: string,
+          verdict?: string,
+          context?: unknown,
+          settle?: () => Promise<boolean>,
+          abortSignal?: AbortSignal,
+        ): Promise<StepRunResult>;
+      }
+    ).runSelfBuildDispatch(
       'build',
       { feature_desc: 'abort-signal' } as ConductState,
       1,

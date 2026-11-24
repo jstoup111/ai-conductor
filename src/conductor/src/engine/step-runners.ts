@@ -2010,7 +2010,7 @@ export class DefaultStepRunner implements StepRunner {
       const result = await this.dispatchProviderWithLifecycleSupervision(
         step,
         invocationOptions,
-        (options) =>
+        (options, onPreparationRevoked) =>
           this.providerExecutor({
             step,
             configuredProviders: this.configuredProviders,
@@ -2037,6 +2037,7 @@ export class DefaultStepRunner implements StepRunner {
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+            onPreparationRevoked,
             prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
             onAttempt: this.providerAttempt,
             onCandidateStart: this.providerCandidateStart,
@@ -2121,7 +2122,7 @@ export class DefaultStepRunner implements StepRunner {
     const result = await this.dispatchProviderWithLifecycleSupervision(
       request.step,
       invocationOptions,
-      (options) =>
+      (options, onPreparationRevoked) =>
         this.providerExecutor({
           step: request.step,
           configuredProviders: this.configuredProviders,
@@ -2147,6 +2148,7 @@ export class DefaultStepRunner implements StepRunner {
           withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
           prepareCandidateSelfHost:
             this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+          onPreparationRevoked,
           prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
           onAttempt: this.providerAttempt,
           onCandidateStart: this.providerCandidateStart,
@@ -2178,7 +2180,10 @@ export class DefaultStepRunner implements StepRunner {
   private async dispatchProviderWithLifecycleSupervision(
     step: StepName,
     baseOptions: ExecuteProviderCandidatesInput['options'],
-    run: (options: ExecuteProviderCandidatesInput['options']) => Promise<ProviderExecutionResult>,
+    run: (
+      options: ExecuteProviderCandidatesInput['options'],
+      onPreparationRevoked: NonNullable<ExecuteProviderCandidatesInput['onPreparationRevoked']>,
+    ) => Promise<ProviderExecutionResult>,
     dispatchRunId?: string,
     executionContext?: ExecutionContext,
   ): Promise<ProviderExecutionResult> {
@@ -2221,43 +2226,46 @@ export class DefaultStepRunner implements StepRunner {
     });
     try {
       const result = await supervisor.supervise((lease) =>
-        run({
-          ...baseOptions,
-          // Auxiliary provider paths (custom review, regrade, and coverage
-          // binding) share this supervisor.  Stamp the daemon-owned context
-          // here so none of those direct executor call sites can omit either
-          // attribution or managed-observation preparation.
-          ...(this.providerExecutionContext?.managedSessionContext
-            ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
-            : {}),
-          onActivity: pulse,
-          providerStreamObserverForCandidate: (provider) => {
-            const throttle = createProviderStreamThrottle<ProviderStreamObservation>(
-              (observation) => {
-                void this.events
-                  ?.emit({
-                    type: 'provider_stream_progress',
-                    step,
-                    provider,
-                    ...observation,
-                    ts: new Date().toISOString(),
-                  })
-                  .catch(() => {});
-              },
-              { minIntervalMs: providerStreamIntervalMs },
-            );
-            const heartbeat = setInterval(throttle.heartbeat, DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS);
-            heartbeat.unref(); // portability-ok: candidate-owned telemetry heartbeat is cleared at candidate close
-            return {
-              onProviderStream: throttle,
-              close: () => {
-                clearInterval(heartbeat);
-                throttle.flush();
-              },
-            };
+        run(
+          {
+            ...baseOptions,
+            // Auxiliary provider paths (custom review, regrade, and coverage
+            // binding) share this supervisor.  Stamp the daemon-owned context
+            // here so none of those direct executor call sites can omit either
+            // attribution or managed-observation preparation.
+            ...(this.providerExecutionContext?.managedSessionContext
+              ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+              : {}),
+            onActivity: pulse,
+            providerStreamObserverForCandidate: (provider) => {
+              const throttle = createProviderStreamThrottle<ProviderStreamObservation>(
+                (observation) => {
+                  void this.events
+                    ?.emit({
+                      type: 'provider_stream_progress',
+                      step,
+                      provider,
+                      ...observation,
+                      ts: new Date().toISOString(),
+                    })
+                    .catch(() => {});
+                },
+                { minIntervalMs: providerStreamIntervalMs },
+              );
+              const heartbeat = setInterval(throttle.heartbeat, DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS);
+              heartbeat.unref(); // portability-ok: candidate-owned telemetry heartbeat is cleared at candidate close
+              return {
+                onProviderStream: throttle,
+                close: () => {
+                  clearInterval(heartbeat);
+                  throttle.flush();
+                },
+              };
+            },
+            spawnPermit: lease.spawnPermit,
           },
-          spawnPermit: lease.spawnPermit,
-        }),
+          lease.onRevoked,
+        ),
       );
       if (isProviderLifecycleHalted(result)) {
         return mapProviderLifecycleHalt(result, this.configuredProviders[0] ?? 'unknown');
@@ -6089,7 +6097,7 @@ export class DefaultStepRunner implements StepRunner {
               cwd: materialized?.headPath ?? this.projectDir,
               dangerouslySkipPermissions: true,
             }),
-            (options) =>
+            (options, onPreparationRevoked) =>
               executeAuxiliaryProviderCandidates({
                 step: 'build_review',
                 executionContext,
@@ -6111,6 +6119,7 @@ export class DefaultStepRunner implements StepRunner {
                 withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
                 prepareCandidateSelfHost:
                   this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+                onPreparationRevoked,
                 prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
                 onAttempt: this.providerAttempt,
                 onAuxiliaryAttemptFailed: this.providerExecutionContext?.onAuxiliaryAttemptFailed,

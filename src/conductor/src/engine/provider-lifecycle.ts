@@ -31,6 +31,8 @@ export interface ProviderPreparationLease {
   attempt: ProviderAttemptIdentity;
   deadlineAt: number | undefined;
   isCurrent(): boolean;
+  /** Registers work that must stop owning preparation resources on revocation. */
+  onRevoked(callback: () => void): () => void;
   /** Acknowledges spawn while atomically ending preparation-timeout authority. */
   spawnPermit: SpawnPermit;
 }
@@ -121,10 +123,7 @@ export interface SettledProviderLifecycle {
 
 /** A provider attempt's authoritative lifecycle state. */
 export type ProviderLifecycleState =
-  | PreparingProviderLifecycle
-  | RunningProviderLifecycle
-  | RecoveringProviderLifecycle
-  | SettledProviderLifecycle;
+  PreparingProviderLifecycle | RunningProviderLifecycle | RecoveringProviderLifecycle | SettledProviderLifecycle;
 
 /** A requested state change; the attempt identity is always derived from current state. */
 export type ProviderLifecycleTransition =
@@ -186,10 +185,7 @@ export function createProviderLifecycleSupervisor(
             recoveryCount: 1,
             reason: 'preparation-timeout',
           };
-          await options.recovery.episodeStore.writeProviderLifecycleEpisode(
-            options.recovery.projectRoot,
-            recovering,
-          );
+          await options.recovery.episodeStore.writeProviderLifecycleEpisode(options.recovery.projectRoot, recovering);
           attempt = options.recovery.createReplacementAttempt(error.attempt);
           currentRecoveryCount = recovering.recoveryCount;
         }
@@ -255,42 +251,51 @@ async function superviseAttempt<T>(
 ): Promise<T> {
   let state: ProviderLifecycleState = createPreparingProviderLifecycle(attempt, recoveryCount);
   const deadlineDelayMilliseconds = preparationDeadlineDelay(options.preparationTimeoutMinutes);
-  const preparationStartedAt = deadlineDelayMilliseconds === undefined
-    ? undefined
-    : options.timer.now();
-  const deadlineAt = preparationStartedAt === undefined
-    ? undefined
-    : preparationStartedAt + deadlineDelayMilliseconds!;
+  const preparationStartedAt = deadlineDelayMilliseconds === undefined ? undefined : options.timer.now();
+  const deadlineAt = preparationStartedAt === undefined ? undefined : preparationStartedAt + deadlineDelayMilliseconds!;
   let current = true;
+  const revocationCallbacks = new Set<() => void>();
+  const revoke = () => {
+    if (!current) return;
+    current = false;
+    for (const callback of revocationCallbacks) callback();
+    revocationCallbacks.clear();
+  };
   publishLifecycleState(options, state);
   let timeout: ProviderLifecycleTimerHandle | undefined;
-  const deadline = deadlineDelayMilliseconds === undefined
-    ? undefined
-    : new Promise<never>((_, reject) => {
-      timeout = options.timer.schedule(() => {
-        if (!current) return;
-        current = false;
-        if (recoveryCount === 0) {
-          const recovering = transitionProviderLifecycle(state, {
-            phase: 'recovering',
-            reason: 'preparation-timeout',
-          });
-          if (recovering.accepted) {
-            state = recovering.state;
-            publishLifecycleState(options, state);
-          }
-        }
-        reject(new ProviderPreparationTimeoutError(
-          attempt,
-          options.timer.now() - preparationStartedAt!,
-        ));
-      }, deadlineDelayMilliseconds);
-    });
+  const deadline =
+    deadlineDelayMilliseconds === undefined
+      ? undefined
+      : new Promise<never>((_, reject) => {
+          timeout = options.timer.schedule(() => {
+            if (!current) return;
+            revoke();
+            if (recoveryCount === 0) {
+              const recovering = transitionProviderLifecycle(state, {
+                phase: 'recovering',
+                reason: 'preparation-timeout',
+              });
+              if (recovering.accepted) {
+                state = recovering.state;
+                publishLifecycleState(options, state);
+              }
+            }
+            reject(new ProviderPreparationTimeoutError(attempt, options.timer.now() - preparationStartedAt!));
+          }, deadlineDelayMilliseconds);
+        });
 
   const lease: ProviderPreparationLease = {
     attempt: { ...attempt },
     deadlineAt,
     isCurrent: () => current,
+    onRevoked: (callback) => {
+      if (!current) {
+        callback();
+        return () => {};
+      }
+      revocationCallbacks.add(callback);
+      return () => revocationCallbacks.delete(callback);
+    },
     spawnPermit: (purpose: SpawnPermitPurpose = 'worker-spawn') => {
       if (!current) {
         return { permitted: false, reason: 'revoked' };
@@ -319,9 +324,7 @@ async function superviseAttempt<T>(
   }
 
   try {
-    const result = await (deadline === undefined
-      ? candidateResult
-      : Promise.race([candidateResult, deadline]));
+    const result = await (deadline === undefined ? candidateResult : Promise.race([candidateResult, deadline]));
     if (current) {
       current = false;
       await settleCurrentAttempt(options, state, attempt, timeout, 'completed');
@@ -359,10 +362,7 @@ async function settleCurrentAttempt(
   );
 }
 
-function publishLifecycleState(
-  options: ProviderLifecycleSupervisorOptions,
-  state: ProviderLifecycleState,
-): void {
+function publishLifecycleState(options: ProviderLifecycleSupervisorOptions, state: ProviderLifecycleState): void {
   options.onStateChange?.(state);
   emitLifecycleEvent(options, state);
 }

@@ -231,7 +231,7 @@ and that the configured tail is exactly
 ## The live boundary
 
 Before a self-host build runs, the engine fingerprints two surfaces with a per-file sha256 manifest
-(symlinks hashed via `readlink`), and re-verifies them when the candidate tears down:
+(symlinks hashed via `readlink`), and re-verifies them once the dispatch ends:
 
 1. **The live checkout** — the harness checkout the daemon itself is running out of.
 2. **Unrelated provider state** — the selected provider's live home: `$CLAUDE_CONFIG_DIR`
@@ -242,6 +242,11 @@ A mismatch is fail-closed: the run halts, the engine writes `.pipeline/HALT` wit
 and no further work is dispatched. A verification that itself fails is coerced to a mismatch (`Live
 boundary could not be verified.`). There is no config key — this is unconditional for self-host
 provider preparation.
+
+All provider candidates in one dispatch — for example every `build_review` rubric reviewer in a lap —
+share one snapshot. The live checkout is walked once, each distinct provider home is walked once,
+the containment probe runs once, and verification runs once over every surface taken, after the
+last candidate tears down.
 
 The halt lands at the **next dispatch boundary**, not on the dispatch that was in flight. Teardown
 runs after the step it guards has already produced its result, and the window it covers is the whole
