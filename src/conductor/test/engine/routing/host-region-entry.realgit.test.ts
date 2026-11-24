@@ -9,7 +9,12 @@ import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { writeFrozenBlocks } from '../../../src/engine/remediation-append.js';
-import { enterHostRegion, hostCarriesTasklessObligation } from '../../../src/engine/routing/host-region-entry.js';
+import {
+  captureFallbackValidatorHandoff,
+  deliverFallbackValidatorHandoffs,
+  enterHostRegion,
+  hostCarriesTasklessObligation,
+} from '../../../src/engine/routing/host-region-entry.js';
 import { completeRerouteSync, rerouteRound } from '../../../src/engine/routing/prerequisite-claim.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
@@ -101,6 +106,54 @@ function entered(subject: Awaited<ReturnType<typeof fixture>>, git: GitRunner = 
 }
 
 describe('routed host region entry (real local Git)', () => {
+  // Covers: task:3
+  it('durably captures committed and outstanding fallback product edits without capturing validator evidence', async () => {
+    const subject = await fixture();
+    await writeFile(join(subject.repo, 'edited.txt'), 'before\n');
+    await writeFile(join(subject.repo, 'removed.txt'), 'remove me\n');
+    await subject.git(['add', 'edited.txt', 'removed.txt']);
+    await subject.git(['commit', '-qm', 'baseline product']);
+    const revision = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await writeFile(join(subject.repo, 'edited.txt'), 'committed\n');
+    await subject.git(['add', 'edited.txt']);
+    await subject.git(['commit', '-qm', 'fallback committed edit']);
+    await writeFile(join(subject.repo, 'removed.txt'), 'staged replacement\n');
+    await subject.git(['add', 'removed.txt']);
+    await writeFile(join(subject.repo, 'edited.txt'), 'unstaged replacement\n');
+    await writeFile(join(subject.repo, 'new.bin'), Buffer.from([0, 1, 2, 3]));
+    await chmod(join(subject.repo, 'new.bin'), 0o755);
+    await writeFile(join(subject.repo, '.pipeline', 'validator-evidence.md'), 'owned evidence\n');
+
+    await expect(captureFallbackValidatorHandoff({
+      fallbackRoot: subject.repo,
+      evidenceRoot: join(subject.repo, '.pipeline'),
+      id: 'fallback-1',
+      revision,
+      step: 'manual_test',
+      git: subject.git,
+    })).resolves.toMatchObject({ kind: 'captured' });
+
+    const captured = JSON.parse(await readFile(join(subject.repo, '.pipeline', 'fallback-validator-handoffs', 'fallback-1.json'), 'utf8'));
+    expect(captured).toMatchObject({ version: 1, id: 'fallback-1', revision, step: 'manual_test', state: 'captured' });
+    expect(captured.patch).toContain('committed');
+    expect(captured.patch).toContain('staged replacement');
+    expect(captured.patch).toContain('unstaged replacement');
+    expect(captured.additions).toEqual([{ path: 'new.bin', mode: 0o755, bytes: Buffer.from([0, 1, 2, 3]).toString('base64') }]);
+
+    const capturedRaw = await readFile(join(subject.repo, '.pipeline', 'fallback-validator-handoffs', 'fallback-1.json'), 'utf8');
+    await writeFile(join(subject.repo, 'operator.txt'), 'operator bytes\n');
+    await subject.git(['add', 'operator.txt']);
+    await expect(deliverFallbackValidatorHandoffs({ worktree: subject.repo, host: child2 }))
+      .resolves.toEqual({ kind: 'delivered', ids: ['fallback-1'] });
+    await expect(readFile(join(subject.repo, '.pipeline', 'children', '2', 'fallback-validator-handoffs', 'fallback-1.json'), 'utf8'))
+      .resolves.toBe(capturedRaw);
+    await expect(readFile(join(subject.repo, 'operator.txt'), 'utf8')).resolves.toBe('operator bytes\n');
+    await expect(subject.git(['diff', '--cached', '--name-only'])).resolves.toMatchObject({ stdout: 'operator.txt\n' });
+    await expect(deliverFallbackValidatorHandoffs({ worktree: subject.repo, host: child2 }))
+      .resolves.toEqual({ kind: 'delivered', ids: [] });
+  });
+
   // Covers: task:1
   it('enters taskless manual-test and custom-step obligations despite complete authored BUILD work', async () => {
     const manualTest = await fixture('audit', { host: child4, taskless: true, retryHint: 'FAIL: screenshot differs' });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { resolveFeaturePlanPath } from '../artifacts.js';
@@ -61,6 +61,107 @@ export type VerifyGreenAcceptanceResult =
   | { readonly kind: 'refused'; readonly reason: string };
 
 const VERIFY_GREEN_RECORD = 'acceptance-verify-green.json';
+
+/**
+ * A fallback validator is allowed to change its detached checkout.  Before
+ * that checkout can be removed, retain the exact Git delta in the feature
+ * worktree's durable evidence area.  The later repair route owns applying the
+ * delta; this boundary deliberately never touches the repair owner's index or
+ * working tree.
+ */
+export async function captureFallbackValidatorHandoff(input: {
+  readonly fallbackRoot: string;
+  readonly evidenceRoot: string;
+  readonly id: string;
+  readonly revision: string;
+  readonly step: string;
+  readonly git: GitRunner;
+}): Promise<{ readonly kind: 'empty' } | { readonly kind: 'captured'; readonly path: string }> {
+  const [committed, staged, unstaged, untracked] = await Promise.all([
+    input.git(['diff', '--binary', '--full-index', `${input.revision}..HEAD`]),
+    input.git(['diff', '--cached', '--binary', '--full-index']),
+    input.git(['diff', '--binary', '--full-index']),
+    input.git(['ls-files', '--others', '--exclude-standard', '-z']),
+  ]);
+  const paths = untracked.stdout.split('\0').filter((path) => path && !path.startsWith('.pipeline/'));
+  const additions = await Promise.all(paths.map(async (path) => {
+    const details = await stat(join(input.fallbackRoot, path));
+    return {
+      path,
+      mode: details.mode & 0o777,
+      bytes: (await readFile(join(input.fallbackRoot, path))).toString('base64'),
+    };
+  }));
+  const patch = `${committed.stdout}${staged.stdout}${unstaged.stdout}`;
+  if (!patch && additions.length === 0) return { kind: 'empty' };
+
+  const destination = join(input.evidenceRoot, 'fallback-validator-handoffs');
+  await mkdir(destination, { recursive: true });
+  const path = join(destination, `${input.id}.json`);
+  const temporary = `${path}.tmp`;
+  await writeFile(
+    temporary,
+    JSON.stringify({ version: 1, id: input.id, revision: input.revision, step: input.step, patch, additions, state: 'captured' }) + '\n',
+  );
+  await rename(temporary, path);
+  return { kind: 'captured', path };
+}
+
+/**
+ * Copies captured fallback input to the routed BUILD owner's private pipeline
+ * area.  The source receipt is acknowledged only after an exact, durable copy
+ * exists, which makes retry safe without altering that owner's product files,
+ * index, or branch.
+ */
+export async function deliverFallbackValidatorHandoffs(input: {
+  readonly worktree: string;
+  readonly host: ChildId;
+}): Promise<{ readonly kind: 'delivered'; readonly ids: readonly string[] } | { readonly kind: 'refused'; readonly detail: string }> {
+  const source = join(input.worktree, '.pipeline', 'fallback-validator-handoffs');
+  let entries: string[];
+  try {
+    entries = (await readdir(source)).filter((entry) => entry.endsWith('.json')).sort();
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'delivered', ids: [] };
+    return { kind: 'refused', detail: `cannot read fallback handoffs: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const destination = join(input.worktree, '.pipeline', 'children', String(input.host), 'fallback-validator-handoffs');
+  await mkdir(destination, { recursive: true });
+  const ids: string[] = [];
+  for (const entry of entries) {
+    const sourcePath = join(source, entry);
+    let raw: string;
+    let receipt: Record<string, unknown>;
+    try {
+      raw = await readFile(sourcePath, 'utf8');
+      receipt = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return { kind: 'refused', detail: `fallback handoff ${entry} is malformed` };
+    }
+    if (receipt.state === 'delivered') continue;
+    if (receipt.state !== 'captured' || receipt.version !== 1 || typeof receipt.id !== 'string') {
+      return { kind: 'refused', detail: `fallback handoff ${entry} has an invalid capture state` };
+    }
+    const target = join(destination, entry);
+    try {
+      const existing = await readFile(target, 'utf8');
+      if (existing !== raw) return { kind: 'refused', detail: `fallback handoff ${receipt.id} conflicts with routed owner ${input.host}` };
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return { kind: 'refused', detail: `cannot read delivered fallback handoff ${receipt.id}` };
+      }
+      const temporary = `${target}.tmp`;
+      await writeFile(temporary, raw);
+      await rename(temporary, target);
+      if ((await readFile(target, 'utf8')) !== raw) {
+        return { kind: 'refused', detail: `fallback handoff ${receipt.id} was not durably copied` };
+      }
+    }
+    await writeFile(sourcePath, JSON.stringify({ ...receipt, state: 'delivered', owner: input.host }) + '\n');
+    ids.push(receipt.id);
+  }
+  return { kind: 'delivered', ids };
+}
 
 async function redMarkerDigestRefusal(
   marker: string | undefined,

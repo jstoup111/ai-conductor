@@ -280,7 +280,7 @@ import {
   routedRoundOpen,
   routedWorkOutstanding,
 } from './routing/round-admission.js';
-import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
+import { captureFallbackValidatorHandoff, enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { settleDerivedNoOpHost } from './routing/routed-exit.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
 import { admitQueuedRevalidation } from './routing/queue-admission.js';
@@ -7760,21 +7760,14 @@ export class Conductor {
               fallback: {
                 root: fallbackRoot,
                 settle: async () => {
-                  const [committed, staged, unstaged, untracked] = await Promise.all([
-                    execa('git', ['diff', '--binary', '--full-index', `${revision}..HEAD`], { cwd: fallbackRoot }),
-                    execa('git', ['diff', '--cached', '--binary', '--full-index'], { cwd: fallbackRoot }),
-                    execa('git', ['diff', '--binary', '--full-index'], { cwd: fallbackRoot }),
-                    execa('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: fallbackRoot }),
-                  ]);
-                  const patch = `${committed.stdout}${staged.stdout}${unstaged.stdout}`;
-                  const additions = await Promise.all(untracked.stdout.split('\0').filter(Boolean).map(async (path) => {
-                    const details = await stat(join(fallbackRoot, path));
-                    return { path, mode: details.mode, bytes: (await readFile(join(fallbackRoot, path))).toString('base64') };
-                  }));
-                  if (!patch && additions.length === 0) return;
-                  const destination = join(evidenceRoot, 'fallback-validator-handoffs');
-                  await mkdir(destination, { recursive: true });
-                  await writeFile(join(destination, `${id}.json`), JSON.stringify({ version: 1, id, revision, step: candidate.step, patch, additions, state: 'captured' }) + '\n');
+                  await captureFallbackValidatorHandoff({
+                    fallbackRoot,
+                    evidenceRoot,
+                    id,
+                    revision,
+                    step: candidate.step,
+                    git: makeGitRunner(fallbackRoot),
+                  });
                 },
               },
             };
