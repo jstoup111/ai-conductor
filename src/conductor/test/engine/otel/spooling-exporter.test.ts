@@ -519,7 +519,7 @@ describe('spooling exporters', () => {
     expect(warnings).toEqual([`[otel] spool write failed; sending directly: spool write failed: ${code}`]);
   });
 
-  it('keeps accepting child-projected spans through direct export when a live cap lock times out', async () => {
+  it('keeps the child event bus emitting after a live cap-lock timeout falls back to direct export', async () => {
     const directory = await temporaryDirectory();
     await writeFile(join(directory, '.cap.lock'), JSON.stringify({ pid: 41_003, createdAt: Date.now() }));
     const store = new SpoolStore(directory, {
@@ -529,9 +529,13 @@ describe('spooling exporters', () => {
     });
     const events = new ConductorEventEmitter();
     const warnings: string[] = [];
+    const childEvents: string[] = [];
     const directBatches: ReadableSpan[][] = [];
     events.on('renderer_error', (event) => {
       if (event.type === 'renderer_error') warnings.push(event.error);
+    });
+    events.on('step_started', (event) => {
+      if (event.type === 'step_started') childEvents.push(event.step);
     });
     const exporter = new SpoolingSpanExporter(store, {
       export(spans, callback): void {
@@ -546,13 +550,15 @@ describe('spooling exporters', () => {
     span.end();
     const spans = [span as unknown as ReadableSpan];
 
-    const results = await Promise.all(Array.from({ length: 2 }, () => new Promise<{ code: number }>((resolve) => {
+    const result = await new Promise<{ code: number }>((resolve) => {
       exporter.export(spans, resolve);
-    })));
+    });
+    await events.emit({ type: 'step_started', step: 'build', index: 0 });
 
-    expect(results).toEqual([{ code: ExportResultCode.SUCCESS }, { code: ExportResultCode.SUCCESS }]);
-    expect(directBatches).toEqual([spans, spans]);
+    expect(result).toEqual({ code: ExportResultCode.SUCCESS });
+    expect(directBatches).toEqual([spans]);
     expect(warnings).toEqual([expect.stringContaining('Timed out acquiring spool cap lock after 5ms')]);
+    expect(childEvents).toEqual(['build']);
   });
 
   it.each([

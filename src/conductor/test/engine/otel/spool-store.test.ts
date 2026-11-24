@@ -199,6 +199,46 @@ describe('SpoolStore', () => {
     await expect(readdir(directory)).resolves.not.toContain('.cap.lock');
   });
 
+  it('does not retry acquisition after reclaiming a lock consumes its deadline', async () => {
+    const directory = await temporaryDirectory();
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, '.cap.lock'), JSON.stringify({ pid: 41_002, createdAt: 0 }));
+    let lockNow = 0;
+    const store = new SpoolStore(directory, {
+      maxBytes: 1024,
+      lockNow: () => lockNow,
+      capLockAcquireTimeoutMs: 5,
+      isProcessAlive: () => {
+        lockNow = 5;
+        return false;
+      },
+    });
+
+    await expect(store.write('traces', Buffer.from('span'))).rejects.toThrow('Timed out acquiring spool cap lock after 5ms');
+  });
+
+  it('reclaims an orphaned recovery lock so trace and metric writes both complete', async () => {
+    const directory = await temporaryDirectory();
+    await mkdir(directory, { recursive: true });
+    let lockNow = 1_727_000_000_000;
+    await Promise.all([
+      writeFile(join(directory, '.cap.lock'), JSON.stringify({ pid: 41_003, createdAt: 0 })),
+      writeFile(join(directory, '.cap.lock.reclaim'), ''),
+    ]);
+    await utimes(join(directory, '.cap.lock.reclaim'), (lockNow - 60_001) / 1_000, (lockNow - 60_001) / 1_000);
+    const store = new SpoolStore(directory, {
+      maxBytes: 1024,
+      capLockAcquireTimeoutMs: 10,
+      lockNow: () => lockNow,
+      isProcessAlive: () => false,
+      yieldForCapLock: async () => { lockNow += 1; },
+    });
+
+    await expect(store.write('traces', Buffer.from('span'))).resolves.toMatchObject({ size: 4 });
+    await expect(store.write('metrics', Buffer.from('metric'))).resolves.toMatchObject({ size: 6 });
+    await expect(readdir(directory)).resolves.not.toEqual(expect.arrayContaining(['.cap.lock', '.cap.lock.reclaim']));
+  });
+
   it('rejects a capped write when a live cap lock remains held past its acquisition deadline', async () => {
     const directory = await temporaryDirectory();
     await mkdir(directory, { recursive: true });

@@ -244,6 +244,9 @@ export class SpoolStore {
     let lock: SpoolFileHandle;
     const deadline = this.lockNow() + this.capLockAcquireTimeoutMs;
     for (;;) {
+      if (this.lockNow() >= deadline) {
+        throw new Error(`Timed out acquiring spool cap lock after ${this.capLockAcquireTimeoutMs}ms`);
+      }
       try {
         lock = await this.filesystem.open(lockPath, 'wx');
         break;
@@ -298,13 +301,20 @@ export class SpoolStore {
     } catch (error) {
       // One reclaimer owns the check-and-move window. The writer will retry,
       // then either see its result or time out into direct-send fallback.
-      if (alreadyExists(error)) return false;
+      if (alreadyExists(error)) {
+        await this.reclaimOrphanedCapRecoveryLock(recoveryPath);
+        return false;
+      }
       throw error;
     }
 
     let reclaimed = false;
     let failure: unknown;
     try {
+      // A crash can leave this lock behind before its owner record reaches
+      // disk. Its mtime remains a recovery fallback for that window.
+      await recovery.writeFile(Buffer.from(JSON.stringify({ pid: this.pid, createdAt: this.lockNow() })));
+      await recovery.sync();
       let contents: Buffer;
       let metadata: { mtimeMs: number };
       try {
@@ -356,6 +366,38 @@ export class SpoolStore {
       );
     }
     return reclaimed;
+  }
+
+  /** A crashed reclaimer must not permanently prevent later cap-lock recovery. */
+  private async reclaimOrphanedCapRecoveryLock(recoveryPath: string): Promise<void> {
+    let contents: Buffer;
+    let metadata: { mtimeMs: number };
+    try {
+      [contents, metadata] = await Promise.all([
+        this.filesystem.readFile(recoveryPath),
+        this.filesystem.stat(recoveryPath),
+      ]);
+    } catch (error) {
+      // Another reclaimer finished before our inspection. Retrying the cap
+      // lock is safe and may now acquire it directly.
+      if (isMissing(error)) return;
+      throw error;
+    }
+    const ownerPid = lockOwnerPid(contents);
+    const ownerDead = ownerPid !== undefined && !this.processIsAlive(ownerPid);
+    const tooOld = this.lockNow() - metadata.mtimeMs >= this.capLockStaleAfterMs;
+    if (!ownerDead && !tooOld) return;
+
+    const abandonedPath = `${recoveryPath}.${this.pid}.${this.randomBytes(4).toString('hex')}.abandoned`;
+    try {
+      await this.filesystem.rename(recoveryPath, abandonedPath);
+    } catch (error) {
+      // Losing the move race means no currently-live recovery lock was
+      // removed; retry the normal acquisition path.
+      if (isMissing(error)) return;
+      throw error;
+    }
+    await this.filesystem.rm(abandonedPath, { force: true });
   }
 
   private async allBatches(): Promise<SpoolBatch[]> {
