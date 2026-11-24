@@ -1331,6 +1331,32 @@ export function attachFeatureEventRenderer(
   };
 }
 
+/**
+ * Publish the durable feature occurrence that precedes a verified-rebase
+ * recovery clear.  Keeping this at the daemon composition boundary ensures a
+ * maintenance-only recovery has the same feature-owned event ledger and
+ * forwarding attribution as a dispatched feature run.
+ */
+export async function publishVerifiedRebaseHaltCleared(input: {
+  worktreePath: string;
+  globalEvents: ConductorEventEmitter;
+  featureSlug: string;
+  completedHead: string;
+}): Promise<void> {
+  await withFeatureEventPersistence({
+    worktreePath: input.worktreePath,
+    globalEvents: input.globalEvents,
+    featureSlug: input.featureSlug,
+    run: async (featureEvents) => {
+      await featureEvents.emit({
+        type: 'halt_cleared',
+        cause: 'verified-rebase',
+        eventId: `verified-rebase-halt-cleared:${input.featureSlug}:${input.completedHead}`,
+      });
+    },
+  });
+}
+
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const engineRoot = opts.engineRoot ?? {
@@ -2723,17 +2749,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             // Persist the occurrence before removing the only recovery signal.
             // The feature persister deduplicates the stable id if a process
             // dies after delivery but before the marker rename.
-            await withFeatureEventPersistence({
+            await publishVerifiedRebaseHaltCleared({
               worktreePath,
-              globalEvents: events,
               featureSlug: slug,
-              run: async (featureEvents) => {
-                await featureEvents.emit({
-                  type: 'halt_cleared',
-                  cause: 'verified-rebase',
-                  eventId: `verified-rebase-halt-cleared:${slug}:${proof.completedHead}`,
-                });
-              },
+              globalEvents: events,
+              completedHead: proof.completedHead,
             });
             // This is intentionally not `clearMarker`: recovered work is already
             // rebased, so writing REKICK would replay it a second time.

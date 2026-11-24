@@ -50,6 +50,7 @@ import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
+import { forwardedFeatureOf } from '../../src/engine/event-persister.js';
 
 const fsFailures = vi.hoisted(() => ({
   readError: undefined as Error | undefined,
@@ -2051,9 +2052,15 @@ describe('admitVerifiedRebaseRecoveries', () => {
   });
 
   // Covers: task:4
-  it('consumes one matching recovery exactly once across a restart-shaped second maintenance pass', async () => {
+  it('publishes one feature-attributed halt clear when an interrupted recovery resumes', async () => {
     let haltClass = 'rebase-recovery';
-    const events: Array<{ type: 'halt_cleared'; cause: 'verified-rebase' }> = [];
+    let interruptedBeforePublication = true;
+    const worktree = await mkdtemp(join(tmpdir(), 'verified-rebase-halt-clear-'));
+    const globalEvents = new ConductorEventEmitter();
+    const forwardedFeatures: string[] = [];
+    globalEvents.on('halt_cleared', (event) => {
+      if (event.type === 'halt_cleared') forwardedFeatures.push(forwardedFeatureOf(event) ?? 'missing');
+    });
     const run = () =>
       admitVerifiedRebaseRecoveries({
         listHaltedWorktrees: async () => ['feature'],
@@ -2074,13 +2081,43 @@ describe('admitVerifiedRebaseRecoveries', () => {
         }),
         recheckScheduler: async () => true,
         admit: async () => {
+          // Model a daemon dying after admission but before the occurrence is
+          // published. The retained HALT makes the next maintenance pass own
+          // the one durable feature event.
+          if (interruptedBeforePublication) {
+            interruptedBeforePublication = false;
+            throw new Error('interrupted before halt-clear publication');
+          }
+          const { publishVerifiedRebaseHaltCleared } = await import('../../src/daemon-cli.js');
+          await publishVerifiedRebaseHaltCleared({
+            worktreePath: worktree,
+            globalEvents,
+            featureSlug: 'feature',
+            completedHead: 'd'.repeat(40),
+          });
           haltClass = '';
-          events.push({ type: 'halt_cleared', cause: 'verified-rebase' });
         },
       });
-    await run();
-    await run();
-    expect(events).toEqual([{ type: 'halt_cleared', cause: 'verified-rebase' }]);
+    try {
+      await run();
+      await run();
+      await run();
+
+      const events = (await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as ConductorEvent);
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: 'halt_cleared',
+          cause: 'verified-rebase',
+          eventId: `verified-rebase-halt-cleared:feature:${'d'.repeat(40)}`,
+        }),
+      ]);
+      expect(forwardedFeatures).toEqual(['feature']);
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
   });
 });
 
