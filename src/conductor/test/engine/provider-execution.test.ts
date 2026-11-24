@@ -802,6 +802,24 @@ describe('executeProviderCandidates', () => {
     },
   );
 
+  // Covers: task:3, S2.2
+  it('settles a fallback handoff after the validator invocation and before its teardown', async () => {
+    const settled: string[] = [];
+    const result = await executeProviderCandidates({
+      step: 'manual_test', configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: async () => ({ success: true, output: 'evidence', exitCode: 0 }) })]),
+      sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'validate', cwd: '/authoritative' },
+      allowShipValidatorFallback: true,
+      prepareCandidateSelfHost: async () => ({
+        executable: 'fallback', env: {}, args: [], cwd: '/fallback', shipValidatorFallbackReason: 'uncontained',
+        shipValidatorFallback: { root: '/fallback', settle: async () => { settled.push('settled'); } },
+        teardown: async () => { settled.push('torn-down'); },
+      }),
+    });
+    expect(result.success).toBe(true);
+    expect(settled).toEqual(['settled', 'torn-down']);
+  });
+
   // Covers: task:1, S1.1, S1.2
   it('keeps every SHIP validator inside its prepared boundary in serial and grouped launches', async () => {
     const calls: Array<{ step: StepName; protected: boolean }> = [];

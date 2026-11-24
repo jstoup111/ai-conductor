@@ -7729,7 +7729,7 @@ export class Conductor {
             if (!acquiredBoundaryLease.containment.contained) return invocation;
             return { ...invocation, ...wrapForContainment(invocation, bindSet) };
           };
-          const prepareShipValidatorFallback = async (): Promise<string | undefined> => {
+          const prepareShipValidatorFallback = async (): Promise<{ cwd: string; fallback: NonNullable<SelfHostInvocation['shipValidatorFallback']> } | undefined> => {
             if (acquiredBoundaryLease.containment.contained || !SHIP_VALIDATOR_STEPS.has(candidate.step)) return undefined;
             // The fallback is deliberately a detached worktree at the exact
             // inspected revision. It keeps the authoritative feature worktree
@@ -7754,7 +7754,30 @@ export class Conductor {
             const evidenceRoot = join(this.projectRoot, '.pipeline');
             await mkdir(evidenceRoot, { recursive: true });
             await symlink(evidenceRoot, join(fallbackRoot, '.pipeline'), 'dir');
-            return fallbackRoot;
+            const id = `${identity!.runId}-${identity!.attempt}-${candidate.step}-${randomUUID()}`;
+            return {
+              cwd: fallbackRoot,
+              fallback: {
+                root: fallbackRoot,
+                settle: async () => {
+                  const [committed, staged, unstaged, untracked] = await Promise.all([
+                    execa('git', ['diff', '--binary', '--full-index', `${revision}..HEAD`], { cwd: fallbackRoot }),
+                    execa('git', ['diff', '--cached', '--binary', '--full-index'], { cwd: fallbackRoot }),
+                    execa('git', ['diff', '--binary', '--full-index'], { cwd: fallbackRoot }),
+                    execa('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: fallbackRoot }),
+                  ]);
+                  const patch = `${committed.stdout}${staged.stdout}${unstaged.stdout}`;
+                  const additions = await Promise.all(untracked.stdout.split('\0').filter(Boolean).map(async (path) => {
+                    const details = await stat(join(fallbackRoot, path));
+                    return { path, mode: details.mode, bytes: (await readFile(join(fallbackRoot, path))).toString('base64') };
+                  }));
+                  if (!patch && additions.length === 0) return;
+                  const destination = join(evidenceRoot, 'fallback-validator-handoffs');
+                  await mkdir(destination, { recursive: true });
+                  await writeFile(join(destination, `${id}.json`), JSON.stringify({ version: 1, id, revision, step: candidate.step, patch, additions, state: 'captured' }) + '\n');
+                },
+              },
+            };
           };
           // Until a context is returned its setup owns this window.  If any
           // allocation or verification precondition fails, there is no executor
@@ -7794,15 +7817,14 @@ export class Conductor {
               events: this.events,
             });
             ownershipTransferred = true;
-            const fallbackCwd = await prepareShipValidatorFallback();
+            const fallback = await prepareShipValidatorFallback();
             return prepareInvocation({
               executable,
               env: home.childEnv(),
               args: home.childArgs(),
               originalCatalogHome: providerHome,
               scratchRoot: this.projectRoot,
-              ...(fallbackCwd === undefined ? {} : { cwd: fallbackCwd }),
-              ...(fallbackCwd === undefined ? {} : { shipValidatorFallbackReason: 'self-host containment unavailable' }),
+              ...(fallback === undefined ? {} : { cwd: fallback.cwd, shipValidatorFallback: fallback.fallback, shipValidatorFallbackReason: 'self-host containment unavailable' }),
               teardown: async () => {
                 try {
                   await home.teardown();
@@ -7827,15 +7849,14 @@ export class Conductor {
             injectedToken: daemonToken,
           });
           ownershipTransferred = true;
-          const fallbackCwd = await prepareShipValidatorFallback();
+          const fallback = await prepareShipValidatorFallback();
           return prepareInvocation({
             executable: provider.defaultExecutable,
             env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
             args: [],
             originalCatalogHome: providerHome,
             scratchRoot: this.projectRoot,
-            ...(fallbackCwd === undefined ? {} : { cwd: fallbackCwd }),
-            ...(fallbackCwd === undefined ? {} : { shipValidatorFallbackReason: 'self-host containment unavailable' }),
+            ...(fallback === undefined ? {} : { cwd: fallback.cwd, shipValidatorFallback: fallback.fallback, shipValidatorFallbackReason: 'self-host containment unavailable' }),
             teardown: async () => {
               try {
                 await sandbox.teardown();

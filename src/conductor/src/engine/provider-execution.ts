@@ -1275,7 +1275,11 @@ export async function executeProviderCandidates({
           for (const teardown of teardownCallbacks.reverse()) await teardown();
         } finally {
           try {
-            await selfHost?.teardown();
+            try {
+              await selfHost?.shipValidatorFallback?.settle();
+            } finally {
+              await selfHost?.teardown();
+            }
           } finally {
             try {
               if (schemaScratchHome !== undefined) {

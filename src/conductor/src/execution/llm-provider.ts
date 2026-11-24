@@ -116,6 +116,8 @@ export interface SelfHostInvocation {
   cwd?: string;
   /** Non-empty only when `cwd` is an ADR-approved SHIP fallback checkout. */
   shipValidatorFallbackReason?: string;
+  /** Capture fallback product edits after provider invocation, before teardown. */
+  shipValidatorFallback?: { readonly root: string; settle(): Promise<void> };
   teardown(): Promise<void>;
 }
 
