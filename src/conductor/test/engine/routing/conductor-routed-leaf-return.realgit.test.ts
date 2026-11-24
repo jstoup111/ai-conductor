@@ -466,7 +466,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     });
   });
 
-  // Covers: task:13
+  // Covers: task:13, S1.4, task:rem-prd-audit-rem-S1.4
   it('dispatches whole-feature validation after closing a leaf-return round, an operator leaf commit, and HALT clear', async () => {
     const { subject, statePath, config } = await fixture();
     const git = makeGitRunner(subject.repo);
@@ -631,6 +631,10 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect(gitArgv!).toContainEqual(['rev-parse', 'HEAD']);
     expect(dispatched).toContain('manual_test');
     const persisted = await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8');
+    // A leaf-executed host closes as a deferred placement.  Returning to the
+    // leaf must not sneak the former feature-repair restack back in before
+    // the round has finished its own durable close path.
+    expect(persisted).not.toContain('"type":"restack_planned"');
     const closes = persisted
       .split('\n')
       .filter(Boolean)
