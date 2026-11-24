@@ -91,6 +91,20 @@ export interface EventPersisterDependencies {
 const activePersisters = new WeakMap<ConductorEventEmitter, EventPersister>();
 
 /**
+ * Persist an occurrence before its irreversible companion mutation. Unlike
+ * normal best-effort event delivery, callers can refuse that mutation when
+ * the canonical feature ledger is unavailable.
+ */
+export async function persistFeatureEventDurably(
+  events: ConductorEventEmitter,
+  event: ConductorEvent,
+): Promise<'persisted' | 'duplicate'> {
+  const persister = activePersisters.get(events);
+  if (!persister) throw new Error('feature event persistence is not active');
+  return persister.persistDurably(event);
+}
+
+/**
  * EventPersister subscribes to every ConductorEvent and appends each event
  * as a newline-delimited JSON line (with timestamp) to the specified file.
  *

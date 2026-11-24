@@ -18,7 +18,7 @@ import {
   type HaltRecordRemoteOptions,
 } from './halt-record.js';
 import { resolveActiveChild } from './child-cursor.js';
-import { acquireFeatureDispatchLease } from './feature-dispatch-lease.js';
+import { acquireFeatureDispatchLease, withFeatureDispatchSerialization } from './feature-dispatch-lease.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { readRestackJournal, isJournalOwnerAlive } from './restack/restack-journal.js';
 import { recoverRestackJournal } from './restack/restack-recovery.js';
@@ -144,9 +144,10 @@ export async function writeHaltMarker(
   // rebase admission.  A recovery cannot validate an old halt while a writer
   // replaces it, then clear the replacement after its own transition.
   const mainRoot = await resolveMainRepoRoot(projectRoot);
+  return withFeatureDispatchSerialization(mainRoot, basename(projectRoot), async () => {
   const acquired = await acquireFeatureDispatchLease(mainRoot, basename(projectRoot), 'halt marker write');
   if (acquired.kind !== 'acquired') {
-    return { status: 'failed', path: join(projectRoot, HALT_MARKER), reason: 'feature serialization boundary unavailable' };
+    return { status: 'failed' as const, path: join(projectRoot, HALT_MARKER), reason: 'feature serialization boundary unavailable' };
   }
   const release = () => acquired.lease.release().catch(() => undefined);
   const markerPath = join(projectRoot, HALT_MARKER);
@@ -183,6 +184,7 @@ export async function writeHaltMarker(
     await release();
     return { status: 'partial', writtenPath: markerPath, path: haltClassPath, reason };
   }
+  });
 }
 
 async function writeHaltRecord(

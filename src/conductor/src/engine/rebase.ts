@@ -2799,6 +2799,8 @@ export async function applyRebaseVerdicts(
   },
   child?: ChildId,
   cause?: RestackCause,
+  /** Stable recovery identity, so an interrupted provisional fence can resume. */
+  operationId?: string,
 ): Promise<{
   satisfied: boolean;
   kickedBack: StepName[];
@@ -2856,7 +2858,7 @@ export async function applyRebaseVerdicts(
     provisionalReplay === undefined
       ? undefined
       : {
-          id: `preparing-${createHash('sha256').update(JSON.stringify(provisionalReplay)).digest('hex')}`,
+          id: operationId ?? `preparing-${createHash('sha256').update(JSON.stringify(provisionalReplay)).digest('hex')}`,
           status: 'applying' as const,
           transition: { preserved: [], invalidated: [], reverified: [] },
           replay: provisionalReplay,

@@ -14,7 +14,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
-import { acquireFeatureDispatchLease } from './feature-dispatch-lease.js';
+import { acquireFeatureDispatchLease, withFeatureDispatchSerialization } from './feature-dispatch-lease.js';
 
 const execFile = promisify(execFileCb);
 
@@ -252,6 +252,7 @@ async function restoreParkClaim(claimPath: string, markerPath: string): Promise<
  */
 export async function writeOperatorPark(root: string, slug: string): Promise<void> {
   const mainRoot = await resolveMainRepoRoot(root);
+  return withFeatureDispatchSerialization(mainRoot, slug, async () => {
   const acquired = await acquireFeatureDispatchLease(mainRoot, slug, 'operator park write');
   if (acquired.kind !== 'acquired') throw new Error('feature serialization boundary unavailable');
   try {
@@ -276,6 +277,7 @@ export async function writeOperatorPark(root: string, slug: string): Promise<voi
   } finally {
     await acquired.lease.release();
   }
+  });
 }
 
 /**
@@ -368,6 +370,7 @@ export async function listOperatorParkedSlugs(root: string): Promise<string[]> {
  */
 export async function writeAutoPark(root: string, slug: string, reason: string): Promise<void> {
   const mainRoot = await resolveMainRepoRoot(root);
+  return withFeatureDispatchSerialization(mainRoot, slug, async () => {
   const acquired = await acquireFeatureDispatchLease(mainRoot, slug, 'auto park write');
   if (acquired.kind !== 'acquired') throw new Error('feature serialization boundary unavailable');
   try {
@@ -392,6 +395,7 @@ export async function writeAutoPark(root: string, slug: string, reason: string):
   } finally {
     await acquired.lease.release();
   }
+  });
 }
 
 /**

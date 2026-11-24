@@ -90,6 +90,7 @@ import {
   isForwardedFromFeature,
   startDaemonEventPersistence,
   startFeatureEventPersistence,
+  persistFeatureEventDurably,
   withFeatureEventPersistence,
   withSessionEventTail,
 } from './engine/event-persister.js';
@@ -159,7 +160,7 @@ import {
 } from './engine/daemon-command.js';
 import { hasDurableChildState, resolveActiveChild } from './engine/child-cursor.js';
 import { resolveExecutionChild } from './engine/routing/execution-child.js';
-import { acquireFeatureDispatchLease } from './engine/feature-dispatch-lease.js';
+import { acquireFeatureDispatchLease, withFeatureDispatchSerialization } from './engine/feature-dispatch-lease.js';
 import { createChildProcessFeatureExecutor, type ChildFeatureExecutorDeps } from './engine/child-feature-executor.js';
 import { createExecutorBroker } from './engine/executor-broker.js';
 import { sweepExecutorRecordsOnBoot } from './engine/executor-records.js';
@@ -1343,18 +1344,19 @@ export async function publishVerifiedRebaseHaltCleared(input: {
   featureSlug: string;
   completedHead: string;
 }): Promise<void> {
-  await withFeatureEventPersistence({
-    worktreePath: input.worktreePath,
-    globalEvents: input.globalEvents,
-    featureSlug: input.featureSlug,
-    run: async (featureEvents) => {
-      await featureEvents.emit({
-        type: 'halt_cleared',
-        cause: 'verified-rebase',
-        eventId: `verified-rebase-halt-cleared:${input.featureSlug}:${input.completedHead}`,
-      });
-    },
-  });
+  const scope = startFeatureEventPersistence(input.worktreePath, input.globalEvents, input.featureSlug);
+  try {
+    const event = {
+      type: 'halt_cleared' as const,
+      cause: 'verified-rebase' as const,
+      eventId: `verified-rebase-halt-cleared:${input.featureSlug}:${input.completedHead}`,
+    };
+    // EventPersister's ordinary listener is deliberately best-effort.  This
+    // recovery cannot clear its durable HALT until this occurrence is durable.
+    if (await persistFeatureEventDurably(scope.events, event) === 'persisted') await scope.events.emit(event);
+  } finally {
+    await scope.drain();
+  }
 }
 
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
@@ -2651,6 +2653,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           readHaltGeneration: (slug) => readRebaseRecoveryHaltGeneration(join(worktreeBase, slug)),
           acquireFeatureDispatchLease: (slug) =>
             acquireFeatureDispatchLease(projectRoot, slug, 'verified rebase recovery'),
+          serializeFeatureMutation: (slug, run) =>
+            withFeatureDispatchSerialization(projectRoot, slug, run),
           recheckScheduler: async (slug) => !(await isOperatorParked(projectRoot, slug)),
           admit: async (slug, proof) => {
             const worktreePath = join(worktreeBase, slug);
@@ -2704,6 +2708,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                         git,
                         undefined,
                         child,
+                        undefined,
+                        operationId,
                       );
                       if (!verdict.replay) throw new Error('verified replay produced no transition identity');
                       return applyRebaseTransition({

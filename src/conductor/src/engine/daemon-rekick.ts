@@ -187,6 +187,8 @@ export interface VerifiedRebaseRecoveryAdmissionDeps {
   readHaltClass: (slug: string) => Promise<string>;
   readHaltGeneration: (slug: string) => Promise<string>;
   acquireFeatureDispatchLease: (slug: string) => Promise<FeatureDispatchLeaseAcquireResult>;
+  /** Shares the in-process half of the feature lease with marker writers. */
+  serializeFeatureMutation?: <T>(slug: string, run: () => Promise<T>) => Promise<T>;
   /** Test and integration seam for a race between verification and admission. */
   beforeAdmission?: (slug: string) => Promise<void>;
   /** Scheduler's final eligibility check; false leaves the verified halt intact. */
@@ -217,10 +219,11 @@ export async function admitVerifiedRebaseRecoveries(deps: VerifiedRebaseRecovery
       }
 
       await deps.beforeAdmission?.(slug);
+      const admitUnderLease = async (): Promise<boolean> => {
       const acquired = await deps.acquireFeatureDispatchLease(slug);
       if (acquired.kind !== 'acquired') {
         deps.log?.(`verified-rebase ${slug}: retained — feature dispatch lease unavailable`);
-        continue;
+        return false;
       }
       try {
         const liveHaltClass = (await deps.readHaltClass(slug)).trim();
@@ -238,19 +241,24 @@ export async function admitVerifiedRebaseRecoveries(deps: VerifiedRebaseRecovery
         });
         if (decision.kind !== 'admitted') {
           deps.log?.(`verified-rebase ${slug}: retained — ${decision.reason}`);
-          continue;
+          return false;
         }
         if (!(await deps.recheckScheduler(slug))) {
           deps.log?.(`verified-rebase ${slug}: retained — scheduler ownership changed before admission`);
-          continue;
+          return false;
         }
         await deps.admit(slug, verification.proof);
-        admitted.push(slug);
+        return true;
       } finally {
         const released = await acquired.lease.release();
         if (!released.ok)
           deps.log?.(`verified-rebase ${slug}: feature dispatch lease release failed (${released.message})`);
       }
+      };
+      const admittedNow = await (deps.serializeFeatureMutation
+        ? deps.serializeFeatureMutation(slug, admitUnderLease)
+        : admitUnderLease());
+      if (admittedNow) admitted.push(slug);
     } catch (error) {
       deps.log?.(`verified-rebase ${slug}: retained (${errMsg(error)})`);
     }
