@@ -595,7 +595,9 @@ describe('executor child entrypoint', () => {
     port.dispatch({
       kind: 'work-order',
       order,
-      otelProjection: { trace: { runId: 'run', project: root, branch: 'feat/daemon-feature', harnessVersion: '1.2.3' } },
+      otelProjection: {
+        trace: { runId: 'run', project: root, branch: 'feat/daemon-feature', harnessVersion: '1.2.3' },
+      },
     });
     await vi.waitFor(() => expect(releaseRun).toBeTypeOf('function'));
     process.emit('SIGTERM');
@@ -648,7 +650,9 @@ describe('executor child entrypoint', () => {
     try {
       await childEvents.emit({ type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'accepted' });
       await child.stop();
-      await vi.waitFor(async () => expect(await readdir(join(root, '.daemon', 'otel-spool', 'traces'))).not.toHaveLength(0));
+      await vi.waitFor(async () =>
+        expect(await readdir(join(root, '.daemon', 'otel-spool', 'traces'))).not.toHaveLength(0),
+      );
       acceptTraces = true;
       await vi.waitFor(() => expect(received).toContain('/v1/traces'), { timeout: 5_000 });
       await daemon.flush();

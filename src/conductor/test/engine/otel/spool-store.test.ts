@@ -220,7 +220,9 @@ describe('SpoolStore', () => {
       },
     });
 
-    await expect(store.write('traces', Buffer.from('span'))).rejects.toThrow('Timed out acquiring spool cap lock after 2ms');
+    await expect(store.write('traces', Buffer.from('span'))).rejects.toThrow(
+      'Timed out acquiring spool cap lock after 2ms',
+    );
     await expect(readFile(lockPath, 'utf8')).resolves.toBe('incomplete owner record');
   });
 
@@ -264,7 +266,9 @@ describe('SpoolStore', () => {
 
     await expect(store.write('traces', Buffer.from('span'))).resolves.toMatchObject({ size: 4 });
     await expect(store.write('metrics', Buffer.from('metric'))).resolves.toMatchObject({ size: 6 });
-    await expect(readdir(directory)).resolves.not.toEqual(expect.arrayContaining(['.cap.lock', '.cap.lock.reclaim.dead-cap-owner']));
+    await expect(readdir(directory)).resolves.not.toEqual(
+      expect.arrayContaining(['.cap.lock', '.cap.lock.reclaim.dead-cap-owner']),
+    );
   });
 
   it('does not remove a fresh recovery lock created after it claims an orphan', async () => {
@@ -321,9 +325,9 @@ describe('SpoolStore', () => {
       }),
     });
 
-    await (
-      store as unknown as { reclaimAbandonedCapLock(path: string): Promise<boolean> }
-    ).reclaimAbandonedCapLock(capPath);
+    await (store as unknown as { reclaimAbandonedCapLock(path: string): Promise<boolean> }).reclaimAbandonedCapLock(
+      capPath,
+    );
 
     await expect(readFile(capPath)).resolves.toEqual(successorContents);
     await expect(readdir(directory)).resolves.not.toContain('.cap.lock.reclaim.abandoned-cap-owner');
