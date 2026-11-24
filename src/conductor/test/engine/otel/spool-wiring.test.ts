@@ -92,14 +92,6 @@ function collectorArrival(deadlineMs = 5_000): { arrive(): void; arrived: Promis
   return { arrive, arrived: Promise.race([signal, deadline]).finally(() => clearTimeout(timer)) };
 }
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
-  for (const deadline = Date.now() + 5_000; Date.now() < deadline;) {
-    if (await predicate()) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  throw new Error(message);
-}
-
 function exportSpan(
   exporter: { export(spans: ReadableSpan[], callback: () => void): void },
   span: ReadableSpan,
