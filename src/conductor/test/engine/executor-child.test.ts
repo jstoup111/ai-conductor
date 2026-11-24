@@ -627,7 +627,9 @@ describe('executor child entrypoint', () => {
     const endpoint = `http://127.0.0.1:${address.port}`;
     const rootEvents = new ConductorEventEmitter();
     const supervisorGateVerdicts: unknown[] = [];
-    rootEvents.on('gate_verdict', (event) => supervisorGateVerdicts.push(event));
+    rootEvents.on('gate_verdict', (event) => {
+      supervisorGateVerdicts.push(event);
+    });
     const daemon = wireDaemonOtel(
       { otel: { exporter: 'otlp', endpoint, spool: { enabled: true } } },
       { mainRoot: root, project: root, projectName: 'test', rootEvents },
@@ -651,7 +653,7 @@ describe('executor child entrypoint', () => {
       await childEvents.emit({ type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'accepted' });
       await child.stop();
       await vi.waitFor(async () =>
-        expect(await readdir(join(root, '.daemon', 'otel-spool', 'traces'))).not.toHaveLength(0),
+        expect(await readdir(join(root!, '.daemon', 'otel-spool', 'traces'))).not.toHaveLength(0),
       );
       acceptTraces = true;
       await vi.waitFor(() => expect(received).toContain('/v1/traces'), { timeout: 5_000 });

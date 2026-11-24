@@ -1,6 +1,6 @@
 // Covers: task:5, task:6, task:12, task:rem-prd-audit-4b
 import { afterEach, describe, expect, it } from 'vitest';
-import { link, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BasicTracerProvider, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
@@ -61,7 +61,6 @@ function deletingAfterSecondPublishFilesystem(): SpoolFilesystem {
   let publishedPath: string | undefined;
   let deleted = false;
   return {
-    link,
     mkdir,
     open,
     readFile,
